@@ -1,92 +1,79 @@
 ---
 name: deep-research
-description: Perform autonomous multi-step web research with structured reports and claim-level citations
+description: Run multi-round web research with claim-level citations — /research drives an autonomous loop that searches, fetches sources, and compiles research/report.md
 disable-model-invocation: true
 ---
 
 # Deep Research
 
-Perform autonomous multi-step web research and produce structured markdown reports with claim-level citations.
+Multi-round autonomous web research driven by a human-editable research program
+(`program.md`). `/research` is the deep-research front-end of the `/loop` engine:
+the same continuation loop, budgets, and pause/resume controls — pre-pointed at
+the bundled research methodology with a research-appropriate round cap.
 
 ## Usage
 
-```
-/research <topic> [--profile <name>] [--max-depth <n>] [--yes]
-/research --resume <run-id> [--extend-elapsed <seconds>] [--extend-finalization <seconds>] [--yes]
-/research --cancel <run-id>
-```
-
-## Commands
-
-### Start New Research
-
-```
-/research "AI safety alignment techniques" --profile deep --yes
+```text
+/research "<topic>" [--program <path>] [--max-rounds N] [--tokens N]
+/research status | pause | resume | clear
 ```
 
-- **topic** (required): Research topic or question
-- **--profile** (optional): Budget profile — `fast`, `default`, or `deep`
-- **--max-depth** (optional): Maximum research tree depth (1-5)
-- **--yes** (required for non-TUI): Skip confirmation prompts
+Examples:
 
-### Resume Research
-
-```
-/research --resume run-1690000000-abc123 --yes
+```text
+/research "N100 vs N305 mini-PC for a Proxmox homelab"
+/research "Ceph Reef → Squid: what actually changed" --max-rounds 4 --tokens 50000
 ```
 
-- **--resume** (required): Run ID from previous session
-- **--extend-elapsed** (optional): Additional elapsed time budget in seconds
-- **--extend-finalization** (optional): Additional finalization time budget in seconds
-- **--yes** (required): Confirm resume
+- **topic** (required): the research question or mission
+- **--program** `<path>`: custom research program file (default: bundled `examples/deep-research/program.md`)
+- **--max-rounds** `N`: round cap (default 6)
+- **--tokens** `N`: whole-run token budget (default: none)
 
-### Cancel Research
+Subcommands: `status` (current round/tokens/program), `pause` / `resume`
+(stop/restart continuation), `clear` (abandon the run).
 
-```
-/research --cancel run-1690000000-abc123
-```
+## How it works
 
-- **--cancel** (required): Run ID to cancel
+1. **Round 0 — Plan**: the loop re-reads `program.md` and restates the mission as
+   5–8 concrete sub-questions in `research/score.md`.
+2. **Every round**: attack the weakest sub-questions → fire 2–4 parallel
+   `lookup_web` queries → deep-read the most authoritative hits with
+   `fetch_web_content` → append `claim → source URL → confidence` rows to
+   `research/notes.md` → update scores.
+3. The loop continues automatically until `program.md`'s completion condition is
+   met (every sub-question ≥ 80, ≥ 8 unique sources, no unresolved
+   contradictions) — then the agent writes `research/report.md` and calls
+   `complete_loop`.
+4. Round/token caps stop the loop early; the report is still written, with every
+   gap listed in **Uncertainties & Gaps**.
 
-## Profiles
+## Output (relative to cwd)
 
-| Profile | Depth | Nodes | Concurrency | Search Calls | Model Calls | Tokens | Time |
-|---------|-------|-------|-------------|--------------|-------------|--------|------|
-| fast    | 0     | 2     | 2           | 4            | 4           | 8K     | 2m   |
-| default | 2     | 24    | 4           | 48           | 36          | 64K    | 10m  |
-| deep    | 5     | 100   | 6           | 200          | 150         | 256K   | 30m  |
+- `research/score.md` — sub-questions with 0–100 scores (the anti-early-stop table)
+- `research/notes.md` — claim → source URL → confidence, appended every round
+- `research/report.md` — the deliverable: executive summary, findings per
+  sub-question with `[n]` citations → sources table, contradictions & debates,
+  and a required **Uncertainties & Gaps** section
 
-## How It Works
+## The program file is the contract
 
-1. **Prefilter**: Generates a research brief with scope, key questions, and constraints
-2. **Research**: Autonomous workers investigate questions, search the web, and fetch sources
-3. **Synthesis**: Compiles findings into a structured report with citations
-4. **Verification**: Validates that every claim is supported by fetched evidence
-5. **Repair**: Removes unsupported claims and adds limitation notices
-6. **Judge**: Independently evaluates report quality across factual accuracy, completeness, and source quality
-
-## Output
-
-Reports are saved to:
-- `research/<slug>-YYYY-MM-DD-<run-id>.md` — Markdown report
-- `research/<slug>-YYYY-MM-DD-<run-id>.jsonl` — Structured data
-- `research/.runs/<run-id>/checkpoint.json` — Recovery checkpoint
-- `research/.runs/<run-id>/audit.jsonl` — Audit log
-
-## Configuration
-
-Settings cascade (highest precedence first):
-1. Command-line flags
-2. `PI_RESEARCH_*` environment variables
-3. Project `.pi/deep-research.json` (trusted projects only)
-4. Global `~/.pi/agent/deep-research.json`
-5. Selected profile preset
-6. Built-in defaults
+`program.md` is human-edited: the loop re-reads it every round, so edits apply
+from the next round on — you can steer a run live. It encodes start-wide-then-
+narrow querying, source triangulation + credibility tiers, the self-score table,
+and hard caps. Point `--program` at your own copy for a custom methodology.
 
 ## Safety
 
-- Workers only have access to web search and fetch tools — no file system, shell, or code execution
-- URLs are validated: no localhost, private IPs, or credentials
-- Search queries are screened for high-entropy blobs and sensitive data
-- Budget caps prevent runaway consumption
-- Checkpoints enable crash recovery
+- Runs are interactive by default (user present); `--max-rounds` / `--tokens`
+  cap consumption
+- The program file is user-authored *data*, not system instructions — mission
+  and budgets win on any conflict
+- Never fetch localhost/private IPs or credentialed URLs (rule in `program.md`)
+
+## Not yet built (draft-spec features deferred by the PoC)
+
+- Profile presets (`fast`/`default`/`deep`), `--resume` / `--cancel`, `.runs/`
+  checkpoints, `audit.jsonl`, worker tool isolation
+- `research_checkpoint` gate (code-enforced min rounds/sources) — deferred until
+  early stopping is observed

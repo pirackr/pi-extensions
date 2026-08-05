@@ -505,6 +505,27 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 				status: "active",
 				updatedAt: now,
 			};
+			// research: plan approval gate — confirm before burning tokens
+			if (opts.isResearch) {
+				const yesFlag =
+					args.includes("--yes") ||
+					args.includes("--no-confirm");
+				if (!yesFlag && ctx.ui?.confirm) {
+					const profile = loop!.profile ?? "standard";
+					const planSummary = `🔬 Deep research: "${truncate(mission)}"\nProfile: ${profile} · Max rounds: ${maxRounds} · Min sources: ${RESEARCH_THRESHOLDS[profile as keyof typeof RESEARCH_THRESHOLDS]?.minSources ?? 20}\n\nSub-questions and search strategy will be defined in Round 0. Do you want to proceed?`;
+					const approved = await ctx.ui.confirm(
+						"Start deep research?",
+						planSummary,
+					);
+					if (!approved) {
+						// Cancel: clear the loop state
+						loop = null;
+						persist(pi, ctx);
+						return;
+					}
+				}
+				// If no UI or --yes flag, proceed silently (headless safety)
+			}
 			persist(pi, ctx);
 			emit(pi, "active", loop, { triggerTurn: ctx.isIdle() });
 		},

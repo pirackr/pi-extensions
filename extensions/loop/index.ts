@@ -412,7 +412,7 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 				ctx.ui.notify(`Usage: ${usage}`, "warning");
 				return;
 			}
-			const maxRounds = flags["max-rounds"]
+			let maxRounds = flags["max-rounds"]
 				? Number(flags["max-rounds"])
 				: opts.defaultMaxRounds;
 			if (!Number.isFinite(maxRounds) || maxRounds < 1) {
@@ -426,7 +426,7 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 			let profile: string | undefined;
 			if (opts.isResearch && flags.profile) {
 				const p = flags.profile;
-				if (!(p in PROFILE_MAX_ROUNDS)) {
+				if (!Object.hasOwn(PROFILE_MAX_ROUNDS, p)) {
 					ctx.ui.notify(
 						`Unknown profile: ${p}. Use quick, standard, intermediate, or deep.`,
 						"warning",

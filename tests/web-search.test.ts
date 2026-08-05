@@ -186,6 +186,122 @@ describe("DuckDuckGoEngine", () => {
 	});
 });
 
+import { TavilyEngine } from "../extensions/web-search/engines/tavily";
+
+describe("TavilyEngine", () => {
+	let engine: TavilyEngine;
+
+	beforeEach(() => {
+		engine = new TavilyEngine();
+	});
+
+	it("has correct name", () => {
+		expect(engine.name).toBe("tavily");
+	});
+
+	it("isAvailable returns false when no API key", () => {
+		const original = process.env.TAVILY_API_KEY;
+		delete process.env.TAVILY_API_KEY;
+		expect(engine.isAvailable()).toBe(false);
+		if (original) process.env.TAVILY_API_KEY = original;
+	});
+
+	it("isAvailable returns true when API key exists", () => {
+		process.env.TAVILY_API_KEY = "test-key";
+		expect(engine.isAvailable()).toBe(true);
+		delete process.env.TAVILY_API_KEY;
+	});
+
+	it("search returns empty results when no API key", async () => {
+		const original = process.env.TAVILY_API_KEY;
+		delete process.env.TAVILY_API_KEY;
+		const results = await engine.search("test", 3);
+		expect(results).toEqual([]);
+		if (original) process.env.TAVILY_API_KEY = original;
+	});
+
+	it("clamps max_results to 1-20 and sends advanced depth", async () => {
+		process.env.TAVILY_API_KEY = "test-key";
+		const bodies: any[] = [];
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (_url: any, opts: any) => {
+			bodies.push(JSON.parse(opts.body));
+			return { ok: true, json: async () => ({ results: [] }) };
+		};
+		try {
+			await engine.search("q", 500);
+			await engine.search("q", 0);
+			expect(bodies[0].max_results).toBe(20);
+			expect(bodies[0].search_depth).toBe("advanced");
+			expect(bodies[1].max_results).toBe(1);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			delete process.env.TAVILY_API_KEY;
+		}
+	});
+
+	it("maps results with content as snippet", async () => {
+		process.env.TAVILY_API_KEY = "test-key";
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async () => ({
+			ok: true,
+			json: async () => ({
+				results: [
+					{
+						title: "T1",
+						url: "https://example.com/1",
+						content: "  snippet one  ",
+					},
+					{
+						title: "T2",
+						url: "https://example.com/2",
+						content: "snippet two",
+					},
+					{ url: "https://example.com/3" }, // no title/content
+				],
+			}),
+		});
+		try {
+			const results = await engine.search("q", 3);
+			expect(results).toEqual([
+				{
+					title: "T1",
+					url: "https://example.com/1",
+					snippet: "snippet one",
+					engine: "tavily",
+				},
+				{
+					title: "T2",
+					url: "https://example.com/2",
+					snippet: "snippet two",
+					engine: "tavily",
+				},
+				{
+					title: "No title",
+					url: "https://example.com/3",
+					snippet: "",
+					engine: "tavily",
+				},
+			]);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			delete process.env.TAVILY_API_KEY;
+		}
+	});
+
+	it("returns empty results on non-ok response", async () => {
+		process.env.TAVILY_API_KEY = "test-key";
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async () => ({ ok: false, status: 429 });
+		try {
+			expect(await engine.search("q", 3)).toEqual([]);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			delete process.env.TAVILY_API_KEY;
+		}
+	});
+});
+
 import {
 	resolveChain,
 	searchEngines,

@@ -3,8 +3,8 @@ name: fetcher
 description: Deep read of URLs — extracts full content, summarizes key findings, flags credibility
 model: fast
 thinking: minimal
-tools: read,bash,web_lookup,fetch_web
-access: shell
+tools: read,web_lookup,fetch_web
+access: read
 timeoutSeconds: 180
 ---
 

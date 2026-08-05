@@ -149,7 +149,9 @@ function parseArgs(args: string): {
 				key === "max-rounds" ||
 				key === "tokens" ||
 				key === "no-progress" ||
-				key === "profile"
+				key === "profile" ||
+				key === "yes" ||
+				key === "no-confirm"
 			) {
 				if (val && !val.startsWith("--")) {
 					flags[key] = val;
@@ -197,7 +199,7 @@ Rules:
 - Do NOT stop because you feel finished. The loop only ends when you call complete_loop (status=complete) — and only after auditing that the program's completion condition is genuinely met against real evidence (files, fetched sources, output). Treat uncertainty as not done.
 - If the program defines gates (e.g. a checkpoint tool), obey them.
 
-	Budget: rounds ${state.rounds}/${state.maxRounds} · tokens ${state.tokensUsed}/${budget} (${remaining} remaining) · guard ${state.guardId}.`;
+	Budget: rounds ${state.rounds}/${state.maxRounds} · Profile: ${state.profile ?? "standard"} · tokens ${state.tokensUsed}/${budget} (${remaining} remaining) · guard ${state.guardId}.`;
 }
 
 function wrapUpContent(state: LoopState): string {
@@ -507,9 +509,7 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 			};
 			// research: plan approval gate — confirm before burning tokens
 			if (opts.isResearch) {
-				const yesFlag =
-					args.includes("--yes") ||
-					args.includes("--no-confirm");
+				const yesFlag = flags["yes"] !== undefined || flags["no-confirm"] !== undefined;
 				if (!yesFlag && ctx.ui?.confirm) {
 					const profile = loop!.profile ?? "standard";
 					const planSummary = `🔬 Deep research: "${truncate(mission)}"\nProfile: ${profile} · Max rounds: ${maxRounds} · Min sources: ${RESEARCH_THRESHOLDS[profile as keyof typeof RESEARCH_THRESHOLDS]?.minSources ?? 20}\n\nSub-questions and search strategy will be defined in Round 0. Do you want to proceed?`;

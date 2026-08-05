@@ -24,7 +24,7 @@ Default: `standard`. Override max rounds with `--max-rounds N`.
 
 ## Profile
 
-standard
+<injected by /research — do not edit>
 
 ## Deliverable
 
@@ -140,8 +140,8 @@ run_subagents({
 ```
 
 - **Quick/standard:** No subagents. Coordinator does all search/fetch directly.
-- **Intermediate:** Dispatch 5 scouts (distinct sub-questions) + 3 fetchers (deep-read URLs).
-- **Deep:** Dispatch 12 scouts + 5 fetchers. Then dispatch judge subagent.
+- **Intermediate:** Dispatch 5 scouts (distinct sub-questions) + 3 fetchers (deep-read URLs). **Note:** `run_subagents` accepts max 4 tasks per call — dispatch in batches of <=4.
+- **Deep:** Dispatch 12 scouts + 5 fetchers. **Note:** `run_subagents` accepts max 4 tasks per call — dispatch in batches of <=4. Then dispatch judge subagent.
 
 ### Intermediate+ Verification Pass (after all rounds)
 

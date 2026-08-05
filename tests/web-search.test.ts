@@ -498,6 +498,16 @@ describe("extension tools", () => {
 		expect(res.details).toHaveProperty("partialFailures");
 	});
 
+	it("web_lookup schema advertises the tavily engine", async () => {
+		const results: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => results.push(tool),
+		};
+		createExtension(mockPi as any);
+		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+		expect(JSON.stringify(lookupTool.parameters)).toContain("tavily");
+	});
+
 	it("fetch_web returns FetchResponse shape", async () => {
 		const results: any[] = [];
 		const mockPi = {

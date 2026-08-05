@@ -23,7 +23,7 @@ Profiles: `quick` (10 rounds, 15 sources, self-judge) | `standard` (6 rounds, 20
 ## Available Subagent Profiles
 
 | Profile | Tools | Access | Use Case |
-|---------|-------|--------|----------|
+| --------- | ------- | -------- | ---------- |
 | scout_research | read, grep, find, ls, web_lookup, fetch_web | read | Broad search + credibility assessment |
 | fetcher | read, bash, web_lookup, fetch_web | read | Deep URL reads, content extraction |
 | judge | all tools | write | Report evaluation against rubric |
@@ -33,9 +33,14 @@ Profiles: `quick` (10 rounds, 15 sources, self-judge) | `standard` (6 rounds, 20
 
 ## Research Artifacts
 
+`/research` creates a per-run scratch workspace at
+`/tmp/<project-folder>/research/<research-id>-<research-slug>/` — project-folder
+= session cwd basename, research-id = local timestamp, research-slug = mission.
+All artifacts are written there, never in the repo:
+
 | File | Purpose |
-|------|---------|
-| `research/score.md` | Sub-question scores (0-100) and notes |
-| `research/notes.md` | Claim → source → confidence log |
-| `research/report.org` | Final org-mode report |
+| ------ | --------- |
+| `score.md` | Sub-question scores (0-100) and notes |
+| `notes.md` | Claim → source → confidence log |
+| `report.org` | Final org-mode report |
 | `docs/006-deep-research-spec.md` | Full spec with profiles and architecture |

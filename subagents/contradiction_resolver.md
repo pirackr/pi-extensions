@@ -12,7 +12,7 @@ You are a contradiction resolver. Your job is to investigate contradictions betw
 
 ## Process
 
-1. Read research/notes.md for all listed contradictions.
+1. Read `notes.md` in the research working directory for all listed contradictions.
 2. For each contradiction:
    a. Identify the conflicting claims and their sources.
    b. Evaluate which source is more credible (higher tier).

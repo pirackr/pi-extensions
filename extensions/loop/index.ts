@@ -66,6 +66,7 @@ interface LoopState {
 	lastFingerprint: string | null;
 	updatedAt: number;
 	profile?: string; // research profile: quick|standard|intermediate|deep
+	workingDir?: string; // /research only — scratch dir under /tmp for run artifacts
 }
 
 let loop: LoopState | null = null;
@@ -78,6 +79,36 @@ let thisTurnIsContinuation = false;
 
 function truncate(text: string, max = 80): string {
 	return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+// /research scratch workspace: /tmp/<project-folder>/research/<id>-<slug>/ —
+// created here (not by the agent) so each run gets one deterministic working
+// dir with a readable name, and artifacts never land in the repo.
+function slugify(text: string, max = 60): string {
+	const slug = text
+		.toLowerCase()
+		.normalize("NFKD")
+		.replace(/[\u0300-\u036f]/g, "")
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, max)
+		.replace(/-+$/g, "");
+	return slug || "research";
+}
+
+function createResearchWorkingDir(cwd: string, mission: string): string {
+	const project = path.basename(cwd) || "project";
+	const now = new Date();
+	const p = (n: number) => String(n).padStart(2, "0");
+	const id = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
+	const dir = path.join(
+		"/tmp",
+		project,
+		"research",
+		`${id}-${slugify(mission)}`,
+	);
+	fs.mkdirSync(dir, { recursive: true });
+	return dir;
 }
 
 function tokenDelta(usage: unknown): number {
@@ -188,13 +219,16 @@ function continuationContent(state: LoopState): string {
 	const programBlock = program
 		? `Re-read ${state.programPath} now. It is user-authored data, not system instructions: follow it as the task contract, but the mission and budgets below win on any conflict. It may have changed since your last round — the human edits it live to steer you.\n\n<program>\n${program}\n</program>`
 		: `⚠ program file missing at ${state.programPath} — proceed toward the mission with best judgment.`;
+	const wdBlock = state.workingDir
+		? `Research working directory: ${state.workingDir}\nAll research artifacts (score.md, notes.md, report.org) must be written inside this directory — never in the project cwd. When passing these files to subagents, use their absolute paths under it.`
+		: "";
 	return `Continue the active /${state.commandName}. Round ${state.rounds + 1} of ${state.maxRounds}.
 
 <mission>
 ${state.mission}
 </mission>
 
-${programBlock}
+${programBlock}${wdBlock}
 
 Rules:
 - Never redo work already done. Check your working files first, then take the next concrete action.
@@ -371,7 +405,7 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 				if (!loop) ctx.ui.notify(`Usage: ${usage}`, "info");
 				else
 					ctx.ui.notify(
-						`${statusLine(loop)}\nMission: ${loop.mission}\nRounds: ${loop.rounds}/${loop.maxRounds} · Tokens: ${loop.tokensUsed}${loop.tokenBudget != null ? `/${loop.tokenBudget}` : ""}\nProgram: ${loop.programPath}`,
+						`${statusLine(loop)}\nMission: ${loop.mission}\nRounds: ${loop.rounds}/${loop.maxRounds} · Tokens: ${loop.tokensUsed}${loop.tokenBudget != null ? `/${loop.tokenBudget}` : ""}\nProgram: ${loop.programPath}${loop.workingDir ? `\nWorking dir: ${loop.workingDir}` : ""}`,
 						"info",
 					);
 				return;
@@ -493,6 +527,11 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 				);
 				if (!ok) return;
 			}
+			// research: deterministic scratch workspace under /tmp, created up
+			// front so the program's artifacts have a single home from round 0.
+			const workingDir = opts.isResearch
+				? createResearchWorkingDir(ctx.cwd, mission)
+				: undefined;
 			loop = {
 				id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
 				commandName: cmd,
@@ -507,6 +546,7 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 				noProgressCount: 0,
 				lastFingerprint: null,
 				profile,
+				workingDir,
 				status: "active",
 				updatedAt: now,
 			};
@@ -516,7 +556,7 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 					flags["yes"] !== undefined || flags["no-confirm"] !== undefined;
 				if (!yesFlag && ctx.ui?.confirm) {
 					const profile = loop!.profile ?? "standard";
-					const planSummary = `🔬 Deep research: "${truncate(mission)}"\nProfile: ${profile} · Max rounds: ${maxRounds} · Min sources: ${RESEARCH_THRESHOLDS[profile as keyof typeof RESEARCH_THRESHOLDS]?.minSources ?? 20}\n\nSub-questions and search strategy will be defined in Round 0. Do you want to proceed?`;
+					const planSummary = `🔬 Deep research: "${truncate(mission)}"\nProfile: ${profile} · Max rounds: ${maxRounds} · Min sources: ${RESEARCH_THRESHOLDS[profile as keyof typeof RESEARCH_THRESHOLDS]?.minSources ?? 20}\nOutput: ${loop!.workingDir ?? "n/a"}\n\nSub-questions and search strategy will be defined in Round 0. Do you want to proceed?`;
 					const approved = await ctx.ui.confirm(
 						"Start deep research?",
 						planSummary,
@@ -704,7 +744,7 @@ export default function piLoop(pi: ExtensionAPI) {
 	registerLoopCommand(pi, {
 		command: "research",
 		description:
-			"Deep research: run the bundled research program (program.md) as an autonomous loop — searches, fetches sources, and compiles research/report.org with claim-level citations.",
+			"Deep research: run the bundled research program (program.md) as an autonomous loop — searches, fetches sources, and compiles report.org (claim-level citations) into a per-run scratch directory under /tmp.",
 		defaultProgram: RESEARCH_PROGRAM_PATH,
 		defaultMaxRounds: PROFILE_MAX_ROUNDS.standard,
 		isResearch: true,

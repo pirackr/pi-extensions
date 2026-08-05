@@ -59,7 +59,7 @@ user: /research "topic"
                │ PROCEED
                ▼
 ┌──────────────────────────────────┐
-│  Write research/report.org       │
+│  report.org in the research dir  │
 │  complete_loop                   │
 └──────────────────────────────────┘
 ```
@@ -217,7 +217,7 @@ Subagents are dispatched via tmux-subagent infrastructure. Each role has a speci
 
 ## 5. The Research Program File (`program.md`)
 
-The program file is the methodology — the 90% of deep research. It lives at the run's working directory and is re-read at the start of every round by /loop.
+The program file is the methodology — the 90% of deep research. It lives at the run's working directory (a per-run scratch dir created by /research under `/tmp/<project-folder>/research/<research-id>-<research-slug>/`) and is re-read at the start of every round by /loop.
 
 ```markdown
 # Deep Research Program
@@ -226,7 +226,7 @@ The program file is the methodology — the 90% of deep research. It lives at th
 <injected by /research — do not edit>
 
 ## Deliverable
-Write `research/report.org` — a structured org-mode report with claim-level citations.
+Write `report.org` — a structured org-mode report with claim-level citations — in the research working directory.
 
 ## Depth Profiles
 quick:    min_rounds=10, min_sources=15, max_rounds=10
@@ -240,12 +240,12 @@ standard  ← the default (overridable via --profile)
 ## Protocol
 
 ### Round 0 — Plan
-1. Restate the mission as 5–8 concrete sub-questions in `research/score.md`.
+1. Restate the mission as 5–8 concrete sub-questions in `score.md`.
    For each: the question, what evidence would answer it, who would know.
 2. START WIDE — first-round queries must be broad. Narrow after round 1.
 
 ### Every Research Round
-1. Read `research/score.md` and `research/notes.md` first. Never redo done work.
+1. Read `score.md` and `notes.md` first. Never redo done work.
 2. Attack the 1–3 weakest sub-questions (lowest scores).
 3. Fire 2–4 parallel `lookup_web` queries via the web-search skill (distinct phrasings,
    quoted exact terms, site:/filetype: filters when useful).
@@ -253,10 +253,10 @@ standard  ← the default (overridable via --profile)
    specific sub-question. Scouts return findings + source URLs to the filesystem.
 5. Dispatch fetch subagents for deep reads of the best hits (if profile ≥ intermediate).
    Fetch agents return content summaries + key claims to the filesystem.
-6. Append to `research/notes.md`: claim → source URL → confidence (0–100).
+6. Append to `notes.md`: claim → source URL → confidence (0–100).
 7. Triangulate: every key claim needs 2+ independent sources spanning credibility
    tiers (official / independent analysis / community).
-8. Update `research/score.md` (0–100 per sub-question + notes column).
+8. Update `score.md` (0–100 per sub-question + notes column).
 9. Record unresolved contradictions in the notes column — never paper over them.
 10. If contradictions exist, dispatch a ContradictionResolver subagent (deep profile).
 11. Call `research_checkpoint` (profile, round, total_sources, contradictions) and obey:
@@ -287,7 +287,7 @@ All three, then write the report and call `complete_loop`:
 - ≥ min_sources unique sources cited (from profile)
 - no unresolved contradiction on a scored question
 
-## Report Template (`research/report.org`)
+## Report Template (`report.org` — in the research working directory)
 * Deep Research — <Topic>
 
 ** Executive Summary (≤5 bullets)
@@ -375,7 +375,7 @@ deep:     min_rounds=10, min_sources=40, max_rounds=10
 
 **Behavior:**
 
-1. Coordinator writes `research/score.md` with sub-questions and search plan
+1. Coordinator writes `score.md` with sub-questions and search plan
 2. If `--yes` flag: skip, proceed
 3. If `ctx.ui.confirm()` available: show plan in TUI, wait for user to confirm/modify/cancel
 4. If no UI and no `--yes`: proceed (headless safety)
@@ -447,4 +447,4 @@ This spec replaces the old `skills/deep-research/SKILL.md` draft which specified
 - ~~`.runs/<id>/checkpoint.json` + resume~~ → deferred (session entries + notes.md suffice)
 - ~~`audit.jsonl`~~ → deferred
 
-The old spec's `research/<slug>` directory structure is preserved: `research/score.md`, `research/notes.md`, `research/report.org`.
+Artifacts now live in a per-run scratch workspace created by /research at `/tmp/<project-folder>/research/<research-id>-<research-slug>/` (project-folder = session cwd basename, research-id = local timestamp, research-slug = mission): `score.md`, `notes.md`, `report.org`. See §5.

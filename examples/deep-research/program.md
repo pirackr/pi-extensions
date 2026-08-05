@@ -26,9 +26,23 @@ Default: `standard`. Override max rounds with `--max-rounds N`.
 
 <injected by /research — do not edit>
 
+## Working Directory
+
+<injected by /research — do not edit>
+
+The run's scratch workspace is created by /research before round 0 at
+`/tmp/<project-folder>/research/<research-id>-<research-slug>/`. It is the
+research working directory.
+
+- All artifact paths in this program (`score.md`, `notes.md`, `report.org`)
+  are relative to it — write them there, never in the project cwd.
+- In subagent `scope`/`inputs`, reference these files by their absolute paths
+  under the working directory (`<research-dir>/score.md`, etc.).
+- Reuse the existing artifacts across rounds; never redo done work.
+
 ## Deliverable
 
-Write `research/report.org` — an org-mode report with claim-level citations.
+Write `report.org` — an org-mode report with claim-level citations — in the research working directory (see Working Directory above).
 
 ## Org-Mode Format
 
@@ -90,7 +104,7 @@ Use org-mode headings and markup:
 ### Round 0 — Plan
 
 1. Read the mission (injected by /research).
-2. Restate the mission as 5–8 concrete sub-questions in `research/score.md`.
+2. Restate the mission as 5–8 concrete sub-questions in `score.md`.
    For each sub-question: the question text, what evidence would answer it,
    who would know, estimated source count needed.
 3. START WIDE — first-round queries must be broad. Narrow after round 1.
@@ -99,17 +113,17 @@ Use org-mode headings and markup:
 
 ### Every round (quick, standard, intermediate, deep)
 
-1. Read `research/score.md` and `research/notes.md` first. Never redo done work.
+1. Read `score.md` and `notes.md` first. Never redo done work.
 2. Attack the 1–3 weakest sub-questions (lowest scores).
 3. Fire 2–4 parallel `web_lookup` queries (distinct phrasings; quoted exact
    terms; `site:`/`filetype:` filters when useful).
 4. Deep-read the 2–3 most authoritative hits with `fetch_web`.
    Prefer primary sources, official docs, papers.
    Distrust SEO content farms and generic listicles.
-5. Append to `research/notes.md`: claim → source URL → confidence (0–100) → credibility (1-5).
+5. Append to `notes.md`: claim → source URL → confidence (0–100) → credibility (1-5).
 6. Triangulate: every key claim needs 2+ independent sources spanning
    credibility tiers (official / independent analysis / community).
-7. Update `research/score.md` (0–100 per sub-question + notes column).
+7. Update `score.md` (0–100 per sub-question + notes column).
 8. Record unresolved contradictions in the notes column — never paper over them.
 9. **Call `research_checkpoint`** with profile, current round, total unique sources.
    Obey its verdict — do NOT call `complete_loop` unless PROCEED.
@@ -128,7 +142,7 @@ run_subagents({
       scope: ["research-homelab-hardware/models.mjs"],
       constraints: ["Use broad queries first. Rate sources 1-5. Note contradictions."],
       acceptance_criteria: ["5+ credible URLs returned with findings", "Contradictions noted"],
-      inputs: ["research/score.md", "research/notes.md"],
+      inputs: ["<research-dir>/score.md", "<research-dir>/notes.md"],
       expected_output: "Scout report with URLs, credibility ratings, contradictions"
     },
     // ... more scouts, same agent, different objective
@@ -155,7 +169,7 @@ After the main research rounds, run a verification pass:
      tasks: [{
        agent: "judge",
        objective: "Judge the research report against the credibility rubric. Evaluate claim quality, triangulation, contradictions, and completeness.",
-       scope: ["research/report.org", "research/notes.md", "research/score.md"],
+       scope: ["<research-dir>/report.org", "<research-dir>/notes.md", "<research-dir>/score.md"],
        inputs: ["docs/006-deep-research-spec.md (Section 4.3 — judge rubric)"],
        expected_output: "Judge verdict with score, verdict, and required fixes"
      }],
@@ -175,7 +189,7 @@ After the main research rounds, run a verification pass:
      tasks: [{
        agent: "citation_agent",
        objective: "Verify every claim in the report has a matching source. Flag unsupported or misattributed claims.",
-       scope: ["research/report.org", "research/notes.md"],
+       scope: ["<research-dir>/report.org", "<research-dir>/notes.md"],
        expected_output: "Citation report with verified/unsupported/misattributed counts"
      }]
    })
@@ -190,7 +204,7 @@ After the main research rounds, run a verification pass:
      tasks: [{
        agent: "source_auditor",
        objective: "Audit all sources used in research. Flag sources rated ≤2 that support key claims.",
-       scope: ["research/notes.md"],
+       scope: ["<research-dir>/notes.md"],
        expected_output: "Source audit with ratings and required replacements"
      }]
    })
@@ -204,8 +218,8 @@ After the main research rounds, run a verification pass:
    run_subagents({
      tasks: [{
        agent: "contradiction_resolver",
-       objective: "Investigate all contradictions listed in research/notes.md. Resolve, reconcile, or mark as genuinely unresolved.",
-       scope: ["research/notes.md", "research/score.md"],
+       objective: "Investigate all contradictions listed in notes.md. Resolve, reconcile, or mark as genuinely unresolved.",
+       scope: ["<research-dir>/notes.md", "<research-dir>/score.md"],
        expected_output: "Contradiction resolution report"
      }]
    })
@@ -220,15 +234,15 @@ Deep profile adds dedicated verification rounds AFTER the main research:
 
 ## Completion condition
 
-All three, then write `research/report.org` and call `complete_loop` (status=complete):
+All three, then write `report.org` in the research working directory and call `complete_loop` (status=complete):
 
-1. Every sub-question scored ≥ 80 in `research/score.md`
+1. Every sub-question scored ≥ 80 in `score.md`
 2. Min sources reached (per profile): quick=15, standard=20, intermediate=30, deep=40
 3. No unresolved contradiction on a scored question (or it is acknowledged in Uncertainties)
 
 **Hard floor:** `research_checkpoint` must return PROCEED before calling `complete_loop`.
 
-If the loop hits its round/token caps first, still write `research/report.org`
+If the loop hits its round/token caps first, still write `report.org`
 with the best evidence gathered, list every gap in Uncertainties & Gaps,
 and call `complete_loop` (status=complete, with a note about caps).
 

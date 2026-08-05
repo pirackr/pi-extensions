@@ -1,0 +1,221 @@
+#+TITLE: Deep Research — Feature Analysis Report
+#+AUTHOR: Pi Deep Research
+#+DATE: 2026-01-XX
+#+PROPERTY: sources 20 | sub-questions 7 | all-scored>=80
+
+* Deep Research — Feature Analysis Report
+
+Research mission: Understand what "deep research" looks like in AI products and the pi coding agent ecosystem, so we can build our own.
+
+Completed: 2026-01-XX | 20 sources | 7 sub-questions | All scored ≥ 80
+
+** Executive Summary
+
+1. Deep research is a distinct product category launched in 2025 by all three major AI providers (Anthropic, OpenAI, Google), characterized by autonomous multi-step web research that produces 10–30 page reports with citations, taking 5–45 minutes instead of seconds.
+2. Three architectural paradigms exist: Anthropic uses multi-agent orchestrator-worker (90% better than single-agent), OpenAI uses a single RL-trained model (o3) that self-iterates, and Google offers dual-tier via API (speed-optimized vs. Max with extended compute). All share: planning phase, iterative search, source verification, and structured output.
+3. The pi ecosystem already has 3 deep research implementations ranging from lightweight (skill-based, ~17 stars) to production-grade (24k+ lines, 450 tests), providing patterns for extensions (TypeScript tools) and skills (SKILL.md workflow instructions).
+4. Core technical challenges are well-documented: token cost (4–15× regular chat), hallucination at multiple trajectory stages, source quality degradation to SEO farms, and need for code-enforced checkpoints to prevent premature conclusion.
+5. For building our own deep research in pi, the optimal architecture combines: a TypeScript extension for callable tools (search, checkpoint, report), a SKILL.md for workflow guidance, configurable research profiles, and a state machine with confirmation gates — learning from the best patterns across all three major vendors and existing pi implementations.
+
+** Findings Per Sub-Question
+
+*** Q1: What is "deep research" as a category? (Score: 90)
+
+Deep research is an agentic AI capability that plans, executes, and synthesizes multi-step web research to produce comprehensive, cited reports — taking 5–30+ minutes instead of instant responses [1, 3, 4]. It is distinguished from regular chat by:
+
+- /Iterative searching/ (not single-shot): The agent searches, evaluates, refines queries, and searches again based on intermediate findings
+- /Source verification/: Every claim is traced to a cited source URL
+- /Long-horizon planning/: The agent decomposes complex questions into sub-questions and plans research strategies
+- /Structured report output/: Final deliverable is a multi-section markdown report, not a conversational answer
+
+Anthropic frames it as "research capabilities that allow it to search across the web...to accomplish complex tasks" [2], OpenAI calls it an "agentic capability that conducts multi-step research" [1], and Google describes it as an agent that "autonomously plans, executes, and synthesizes multi-step research tasks" [3]. Independent sources confirm the pattern: "generate long reports or literature reviews instead of short answers — search, analyze, and synthesize from hundreds of online sources" [4].
+
+*** Q2: What is the architecture? (Score: 85)
+
+Three distinct architectures have been documented:
+
+**** Anthropic (multi-agent orchestrator-worker):
+- Lead agent (Claude Opus 4) analyzes query, plans strategy, spawns subagents
+- 3–5+ subagents (Claude Sonnet 4) explore different aspects in parallel
+- Each subagent iteratively searches, evaluates results, returns findings
+- CitationAgent processes final outputs to add citations
+- Uses "extended thinking" for planning, "interleaved thinking" after tool results
+- Context memory: saves plan to Memory when approaching 200k token context limit
+- Performance: 90.2% better than single-agent Opus 4 on internal evaluation [2]
+
+**** OpenAI (single model, iterative RL-trained):
+- Single model (o3 variant optimized for browsing) trained via end-to-end reinforcement learning
+- Plans and executes a multi-step trajectory, backtracks and reacts to real-time information
+- Capabilities: browse web, analyze files, plot/iterate graphs via Python tool, cite passages
+- Two tiers: "full" (o3-based, expensive) and "lightweight" (o4-mini-based, cheaper) [7]
+
+**** Google (API-first, dual-tier):
+- Deep Research: speed-optimized, reduced latency, for interactive use
+- Deep Research Max: built with Gemini 3.1 Pro, extended test-time compute, async/background workflows
+- Supports MCP servers, native chart/infographic generation, real-time streaming [10]
+
+All three share: planning phase → iterative search → synthesis → report output.
+
+*** Q3: What does deep research look like in the pi ecosystem? (Score: 80)
+
+Three distinct implementations exist:
+
+1. /czhiming-maker/pi-deep-research/ (npm:pi-deep-research, 17 stars, MIT) — Skill-based approach with a ~research_checkpoint~ tool that enforces 6 hard rules (min rounds, min sources, answered ratio, avg confidence, low-confidence questions, unresolved contradictions). Uses Tavily/Brave search APIs and multi-hop reasoning patterns [6].
+
+2. /timaliev/pi-deep-research/ (62 releases, 24k+ lines, 450 tests) — Full extension-based implementation with ~plan_research~ + ~run_research~ tools, subprocess prefilter architecture, state machine phases, multi-engine search abstraction (5 engines), configurable profiles, TUI confirmation dialog, PDF export, and JSONL logging [7].
+
+3. /firstpick/pi-skill-deep-research/ (pi.dev packages) — Two-phase research with schema/policy validation, focused on high-stakes research with scientific fact-checking [12].
+
+*** Q4: What are the core capabilities/features? (Score: 80)
+
+Cross-platform feature comparison:
+
+| Feature | Anthropic | OpenAI | Google | Pi implementations |
+|---------|-----------|--------|--------|-------------------|
+| Planning/sub-questions | Yes: Lead agent plans | Yes: Implicit in model | Yes: Explicit plan review | Yes: czhiming, timaliev |
+| Human-in-the-loop plan approval | Yes: TUI confirmation | No: Not emphasized | Yes: Collaborative planning | Yes: timaliev TUI, czhiming plan review |
+| Iterative searching | Yes: Subagent loops | Yes: Self-iterates | Yes: Iterative search/refine | Yes: All 3 implementations |
+| Multi-agent parallelism | Yes: 3–5 subagents | No: Single agent | No: Single agent | No: None (yet) |
+| MCP integration | Yes: External tools | Yes: MCP servers | Yes: MCP servers + file stores | No: None (yet) |
+| Citation requirement | Yes: CitationAgent | Yes: Passage-level citations | Yes: Fully cited | Yes: czhiming checkpoint, firstpick |
+| Report generation | Yes: Markdown | Yes: Markdown + visuals | Yes: Markdown + charts | Yes: Markdown reports |
+| Confidence scoring | Yes: LLM-as-judge | No | No | Yes: czhiming 0–100 scale |
+| Checkpoint/gate mechanism | Yes: Rainbow deploys | No | Yes: Real-time streaming | Yes: czhiming research_checkpoint |
+| Cost tiering | Yes: Opus/Sonnet split | Yes: Full/lightweight | Yes: Regular/Max | Yes: timaliev prefilterModel |
+| Source quality heuristics | Yes: Explicit in prompts | No | Yes: Weighs conflicting evidence | Yes: czhiming credibility tiers |
+
+*** Q5: What are the key technical challenges? (Score: 80)
+
+/TOKEN COST:/ Deep research consumes 4× chat tokens (single-agent) to 15× chat tokens (multi-agent) [2]. Anthropic explicitly notes "economic viability requires tasks where the value justifies increased performance."
+
+/HALLUCINATION AT MULTIPLE STAGES:/ arXiv 2601.22984 identifies hallucination occurring at every research trajectory stage — wrong sub-questions during planning, misinterpreting search results, and inventing connections during synthesis [15]. arXiv 2607.20891 warns that "misleading knowledge induces false conclusions" — contaminated training data misleads even deep research agents [16].
+
+/Prevention techniques:/
+- /Citation-by-requirement/: Every claim traced to a cited source [2, 6]
+- /Rubric-graded verification/: Test-time rubric-guided verification (ACL 2026) [17]
+- /Source quality heuristics/: Anthropic found agents gravitating to SEO without explicit guardrails — they added source quality rules to prompts [2]
+- /Code-enforced checkpoints/: czhiming-maker's 6-rule checkpoint tool prevents premature conclusions [6]
+
+/SOURCE QUALITY DEGRADATION:/ Without explicit heuristics, agents gravitate toward SEO-optimized content farms over authoritative sources like academic PDFs [2]. Google's Deep Research Max explicitly teaches agents to "consult a diverse array of sources and carefully weigh conflicting evidence."
+
+/RATE LIMITING AND BUDGET MANAGEMENT:/ framerslab/agentos-deep-research enforces cost/time limits at every phase [18]. tahasiddiquii/deep-research-agent uses "hard step + search budget" with CI-gated faithfulness [19]. timaliev uses soft caps (maxSearchCalls, maxElapsedSeconds) that reduce intensity rather than crash [7].
+
+*** Q6: What patterns exist in open-source implementations? (Score: 80)
+
+**** Alibaba-NLP/DeepResearch (19,783 stars, Apache 2.0) [8]:
+- 30.5B parameter model trained for agentic deep research
+- Two inference modes: ReAct (baseline) and IterResearch-based "Heavy" mode
+- IterResearch: test-time scaling strategy that unlocks maximum performance
+- Training pipeline: synthetic data generation → continual pre-training → reinforcement learning
+- Primary mechanism: web search tools
+
+**** qx-labs/agents-deep-research (786 stars):
+- OpenAI Agents SDK implementation with multi-agent architecture
+- Compatible with multiple backends: OpenAI, Anthropic, Gemini, DeepSeek, Perplexity, Hugging Face, Ollama
+
+**** THUDM/DeepDive (333 stars, Tsinghua):
+- Knowledge graphs + multi-turn reinforcement learning for deep search agents
+
+All open-source implementations share: decomposition → search → evaluate → synthesize → report, with iterative refinement loops.
+
+*** Q7: What should our pi deep research look like? (Score: 80)
+
+Based on patterns across all vendors and existing pi implementations, a pi deep research feature should combine:
+
+/Architecture: Extension + Skill + Package/
+
+- /Extension (TypeScript):/ Registers callable tools via ~pi.registerTool(...)/~:
+  - ~deep_web_search~/ — multi-engine web search (DuckDuckGo, Brave, Tavily)
+  - ~research_checkpoint~/ — enforces minimum research depth (like czhiming-maker)
+  - ~save_report~/ — writes structured markdown report
+  - Lifecycle hooks for monitoring (cost, progress)
+
+- /Skill (SKILL.md):/ Workflow instructions with progressive disclosure:
+  - Research methodology: plan → search → reflect → iterate → report
+  - Behavioral guidelines: "start wide, narrow down," prefer primary sources
+  - Multi-hop reasoning patterns (Entity Expansion, Temporal Progression, etc.)
+  - Reporting standards with anti-patterns
+
+- /Pi Package (npm):/ Bundles both via ~package.json~ with ~pi.extensions~ and ~pi.skills~ entries
+
+/Key design decisions informed by research:/
+- Use ~prefilterModel~ setting for cheap planning (from timaliev)
+- Include ~research_checkpoint~ tool with hard rules (from czhiming-maker)
+- Support multiple search engines with graceful fallback (from timaliev)
+- Plan approval before execution — API calls are expensive
+- Configurable profiles (breadth/depth/concurrency) with named presets
+- JSONL research log for debugging and auditing
+- MCP integration for authenticated data sources (from all 3 vendors)
+
+** Comparison Table: Vendor Architectures
+
+| Dimension | Anthropic Research | OpenAI Deep Research | Google Deep Research |
+|-----------|-------------------|---------------------|---------------------|
+| /Primary model/ | Claude Opus 4 (lead) + Sonnet 4 (subagents) | o3 variant (single) | Gemini 3.1 Pro (Max) |
+| /Architecture/ | Multi-agent orchestrator-worker | Single agent, self-iterating | Single agent, dual-tier |
+| /Parallelism/ | 3–5 parallel subagents | Parallel tool calls | Sequential with streaming |
+| /Planning/ | Explicit lead agent plan | Implicit in model reasoning | Explicit plan review |
+| /HIL approval/ | Yes | No | Yes: Collaborative planning |
+| /Token cost/ | 4–15× chat | "Very compute intensive" | Not specified |
+| /Speed/ | Minutes for complex queries | 5–30 minutes | Minutes (Regular), longer (Max) |
+| /Output/ | Markdown report with citations | Markdown report with citations | Markdown report with native charts |
+| /MCP/ | Yes: External tools | Yes: MCP servers | Yes: MCP + file stores |
+| /API access/ | Via Claude | OpenAI API | Gemini API (Interactions API) |
+| /Cost tiers/ | Opus/Sonnet split | Full/lightweight | Regular/Max |
+| /Evaluation/ | LLM-as-judge with rubric | GAIA SOTA, HLE 26.6% | Internal expert evals |
+| /Launch/ | June 2025 | Feb 2025 | Dec 2025 (API), Apr 2026 (Max) |
+
+** Contradictions / Debates
+
+*** Multi-agent vs single-agent paradigm
+
+Anthropic insists multi-agent is essential (90.2% better than single-agent). OpenAI uses a single highly-trained model.
+
+/Resolution:/ Not contradictory — different design philosophies. Multi-agent scales performance with compute but increases cost (15×). Single-agent is simpler and cheaper but may hit a ceiling on complex tasks. Both are valid approaches; the choice depends on the value/cost tradeoff of the target use case.
+
+*** Explicit vs implicit planning
+
+Anthropic and Google have explicit human-in-the-loop plan approval phases. OpenAI's planning is implicit in the model's reasoning.
+
+/Resolution:/ Both work. Explicit planning gives user control (good for expensive research). Implicit planning is faster but offers less oversight. Our implementation should support both modes.
+
+** Uncertainties & Gaps
+
+1. /Production reliability patterns:/ We have Anthropic's excellent engineering blog on production challenges (rainbow deploys, state management), but less detail on how smaller implementations handle crashes, retries, and resumability in the pi ecosystem. The state machine in timaliev is promising but untested at scale.
+
+2. /Cost benchmarks:/ We know deep research is 4–15× more expensive than chat, but lack concrete per-query cost data. Without access to actual billing data from Anthropic/OpenAI/Google, exact cost modeling for our implementation is speculative.
+
+3. /MCP tool quality for research:/ All three vendors now support MCP, but the quality of available research-oriented MCP tools varies widely. We lack a comprehensive inventory of existing MCP tools for deep research use cases.
+
+4. /Evaluation methodology:/ While we have Anthropic's LLM-as-judge approach and benchmark scores (GAIA, HLE), there is no universally accepted evaluation framework for deep research quality. How to measure "good research" remains an open problem.
+
+5. /Long-horizon context management:/ We know Anthropic saves plans to Memory at 200k tokens, but detailed strategies for context compression, summarization, and information retrieval in multi-hour research sessions are under-documented.
+
+** Sources
+
+|#| Source | URL | Credibility Tier | Retrieved |
+|---|--------|-----|-----------------|-----------|
+| 1 | OpenAI Deep Research announcement | https://openai.com/index/introducing-deep-research/ | Official (vendor primary) | Round 1 |
+| 2 | Anthropic multi-agent engineering blog | https://www.anthropic.com/engineering/multi-agent-research-system | Official (vendor primary) | Round 1 |
+| 3 | Google Deep Research Max blog | https://blog.google/innovation-and-ai/models-and-research/gemini-models/next-generation-gemini-deep-research/ | Official (vendor primary) | Round 1 |
+| 4 | University of Arizona Libraries FAQ | https://ask.library.arizona.edu/faq/429037 | Independent (academic) | Round 1 |
+| 5 | Anthropic Cookbook prompts | https://platform.claude.com/cookbook/patterns-agents-basic-workflows | Official (vendor primary) | Round 1 |
+| 6 | czhiming-maker/pi-deep-research | https://github.com/czhiming-maker/pi-deep-research | Community (GitHub) | Round 1 |
+| 7 | timaliev/pi-deep-research | https://github.com/timaliev/pi-deep-research | Community (GitHub) | Round 1 |
+| 8 | Alibaba-NLP/DeepResearch | https://github.com/Alibaba-NLP/DeepResearch | Community (GitHub) | Round 1 |
+| 9 | OpenAI Agents SDK deep research | https://openai.github.io/openai-agents-python/examples/deep_research_api | Official (vendor primary) | Round 1 |
+| 10 | Gemini API Deep Research docs | https://ai.google.dev/gemini-api/docs/deep-research | Official (vendor primary) | Round 1 |
+| 11 | Tongyi DeepResearch blog | https://tongyi-agent.github.io/blog/introducing-tongyi-deep-research/ | Official (vendor primary) | Round 1 |
+| 12 | Firstpick pi-skill-deep-research | https://pi.dev/packages/@firstpick/pi-skill-deep-research | Community (pi.dev) | Round 1 |
+| 13 | arXiv survey on Deep Research | https://arxiv.org/html/2508.12752v1 | Academic paper | Round 1 |
+| 14 | qx-labs/agents-deep-research | https://github.com/qx-labs/agents-deep-research | Community (GitHub) | Round 1 |
+| 15 | arXiv hallucination evaluation | https://arxiv.org/html/2601.22984v2 | Academic paper | Round 2 |
+| 16 | arXiv misleading knowledge | https://arxiv.org/html/2607.20891 | Academic paper | Round 2 |
+| 17 | ACL 2026 rubric-guided verification | https://aclanthology.org/2026.findings-acl.1243.pdf | Academic paper | Round 2 |
+| 18 | framerslab/agentos-deep-research | https://github.com/framerslab/agentos-extensions | Community (GitHub) | Round 2 |
+| 19 | tahasiddiquii/deep-research-agent | https://github.com/tahasiddiquii/deep-research-agent | Community (GitHub) | Round 2 |
+| 20 | pi.dev extensibility docs | https://badlogic-pi-mono.mintlify.app/concepts/extensibility | Official (vendor primary) | Round 2 |
+
+---
+
+/Research completed./ All sub-questions scored ≥ 80, 20 unique sources cited, no unresolved contradictions on scored questions.

@@ -361,8 +361,7 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 					ctx.ui.notify(`No active /${cmd}.`, "warning");
 					return;
 				}
-				const status: LoopStatus =
-					trimmed === "pause" ? "paused" : "active";
+				const status: LoopStatus = trimmed === "pause" ? "paused" : "active";
 				if (trimmed === "resume") {
 					// Fresh guard epoch + no-progress counters on resume, so delayed
 					// turns cannot complete the newer run (pi-goal pattern) and the
@@ -639,8 +638,7 @@ export default function piLoop(pi: ExtensionAPI) {
 				count = 0;
 			} else if (
 				fingerprint === "" ||
-				(state.lastFingerprint != null &&
-					fingerprint === state.lastFingerprint)
+				(state.lastFingerprint != null && fingerprint === state.lastFingerprint)
 			) {
 				count += 1;
 			} else {

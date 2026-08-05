@@ -8,9 +8,8 @@ Replace `open-websearch` with direct API calls. Three tools, zero browser depend
 
 | Tool name | Purpose | Implementation |
 | ----------- | --------- | --------------- |
-| `lookup_web` | Search the web | Exa API + DuckDuckGo HTML scrape |
-| `fetch_web_content` | Fetch and extract URL content | Native `fetch()` + `@mozilla/readability` |
-| `fetch_github_readme` | Fetch GitHub README | GitHub REST API |
+| `web_lookup` | Search the web | Exa API + DuckDuckGo HTML scrape |
+| `fetch_web` | Fetch and extract URL content | Native `fetch()` + `@mozilla/readability` |
 
 ## Data types
 
@@ -112,9 +111,9 @@ interface ExtractedContent {
 ### fetch_web_content
 
 - `url` (required): Public HTTP(S) URL to fetch
-- `max_chars` (optional): Ignored in v1 (no truncation)
-- `readability` (optional): Ignored in v1 (always on)
-- `include_links` (optional): Ignored in v1
+- `max_chars` (optional): Accepted for schema compatibility, ignored in v1 (no truncation)
+- `readability` (optional): Accepted for schema compatibility, ignored in v1 (always on)
+- `include_links` (optional): Accepted for schema compatibility, ignored in v1
 
 ### fetch_github_readme
 

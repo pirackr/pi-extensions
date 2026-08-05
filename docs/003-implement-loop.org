@@ -1,3 +1,214 @@
-* Description
-- Implement /loop for pi
-- Reference pi-loop or pi-goal 
+# Implement /loop — the generic program-driven loop engine
+
+Status: partially built (PoC) · this file states the requirement /loop must meet
+to stay generic while serving as the engine /deep-research builds on.
+
+## Context
+
+- **Built (2025-08):** `extensions/loop/index.ts` registers `/loop` + `/research`
+  on one shared engine (docs/004 §11). Session-scoped state, rounds, token
+  accounting, pause/resume/clear, `complete_loop`, reload-pause.
+- **Validated (2026-08-05):** `/research` run on "loop and goal implementation
+  in coding agent" — plan turn + 2 continuation rounds, 6 sub-questions all
+  scored ≥ 85, 16 sources cited, completed via the program's condition at
+  round 2/6 (caps never hit). Working files: `research/{score,notes,report}.md`.
+- **Evidence base:** docs/002 §3.7–3.8 (stopping stack), §4.5 (program.md +
+  /loop decision); docs/004 (PoC + Q1–Q3 validation); research/report.md
+  (fresh primary-source survey of loop mechanics across OpenAI, Anthropic,
+  pi-goal, Oracle, Cursor, LangChain, CrewAI, ChatGPT).
+
+## Goal
+
+A `/loop` command that runs the agent against a **user-authored program file**
+for up to N rounds / T tokens, continuing automatically until the program's
+completion condition is met, the user intervenes (pause/clear), or a hard cap
+stops it. The program file is the *only* task-specific part: /loop provides
+the loop, accounting, caps, persistence, and stop discipline. Specializations
+(deep-research, CI babysitting, migration sweeps, review loops) ship their own
+program file + optional tools. `/deep-research` (currently `/research`) is the
+first specialization and the proof that the design works.
+
+## Why /loop and not a task-specific state machine
+
+- 002 §4.5 / 004: the bitter lesson — thin orchestration + let the model drive.
+  ~90 lines vs 500+; adapts to model upgrades; grow on observed failure.
+- Research (report.md): every production system converges on the same generic
+  loop — "the Agents SDK runner performs the tool loop, switches agents after
+  handoffs, and stops when the run finishes or pauses for approval" (OpenAI);
+  "the same execution loop that powers Claude Code… repeats until the task is
+  complete" (Claude Agent SDK). Goals/tasks are layered *on top* by written
+  criteria and instructions. /loop should BE that generic loop; program files
+  are the layering mechanism.
+
+## Non-goals (what /loop is NOT)
+
+- NOT a deep-research state machine — no search logic, no report template, no
+  verify/judge pipeline inside /loop. Those live in program files and
+  specialization tools.
+- NOT a scheduler. Claude Code's `/loop` re-runs a prompt on a time interval;
+  ChatGPT scheduled tasks and Cursor automations are time/event-triggered.
+  Ours is **continuation-driven** (re-trigger on agent end). Same name,
+  different semantics — report.md Contradictions #1; keep this explicit in the
+  command description.
+- NOT a multi-agent orchestrator — subagent dispatch stays a separate
+  extension (tmux-subagent).
+- Deliberately absent (defer until observed failure, per 004): worker tool
+  isolation, `.runs/` checkpoints, `audit.jsonl`.
+
+## The generic contract — the program file
+
+1. The program file is user-authored **data, not system instructions** — wrapped
+   in `<program>…</program>`; mission + budgets win on conflict.
+2. Re-read the program file at the start of **every** round — human edits steer
+   the run live.
+3. The program file defines: deliverable, per-round protocol, completion
+   condition, report template, hard caps. `examples/deep-research/program.md`
+   is the reference specialization.
+4. The mission argument overrides the file's placeholder.
+
+## Functional requirements (MUST/SHOULD/COULD per RFC 2119)
+
+### FR-1 — Start with mission + optional flags (MUST)
+`/loop [--program <path>] [--max-rounds N] [--tokens N] <mission>` ·
+default program `./program.md` (cwd); missing file → warn and run on mission
+alone. **Built.**
+
+### FR-2 — Continuation loop (MUST)
+After each agent turn, if the loop is active and not past caps, deliver exactly
+one continuation message: re-read the program, restate mission + budgets, state
+"Round N of M", forbid stopping except via a completion audit. **Built.**
+No double continuations after retries/compaction/follow-ups (AC-6).
+
+### FR-3 — Completion is code-visible and agent-called (MUST)
+`complete_loop` tool: complete-only, exposed only while active; the agent must
+audit the program's completion condition against real evidence (files, fetched
+sources, output) before calling. pi-goal's evidence-based completion audit is
+the reference. **Built.**
+
+### FR-4 — Round & token accounting (MUST)
+- *Round* = one continuation message delivered. Deliberate granularity: a
+  "round" is a full loop iteration, NOT a model tool-call cycle (the Claude
+  Agent SDK counts tool-use turns only — we do not adopt that granularity;
+  program semantics are built on rounds).
+- *Tokens* = provider-reported total usage per turn, cache-inclusive fallback
+  (tokenDelta). `--tokens N` stops the loop at the budget with a wrap-up.
+  **Built; cap path never exercised in a real run (AC-2).**
+
+### FR-5 — Pause / resume / clear / status (MUST)
+Pause stops continuation mid-flight; resume continues only from an idle
+boundary; clear abandons; status shows round/tokens/program. **Built.**
+
+### FR-6 — No-progress / repetition guard (SHOULD — NOT built)
+Evidence: Oracle — "without stopping conditions, agents loop indefinitely,
+burning tokens and producing increasingly incoherent results… no-progress
+detection"; pi-goal `noProgressTurns=3` (normalized-identical outputs). Generic
+version: after N consecutive rounds with no meaningful new output (normalized
+text identical / empty), auto-pause with a review prompt. Default OFF
+(`--no-progress N` or program-file setting) until a real run needs it.
+
+### FR-7 — Stale-turn / duplicate-continuation guards (SHOULD — partial)
+Built: microtask dedupe + id/status guards on queue. Gap vs pi-goal: no
+guard-id rotation on resume/edit (delayed old turns must not complete a newer
+instance) and no stale tool-call blocking. Add with the resume/edit surface.
+
+### FR-8 — Idle-boundary continuation (MUST)
+Queue the next turn only when the agent is fully settled and idle (agent_end
+with no pending messages; pi-goal's `agent_settled` is the reference).
+**Built.**
+
+### FR-9 — Reload safety (MUST)
+`/reload` pauses an active loop and notifies; resume re-triggers from session
+state. **Built; untested in a real session (AC-4).**
+
+### FR-10 — Budget ceiling behavior (MUST)
+Max rounds OR token budget → wrap-up message (summarize, write partial work,
+leave a clear next step); never a silent stop. **Built.**
+
+## The /deep-research consumption
+
+- **DR-1 — /research (the /deep-research front-end) = /loop + specialization
+  (MUST, built):** default program = bundled `examples/deep-research/program.md`
+  (resolved via `import.meta.url`), research-appropriate default max rounds (6),
+  shares the loop engine and session state with /loop. One active run; starting
+  either replaces the other after confirm.
+- **DR-2 — Methodology lives in the program file, not code (MUST, built):**
+  sub-questions + self-score table (anti-early-stop), start-wide-then-narrow,
+  credibility tiers, triangulation, required Uncertainties & Gaps. Validated:
+  the 2026-08-05 run completed via the score condition (all ≥ 85) without
+  hitting caps — the self-score table is doing its job across all 4 runs
+  (Q1–Q3 + fresh).
+- **DR-3 — `research_checkpoint` tool (SHOULD, deferred):** one tool, 3 rules
+  (min_rounds, min_sources, max_rounds safety valve) per 002 §3.8 — "the
+  difference between research and a summary, ~40 lines." Deferred until a real
+  run shows early stopping. Evidence so far (4/4 runs complete via condition,
+  no early stop) says it is still not needed; keep the program's self-audit
+  step as the floor.
+- **DR-4 — Scope approval before tokens (COULD):** plan → `ctx.ui.confirm()` /
+  `--yes` (002 §3.8 Layer 3; "kills wrong-scope waste, often the biggest real
+  cost"). Observed gap: the 2026-08-05 run's first continuation arrived with
+  NO research/ working files — Round 0's plan was not materialized before the
+  loop continued. The program tolerated it (plan happened on round 1), but a
+  confirm gate would bound scope explicitly and cheaply.
+- **DR-5 — Specialization contract (MUST, architectural):** any future consumer
+  (CI loop, migration loop, review sweep) = program.md + optional tools. /loop
+  provides loop, accounting, caps, persistence; nothing task-specific leaks in.
+
+## Stopping & safety (the standard stack, 002 §3.7)
+
+| Layer        | Mechanism                                        | Status                        |
+|--------------|--------------------------------------------------|-------------------------------|
+| Scope bound  | user invocation = approved plan (+ optional confirm) | partial (no confirm gate) |
+| Driver       | model judges sufficiency per round (program file) | built                         |
+| Floor        | min rounds / min sources (program rule or checkpoint) | program-level self-audit; code gate deferred (DR-3) |
+| Ceiling      | --max-rounds + --tokens                          | built (untested, AC-2)        |
+| Learned      | strong model + thinking budget                   | inherited                     |
+| Escape hatch | Uncertainties & Gaps in the report template      | built (program)               |
+| Runaway      | no-progress detection                            | gap — FR-6                    |
+| Duplication  | stale-turn guard                                 | partial — FR-7                |
+
+## Gaps between current implementation and this requirement
+
+1. **G-1 — Cap paths unexercised.** All 4 runs to date completed via the
+   program's condition; `--max-rounds`/`--tokens` stop behavior never ran in a
+   real session (AC-2).
+2. **G-2 — No-progress guard (FR-6) missing** — the one guardrail every
+   production system in the research has that /loop lacks.
+3. **G-3 — Round-0 plan race (DR-4).** First continuation can arrive before the
+   plan turn writes its working files; tolerated by the program, prevented by a
+   confirm gate.
+4. **G-4 — Guard-id rotation on resume/edit (FR-7) not implemented.**
+5. **G-5 — Reload/resume and mid-run program-edit steering untested** in a real
+   session (AC-3/AC-4).
+
+## Acceptance criteria
+
+- **AC-1 (generic):** `/loop --program <any.md> "<mission>"` on a NON-research
+  task (e.g. a 3-round code-review sweep, or "tidy TODOs") — runs rounds per
+  its own program, completes via its condition, respects caps.
+- **AC-2 (caps):** start a loop with `--max-rounds 1` (or `--tokens 5000`) on a
+  long task → wrap-up message delivered, partial work written, status shows
+  stopped(reason), no further continuations.
+- **AC-3 (steering):** edit the program file between rounds → the next
+  round's continuation reflects the edit (re-read semantics).
+- **AC-4 (reload):** start a loop, `/reload` → it pauses + notifies; `/loop
+  resume` re-triggers from session state; `/loop clear` stops.
+- **AC-5 (research specialization):** `/research "<topic>"` produces
+  `research/report.md` with ≥ 8 unique sources + Uncertainties & Gaps;
+  `complete_loop` rejects non-complete status; pause/resume/clear behave.
+- **AC-6 (no duplicates):** two consecutive rounds — exactly one continuation
+  per agent end, none duplicated after retries/compaction/follow-ups.
+- **AC-7 (FR-6, when built):** a program whose output is identical for N rounds
+  auto-pauses with a review prompt.
+
+## References
+
+- docs/004-deep-research-loop-poc.md — PoC decision, build order, Q1–Q3 validation
+- docs/002-deep-research-notes.md §3.7 (stopping stack), §3.8 (minimal
+  mechanisms, checkpoint sketch), §4.5 (program.md + /loop vs state machine)
+- research/report.md (2026-08-05) — loop-mechanics evidence: OpenAI Agents SDK
+  (runner owns the loop, handoffs, sessions), Claude Agent SDK (max_turns /
+  max_budget_usd, permission modes, message lifecycle), pi-goal (idle boundary,
+  guard ids, no-progress, budgets), Oracle (runaway case, stopping conditions),
+  claude.com (four loop primitives, /goal evaluator), ChatGPT/Cursor/Devin
+  (time-based and background loops)
+- extensions/loop/index.ts — current implementation

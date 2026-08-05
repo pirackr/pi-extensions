@@ -309,9 +309,9 @@ import {
 } from "../extensions/web-search/search";
 
 describe("search composition", () => {
-	it("registers both engines with exa first (default chain)", () => {
+	it("full registry lists chain engines first, then opt-in tavily", () => {
 		const names = searchEngines.map((e) => e.name);
-		expect(names).toEqual(["exa", "duckduckgo"]);
+		expect(names).toEqual(["exa", "duckduckgo", "tavily"]);
 	});
 
 	describe("resolveChain", () => {
@@ -332,10 +332,24 @@ describe("search composition", () => {
 			expect(resolveChain("duckduckgo").map((e) => e.name)).toEqual([
 				"duckduckgo",
 			]);
+			expect(resolveChain("tavily").map((e) => e.name)).toEqual([
+				"tavily",
+			]);
 		});
 
 		it("degrades unknown choices to the default chain", () => {
 			expect(resolveChain("bogus" as any).map((e) => e.name)).toEqual([
+				"exa",
+				"duckduckgo",
+			]);
+		});
+
+		it("auto chain never includes opt-in engines", () => {
+			expect(resolveChain().map((e) => e.name)).toEqual([
+				"exa",
+				"duckduckgo",
+			]);
+			expect(resolveChain("auto").map((e) => e.name)).toEqual([
 				"exa",
 				"duckduckgo",
 			]);
@@ -346,11 +360,14 @@ describe("search composition", () => {
 		// These tests assume no EXA_API_KEY is set: the fs mock neutralizes .env
 		// and we clear the env var explicitly so Exa is always skipped.
 		const originalKey = process.env.EXA_API_KEY;
+		const originalTavilyKey = process.env.TAVILY_API_KEY;
 		beforeEach(() => {
 			delete process.env.EXA_API_KEY;
+			delete process.env.TAVILY_API_KEY;
 		});
 		afterEach(() => {
 			if (originalKey) process.env.EXA_API_KEY = originalKey;
+			if (originalTavilyKey) process.env.TAVILY_API_KEY = originalTavilyKey;
 		});
 
 		it("falls back to DuckDuckGo when Exa is unavailable", async () => {
@@ -387,6 +404,20 @@ describe("search composition", () => {
 			expect(result.partialFailures.some((pf) => pf.engine === "exa")).toBe(
 				true,
 			);
+		});
+
+		it("forced tavily with no key returns no results and reports the skip", async () => {
+			const result = await webLookup(
+				"rust programming language",
+				3,
+				undefined,
+				"tavily",
+			);
+			expect(result.results).toEqual([]);
+			expect(result.engines).toEqual([]);
+			expect(
+				result.partialFailures.some((pf) => pf.engine === "tavily"),
+			).toBe(true);
 		});
 	});
 

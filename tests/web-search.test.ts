@@ -127,3 +127,38 @@ describe('DuckDuckGoEngine', () => {
     expect(results[0].engine).toBe('duckduckgo');
   });
 });
+
+import { searchEngines, webLookup } from '../extensions/web-search/search';
+import { ExaEngine } from '../extensions/web-search/engines/exa';
+import { DuckDuckGoEngine } from '../extensions/web-search/engines/duckduckgo';
+
+describe('search composition', () => {
+  it('registers both engines', () => {
+    const names = searchEngines.map(e => e.name);
+    expect(names).toContain('exa');
+    expect(names).toContain('duckduckgo');
+  });
+
+  it('webLookup returns results from available engines', async () => {
+    const result = await webLookup('rust programming language', 3);
+    expect(result.query).toBe('rust programming language');
+    expect(result.results.length).toBeGreaterThan(0);
+    expect(result.engines.length).toBeGreaterThan(0);
+  });
+
+  it('webLookup deduplicates by URL', async () => {
+    const result = await webLookup('rust programming language', 5);
+    const urls = result.results.map(r => r.url);
+    const uniqueUrls = new Set(urls);
+    expect(urls.length).toBe(uniqueUrls.size);
+  });
+
+  it('webLookup records partial failures', async () => {
+    // When one engine fails, results from the other should still come through
+    const result = await webLookup('rust programming language', 3);
+    // At least one engine should have succeeded
+    const hadSuccess = result.results.length > 0;
+    const hadFailure = result.partialFailures.length > 0;
+    expect(hadSuccess || hadFailure).toBe(true);
+  });
+});

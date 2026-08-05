@@ -37,11 +37,16 @@ When adding a feature, decide which half it needs. Guidance-only additions (`cus
 
 ## web-search extension
 
-Every tool shells out to `npx open-websearch <subcommand> ... --json` through a single `runOpenWebSearch` helper (`execFile`, 60s timeout, 10MB buffer) and then hand-formats `result.data` into readable text for the model while returning the raw JSON in `details`. Consequences to keep in mind:
+Direct API calls — no `open-websearch`, no `npx`, no daemon. Architecture:
 
-- No API keys and no daemon; the first invocation pays an ~10–20MB `npx` download.
-- Adding a tool means adding a subcommand mapping, not new HTTP code.
-- `ALLOWED_ENGINES` is declared but the `engine` parameter is a free-form `Type.String()`, so engine names are not validated before being passed to the CLI.
+- `extensions/web-search/search.ts` — `webLookup()` runs the registered engines (Exa first, then DuckDuckGo), merges and dedupes by URL, tracks `partialFailures` for engines that threw.
+- `extensions/web-search/engines/exa.ts` — ExaEngine. `POST https://api.exa.ai/search` with `x-api-key` from env `EXA_API_KEY` or the repo-root `.env` file (resolved via `../../../.env` from `engines/`). Skipped silently (`isAvailable()` false) when no key.
+- `extensions/web-search/engines/duckduckgo.ts` — DuckDuckGoEngine. Scrapes `duckduckgo.com/html/` with a Firefox UA; decodes `uddg=` redirect URLs and strips the `&rut=` suffix; no API key needed.
+- `extensions/web-search/strategies/readability.ts` — ReadabilityStrategy. Native `fetch()` + `linkedom` parse + `@mozilla/readability` extraction; 30s abort timeout; returns `{url, title, content, error}`.
+- `extensions/web-search/index.ts` — registers `web_lookup` (search) and `fetch_web` (fetch + extract) tools with typebox params.
+
+Dependencies: `@mozilla/readability` + `linkedom` (DOMParser doesn't exist in Node — that's why linkedom, not the plan's original approach) + `typebox`. Tests in `tests/web-search.test.ts` (run with `npx vitest run`; note the `vi.mock('node:fs')` that neutralizes the real `.env` so tests are deterministic).
+
 
 ## `.pi/` in this repo
 

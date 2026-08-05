@@ -38,7 +38,7 @@ export class ExaEngine implements SearchEngine {
       body: JSON.stringify({
         query,
         type: 'auto',
-        numResults: limit,
+        numResults: Math.min(Math.max(limit, 1), 50),
         contents: { text: true },
       }),
       signal,

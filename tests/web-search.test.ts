@@ -69,6 +69,25 @@ describe('ExaEngine', () => {
     expect(results).toEqual([]);
     if (original) process.env.EXA_API_KEY = original;
   });
+
+  it('clamps numResults to 1-50', async () => {
+    process.env.EXA_API_KEY = 'test-key';
+    const bodies: any[] = [];
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (_url: any, opts: any) => {
+      bodies.push(JSON.parse(opts.body));
+      return { ok: true, json: async () => ({ results: [] }) };
+    };
+    try {
+      await engine.search('q', 500);
+      await engine.search('q', 0);
+      expect(bodies[0].numResults).toBe(50);
+      expect(bodies[1].numResults).toBe(1);
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+      delete process.env.EXA_API_KEY;
+    }
+  });
 });
 
 describe('DuckDuckGoEngine helpers', () => {

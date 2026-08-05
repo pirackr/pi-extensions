@@ -23,8 +23,7 @@ async function fetchWeb(url: string, signal?: AbortSignal): Promise<FetchRespons
         };
       }
     } catch (err) {
-      // Try next strategy
-      continue;
+      // Strategy failed — try the next one.
     }
   }
   return { url, title: '', content: '', strategy: 'none', error: 'No strategy could fetch this URL' };
@@ -42,7 +41,7 @@ export default function (pi: ExtensionAPI) {
       limit: Type.Optional(Type.Number({ description: 'Max results per engine, 1-50. Defaults to 10 if omitted.' })),
     }),
     async execute(_id: string, params: any, signal?: AbortSignal) {
-      const limit = params.limit ?? 10;
+      const limit = Math.min(Math.max(params.limit ?? 10, 1), 50);
       const result = await webLookup(params.query, limit, signal);
 
       let text = `Query: "${result.query}"\n`;

@@ -54,7 +54,7 @@ fetch_web({ url: "https://doc.rust-lang.org/book/" })
 Parameters:
 
 - `url` (required): Public HTTP(S) URL to fetch
-- `max_chars` (optional): Truncate output (v1: accepted but ignored)
+- `max_chars` (optional): Truncate output
 
 ## Response Format
 

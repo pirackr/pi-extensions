@@ -14,7 +14,7 @@ the bundled research methodology with a research-appropriate round cap.
 ## Usage
 
 ```text
-/research "<topic>" [--program <path>] [--max-rounds N] [--tokens N]
+/research "<topic>" [--program <path>] [--max-rounds N] [--tokens N] [--no-progress N|off]
 /research status | pause | resume | clear
 ```
 
@@ -29,6 +29,8 @@ Examples:
 - **--program** `<path>`: custom research program file (default: bundled `examples/deep-research/program.md`)
 - **--max-rounds** `N`: round cap (default 6)
 - **--tokens** `N`: whole-run token budget (default: none)
+- **--no-progress** `N|off`: rounds of identical/empty tool-free output
+  before the loop auto-pauses with a review prompt (default 3; `off` disables)
 
 Subcommands: `status` (current round/tokens/program), `pause` / `resume`
 (stop/restart continuation), `clear` (abandon the run).

@@ -11,6 +11,7 @@ const CUSTOM_TYPE = "pi-loop";
 const EVENT_TYPE = "pi-loop-event";
 const DEFAULT_MAX_ROUNDS = 10;
 const RESEARCH_MAX_ROUNDS = 6;
+const DEFAULT_NO_PROGRESS_TURNS = 3;
 
 // Bundled deep-research program — the default program for /research. Resolved
 // from this module's location so it works regardless of cwd.
@@ -19,7 +20,12 @@ const RESEARCH_PROGRAM_PATH = path.resolve(
 	"../../examples/deep-research/program.md",
 );
 
-type LoopStatus = "active" | "paused" | "complete" | "budget_limited";
+type LoopStatus =
+	| "active"
+	| "paused"
+	| "no_progress"
+	| "complete"
+	| "budget_limited";
 type LoopKind =
 	| "active"
 	| "continuation"
@@ -27,7 +33,8 @@ type LoopKind =
 	| "paused"
 	| "cleared"
 	| "complete"
-	| "budget_limited";
+	| "budget_limited"
+	| "no_progress";
 
 interface LoopState {
 	id: string;
@@ -40,12 +47,18 @@ interface LoopState {
 	tokenBudget: number | null;
 	status: LoopStatus;
 	reason?: string;
+	guardId: string; // rotated on resume — stale complete_loop calls must match
+	noProgressTurns: number; // identical/empty tool-free rounds before auto-pause (0 = off)
+	noProgressCount: number;
+	lastFingerprint: string | null;
 	updatedAt: number;
 }
 
 let loop: LoopState | null = null;
 let continuationQueued = false;
 let activeLoopThisTurn = false;
+let continuationTurnPending = false; // a continuation was emitted; the next turn is continuation-owned
+let thisTurnIsContinuation = false;
 
 // --- helpers ---------------------------------------------------------------
 
@@ -63,6 +76,46 @@ function tokenDelta(usage: unknown): number {
 		num("input") + num("output") + num("cacheRead") + num("cacheWrite"),
 	);
 }
+function extractAssistantText(message: unknown): string {
+	if (!message || typeof message !== "object") return "";
+	const content = (message as Record<string, unknown>).content;
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		return content
+			.filter(
+				(b) =>
+					b != null &&
+					typeof b === "object" &&
+					(b as Record<string, unknown>).type === "text",
+			)
+			.map((b) => String((b as Record<string, unknown>).text ?? ""))
+			.join(" ");
+	}
+	return "";
+}
+
+// pi-goal's no-progress recipe: NFKC normalize, lowercase, strip control chars
+// and whitespace; empty/punctuation-only output is equivalent to empty.
+function assistantFingerprint(message: unknown): string {
+	const norm = extractAssistantText(message)
+		.normalize("NFKC")
+		.toLowerCase()
+		.replace(/[\u0000-\u001f\u007f]/g, "")
+		.replace(/\s+/g, "");
+	return /[\p{L}\p{N}]/u.test(norm) ? norm : "";
+}
+
+// Normalize restored session state after upgrades (new fields get defaults).
+function normalizeState(s: LoopState): LoopState {
+	return {
+		...s,
+		guardId:
+			s.guardId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+		noProgressTurns: s.noProgressTurns ?? DEFAULT_NO_PROGRESS_TURNS,
+		noProgressCount: s.noProgressCount ?? 0,
+		lastFingerprint: s.lastFingerprint ?? null,
+	};
+}
 
 function parseArgs(args: string): {
 	flags: Record<string, string>;
@@ -76,7 +129,12 @@ function parseArgs(args: string): {
 		if (t.startsWith("--") && !t.includes("=")) {
 			const key = t.slice(2);
 			const val = tokens[i + 1];
-			if (key === "program" || key === "max-rounds" || key === "tokens") {
+			if (
+				key === "program" ||
+				key === "max-rounds" ||
+				key === "tokens" ||
+				key === "no-progress"
+			) {
 				if (val && !val.startsWith("--")) {
 					flags[key] = val;
 					i++;
@@ -123,7 +181,7 @@ Rules:
 - Do NOT stop because you feel finished. The loop only ends when you call complete_loop (status=complete) — and only after auditing that the program's completion condition is genuinely met against real evidence (files, fetched sources, output). Treat uncertainty as not done.
 - If the program defines gates (e.g. a checkpoint tool), obey them.
 
-Budget: rounds ${state.rounds}/${state.maxRounds} · tokens ${state.tokensUsed}/${budget} (${remaining} remaining).`;
+	Budget: rounds ${state.rounds}/${state.maxRounds} · tokens ${state.tokensUsed}/${budget} (${remaining} remaining) · guard ${state.guardId}.`;
 }
 
 function wrapUpContent(state: LoopState): string {
@@ -146,6 +204,14 @@ function eventContent(kind: LoopKind, state: LoopState): string {
 			return `The /${state.commandName} is complete.\n\nMission: ${state.mission}\nRounds: ${state.rounds} · Tokens: ${state.tokensUsed}`;
 		case "budget_limited":
 			return wrapUpContent(state);
+		case "no_progress":
+			return `The active /${state.commandName} paused: ${state.noProgressTurns} consecutive rounds with no new output and no tool calls — this loop looks stalled.
+
+			<mission>
+			${state.mission}
+			</mission>
+
+			Review what happened: check the working files and the program's protocol. If the stall is real, this run cannot make progress as-is — the program may need steering (the human edits it live) or the loop should be cleared. Do not start new work now.`;
 		default:
 			return continuationContent(state);
 	}
@@ -162,6 +228,8 @@ function statusLine(state: LoopState | null): string {
 			return `${state.commandName}: paused`;
 		case "complete":
 			return `${state.commandName}: complete`;
+		case "no_progress":
+			return `${state.commandName}: paused (no progress)`;
 		case "budget_limited":
 			return `${state.commandName}: stopped (${state.reason ?? "budget"})`;
 		default:
@@ -248,6 +316,7 @@ function queueContinuation(
 			triggerTurn: true,
 			deliverAs: "followUp",
 		});
+		continuationTurnPending = true;
 	});
 }
 
@@ -262,7 +331,7 @@ interface LoopCommandOptions {
 
 function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 	const cmd = opts.command;
-	const usage = `/${cmd} [--program <path>] [--max-rounds N] [--tokens N] <mission>`;
+	const usage = `/${cmd} [--program <path>] [--max-rounds N] [--tokens N] [--no-progress N|off] <mission>`;
 
 	pi.registerCommand(cmd, {
 		description: `${opts.description} Usage: ${usage}`,
@@ -292,8 +361,23 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 					ctx.ui.notify(`No active /${cmd}.`, "warning");
 					return;
 				}
-				const status: LoopStatus = trimmed === "pause" ? "paused" : "active";
-				loop = { ...loop, status, updatedAt: now };
+				const status: LoopStatus =
+					trimmed === "pause" ? "paused" : "active";
+				if (trimmed === "resume") {
+					// Fresh guard epoch + no-progress counters on resume, so delayed
+					// turns cannot complete the newer run (pi-goal pattern) and the
+					// review-and-continue flow starts clean.
+					loop = {
+						...loop,
+						status,
+						guardId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+						noProgressCount: 0,
+						lastFingerprint: null,
+						updatedAt: now,
+					};
+				} else {
+					loop = { ...loop, status, updatedAt: now };
+				}
 				persist(pi, ctx);
 				emit(pi, status === "active" ? "resumed" : "paused", loop);
 				if (status === "active" && ctx.isIdle())
@@ -337,6 +421,23 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 					return;
 				}
 			}
+			let noProgressTurns = DEFAULT_NO_PROGRESS_TURNS;
+			if (flags["no-progress"]) {
+				const raw = flags["no-progress"];
+				if (raw === "off" || raw === "0") {
+					noProgressTurns = 0;
+				} else {
+					const n = Number(raw);
+					if (!Number.isFinite(n) || n < 1) {
+						ctx.ui.notify(
+							`Invalid --no-progress: ${raw} (use N or "off")`,
+							"warning",
+						);
+						return;
+					}
+					noProgressTurns = n;
+				}
+			}
 			const programPath = path.resolve(
 				ctx.cwd,
 				flags.program ?? opts.defaultProgram,
@@ -363,6 +464,10 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 				maxRounds,
 				tokensUsed: 0,
 				tokenBudget,
+				guardId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+				noProgressTurns,
+				noProgressCount: 0,
+				lastFingerprint: null,
 				status: "active",
 				updatedAt: now,
 			};
@@ -386,10 +491,13 @@ export default function piLoop(pi: ExtensionAPI) {
 			"Only call complete_loop when the active loop's completion condition is actually met.",
 			"Do not use complete_loop to pause, abandon, or budget-limit a loop.",
 		],
-		parameters: Type.Object({ status: Type.String() }),
+		parameters: Type.Object({
+			status: Type.String(),
+			guardId: Type.Optional(Type.String()),
+		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const status = (params as { status?: string }).status;
-			if (status !== "complete") {
+			const p = params as { status?: string; guardId?: string };
+			if (p.status !== "complete") {
 				return {
 					content: [
 						{
@@ -403,6 +511,17 @@ export default function piLoop(pi: ExtensionAPI) {
 			if (!loop || loop.status !== "active") {
 				return {
 					content: [{ type: "text", text: "No active loop." }],
+					isError: true,
+				};
+			}
+			if (p.guardId != null && p.guardId !== loop.guardId) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: "Stale complete_loop call: the loop's guard rotated (paused/resumed) since this turn started. Re-audit the current loop state before completing.",
+						},
+					],
 					isError: true,
 				};
 			}
@@ -443,8 +562,11 @@ export default function piLoop(pi: ExtensionAPI) {
 
 	pi.on("session_start", (event, ctx) => {
 		loop = latestState(ctx);
+		if (loop) loop = normalizeState(loop);
 		continuationQueued = false;
 		activeLoopThisTurn = false;
+		continuationTurnPending = false;
+		thisTurnIsContinuation = false;
 		syncLoopTools(pi);
 		updateStatus(ctx);
 		const reason = (event as { reason?: string }).reason;
@@ -468,29 +590,85 @@ export default function piLoop(pi: ExtensionAPI) {
 
 	pi.on("turn_start", () => {
 		activeLoopThisTurn = loop?.status === "active";
+		thisTurnIsContinuation = continuationTurnPending;
+		continuationTurnPending = false;
 	});
 
 	pi.on("turn_end", (event, ctx) => {
 		if (!loop || !activeLoopThisTurn) return;
+		let state = loop;
 		const usage = (event as { message?: { usage?: unknown } }).message?.usage;
 		const delta = tokenDelta(usage);
-		if (delta <= 0) return;
-		const tokensUsed = loop.tokensUsed + delta;
-		loop = { ...loop, tokensUsed, updatedAt: Date.now() };
-		if (loop.tokenBudget != null && tokensUsed >= loop.tokenBudget) {
-			loop = {
-				...loop,
-				status: "budget_limited",
-				reason: "tokens",
+
+		// token accounting
+		if (delta > 0) {
+			const tokensUsed = state.tokensUsed + delta;
+			state = { ...state, tokensUsed, updatedAt: Date.now() };
+			if (state.tokenBudget != null && tokensUsed >= state.tokenBudget) {
+				state = {
+					...state,
+					status: "budget_limited",
+					reason: "tokens",
+					updatedAt: Date.now(),
+				};
+				loop = state;
+				persist(pi, ctx);
+				emit(pi, "budget_limited", state, {
+					triggerTurn: true,
+					deliverAs: "followUp",
+				});
+				return;
+			}
+		}
+
+		// FR-6 no-progress guard (pi-goal recipe): continuation rounds only.
+		// Any tool call resets the counter; empty output or output identical to
+		// the previous round increments; distinct non-empty output starts a new
+		// run at one. At threshold the loop pauses with a review prompt.
+		if (
+			thisTurnIsContinuation &&
+			state.noProgressTurns > 0 &&
+			state.status === "active"
+		) {
+			const ev = event as { message?: unknown; toolResults?: unknown[] };
+			const toolRan =
+				Array.isArray(ev.toolResults) && ev.toolResults.length > 0;
+			const fingerprint = assistantFingerprint(ev.message);
+			let count = state.noProgressCount ?? 0;
+			if (toolRan) {
+				count = 0;
+			} else if (
+				fingerprint === "" ||
+				(state.lastFingerprint != null &&
+					fingerprint === state.lastFingerprint)
+			) {
+				count += 1;
+			} else {
+				count = 1;
+			}
+			state = {
+				...state,
+				noProgressCount: count,
+				lastFingerprint: fingerprint,
 				updatedAt: Date.now(),
 			};
-			persist(pi, ctx);
-			emit(pi, "budget_limited", loop, {
-				triggerTurn: true,
-				deliverAs: "followUp",
-			});
-			return;
+			if (count >= state.noProgressTurns) {
+				state = {
+					...state,
+					status: "no_progress",
+					updatedAt: Date.now(),
+				};
+				loop = state;
+				persist(pi, ctx);
+				emit(pi, "no_progress", state, {
+					triggerTurn: true,
+					deliverAs: "followUp",
+				});
+				return;
+			}
 		}
+
+		loop = state;
 		persist(pi, ctx);
 	});
 

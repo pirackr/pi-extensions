@@ -98,18 +98,26 @@ the reference. **Built.**
 Pause stops continuation mid-flight; resume continues only from an idle
 boundary; clear abandons; status shows round/tokens/program. **Built.**
 
-### FR-6 — No-progress / repetition guard (SHOULD — NOT built)
+### FR-6 — No-progress / repetition guard (MUST — built 2026-08-05)
 Evidence: Oracle — "without stopping conditions, agents loop indefinitely,
 burning tokens and producing increasingly incoherent results… no-progress
-detection"; pi-goal `noProgressTurns=3` (normalized-identical outputs). Generic
-version: after N consecutive rounds with no meaningful new output (normalized
-text identical / empty), auto-pause with a review prompt. Default OFF
-(`--no-progress N` or program-file setting) until a real run needs it.
+detection"; pi-goal `noProgressTurns=3`. Ported pi-goal's exact recipe:
+NFKC-normalize + lowercase + strip control chars/whitespace on the round's
+assistant text (thinking/tool blocks excluded); empty or punctuation-only
+output is equivalent to empty. Any tool call resets the counter; empty or
+output identical to the previous round increments; distinct non-empty
+output starts a new run at one. At threshold the loop auto-pauses with a
+review prompt; resume starts a fresh epoch. Continuation rounds only.
+Default ON at 3; `--no-progress N` / `--no-progress off` overrides.
+Verified: 19/19 behavioral smoke checks (incl. tool-reset, punct-only
+equivalence, distinct-output reset, off switch).
 
-### FR-7 — Stale-turn / duplicate-continuation guards (SHOULD — partial)
-Built: microtask dedupe + id/status guards on queue. Gap vs pi-goal: no
-guard-id rotation on resume/edit (delayed old turns must not complete a newer
-instance) and no stale tool-call blocking. Add with the resume/edit surface.
+### FR-7 — Stale-turn / duplicate-continuation guards (MUST — built 2026-08-05)
+Built: microtask dedupe + id/status guards on queue (existing), plus guard-
+id rotation on resume (pi-goal pattern) — `complete_loop` rejects calls
+carrying a stale guard id, so a delayed turn cannot complete a resumed
+run. Verified: stale-vs-fresh guard smoke checks. (No `/loop edit`
+subcommand yet, so no rotation on edit — add with that surface.)
 
 ### FR-8 — Idle-boundary continuation (MUST)
 Queue the next turn only when the agent is fully settled and idle (agent_end
@@ -163,20 +171,22 @@ leave a clear next step); never a silent stop. **Built.**
 | Ceiling      | --max-rounds + --tokens                          | built (untested, AC-2)        |
 | Learned      | strong model + thinking budget                   | inherited                     |
 | Escape hatch | Uncertainties & Gaps in the report template      | built (program)               |
-| Runaway      | no-progress detection                            | gap — FR-6                    |
-| Duplication  | stale-turn guard                                 | partial — FR-7                |
+| Runaway      | no-progress detection (FR-6, default 3)           | built                         |
+| Duplication  | stale-turn guard (FR-7, guard rotation)          | built                         |
 
 ## Gaps between current implementation and this requirement
 
 1. **G-1 — Cap paths unexercised.** All 4 runs to date completed via the
    program's condition; `--max-rounds`/`--tokens` stop behavior never ran in a
    real session (AC-2).
-2. **G-2 — No-progress guard (FR-6) missing** — the one guardrail every
-   production system in the research has that /loop lacks.
+2. **G-2 — No-progress guard (FR-6).** ~~Missing~~ **Implemented 2026-08-05**
+   (pi-goal recipe; see FR-6).
 3. **G-3 — Round-0 plan race (DR-4).** First continuation can arrive before the
    plan turn writes its working files; tolerated by the program, prevented by a
-   confirm gate.
-4. **G-4 — Guard-id rotation on resume/edit (FR-7) not implemented.**
+   confirm gate (still open — DR-4 is a COULD).
+4. **G-4 — Guard-id rotation on resume/edit (FR-7).** ~~Not implemented~~
+   **Implemented 2026-08-05** (rotation on resume + stale `complete_loop`
+   rejection; edit surface still absent).
 5. **G-5 — Reload/resume and mid-run program-edit steering untested** in a real
    session (AC-3/AC-4).
 
@@ -197,8 +207,11 @@ leave a clear next step); never a silent stop. **Built.**
   `complete_loop` rejects non-complete status; pause/resume/clear behave.
 - **AC-6 (no duplicates):** two consecutive rounds — exactly one continuation
   per agent end, none duplicated after retries/compaction/follow-ups.
-- **AC-7 (FR-6, when built):** a program whose output is identical for N rounds
-  auto-pauses with a review prompt.
+- **AC-7 (FR-6):** a loop whose rounds produce identical/empty tool-free
+  output auto-pauses with a review prompt. **Verified 2026-08-05 via
+  behavioral smoke tests** (threshold 2 pauses on the 3rd identical round;
+  tool call resets; punctuation ≡ empty; distinct output restarts at 1;
+  `--no-progress off` disables).
 
 ## References
 

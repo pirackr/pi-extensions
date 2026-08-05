@@ -3,8 +3,13 @@
     "fast": "provider/fast-model-id",
     "strong": "provider/strong-model-id"
   },
-  "childExtensions": [],
-  "toolAccess": {},
+  "childExtensions": [
+    "../extensions/web-search/index.ts"
+  ],
+  "toolAccess": {
+    "web_lookup": "read",
+    "fetch_web": "read"
+  },
   "agentDirs": [],
   "loadContextFiles": true,
   "maxTasks": 4,

@@ -162,3 +162,31 @@ describe('search composition', () => {
     expect(hadSuccess || hadFailure).toBe(true);
   });
 });
+
+import { ReadabilityStrategy } from '../extensions/web-search/strategies/readability';
+
+describe('ReadabilityStrategy', () => {
+  let strategy: ReadabilityStrategy;
+
+  beforeEach(() => {
+    strategy = new ReadabilityStrategy();
+  });
+
+  it('has correct name', () => {
+    expect(strategy.name).toBe('readability');
+  });
+
+  it('fetches and extracts content from a real page', async () => {
+    const result = await strategy.fetch('https://rust-lang.github.io/async-book/08_ecosystem/00_chapter.html');
+    expect(result).not.toBeNull();
+    expect(result!.title).toBeTruthy();
+    expect(result!.content.length).toBeGreaterThan(100);
+    expect(result!.error).toBeNull();
+  });
+
+  it('returns error for unreachable URL', async () => {
+    const result = await strategy.fetch('https://this-domain-does-not-exist-12345.com/page');
+    expect(result).not.toBeNull();
+    expect(result!.error).toBeTruthy();
+  });
+});

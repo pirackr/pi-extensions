@@ -144,14 +144,16 @@ function parseArgs(args: string): {
 		if (t.startsWith("--") && !t.includes("=")) {
 			const key = t.slice(2);
 			const val = tokens[i + 1];
+			if (key === "yes" || key === "no-confirm") {
+				flags[key] = "true";
+				continue;
+			}
 			if (
 				key === "program" ||
 				key === "max-rounds" ||
 				key === "tokens" ||
 				key === "no-progress" ||
-				key === "profile" ||
-				key === "yes" ||
-				key === "no-confirm"
+				key === "profile"
 			) {
 				if (val && !val.startsWith("--")) {
 					flags[key] = val;

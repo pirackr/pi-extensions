@@ -37,6 +37,7 @@ describe('types', () => {
 });
 
 import { ExaEngine } from '../extensions/web-search/engines/exa';
+import { DuckDuckGoEngine } from '../extensions/web-search/engines/duckduckgo';
 
 describe('ExaEngine', () => {
   let engine: ExaEngine;
@@ -66,5 +67,25 @@ describe('ExaEngine', () => {
     const results = await engine.search('test', 3);
     expect(results).toEqual([]);
     if (original) process.env.EXA_API_KEY = original;
+  });
+});
+
+describe('DuckDuckGoEngine', () => {
+  let engine: DuckDuckGoEngine;
+
+  beforeEach(() => {
+    engine = new DuckDuckGoEngine();
+  });
+
+  it('has correct name', () => {
+    expect(engine.name).toBe('duckduckgo');
+  });
+
+  it('search returns results with titles and URLs', async () => {
+    const results = await engine.search('rust programming language', 3);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].title).toBeTruthy();
+    expect(results[0].url).toBeTruthy();
+    expect(results[0].engine).toBe('duckduckgo');
   });
 });

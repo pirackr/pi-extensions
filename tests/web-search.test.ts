@@ -1,12 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import createExtension from "../extensions/web-search/index.ts";
 import type {
 	SearchResult,
 	SearchResponse,
 	ExtractedContent,
 	FetchResponse,
-	SearchEngine,
-	FetchStrategy,
 } from "../extensions/web-search/types";
 
 // Mock node:fs readFileSync to throw ENOENT so the real repo .env cannot
@@ -188,22 +186,92 @@ describe("DuckDuckGoEngine", () => {
 	});
 });
 
-import { searchEngines, webLookup } from "../extensions/web-search/search";
-import { ExaEngine } from "../extensions/web-search/engines/exa";
-import { DuckDuckGoEngine } from "../extensions/web-search/engines/duckduckgo";
+import {
+	resolveChain,
+	searchEngines,
+	webLookup,
+} from "../extensions/web-search/search";
 
 describe("search composition", () => {
-	it("registers both engines", () => {
+	it("registers both engines with exa first (default chain)", () => {
 		const names = searchEngines.map((e) => e.name);
-		expect(names).toContain("exa");
-		expect(names).toContain("duckduckgo");
+		expect(names).toEqual(["exa", "duckduckgo"]);
 	});
 
-	it("webLookup returns results from available engines", async () => {
-		const result = await webLookup("rust programming language", 3);
-		expect(result.query).toBe("rust programming language");
-		expect(result.results.length).toBeGreaterThan(0);
-		expect(result.engines.length).toBeGreaterThan(0);
+	describe("resolveChain", () => {
+		it("defaults to the full chain (exa first)", () => {
+			const names = resolveChain().map((e) => e.name);
+			expect(names).toEqual(["exa", "duckduckgo"]);
+		});
+
+		it("honors explicit 'auto'", () => {
+			expect(resolveChain("auto").map((e) => e.name)).toEqual([
+				"exa",
+				"duckduckgo",
+			]);
+		});
+
+		it("forces a single engine", () => {
+			expect(resolveChain("exa").map((e) => e.name)).toEqual(["exa"]);
+			expect(resolveChain("duckduckgo").map((e) => e.name)).toEqual([
+				"duckduckgo",
+			]);
+		});
+
+		it("degrades unknown choices to the default chain", () => {
+			expect(resolveChain("bogus" as any).map((e) => e.name)).toEqual([
+				"exa",
+				"duckduckgo",
+			]);
+		});
+	});
+
+	describe("webLookup chain behavior", () => {
+		// These tests assume no EXA_API_KEY is set: the fs mock neutralizes .env
+		// and we clear the env var explicitly so Exa is always skipped.
+		const originalKey = process.env.EXA_API_KEY;
+		beforeEach(() => {
+			delete process.env.EXA_API_KEY;
+		});
+		afterEach(() => {
+			if (originalKey) process.env.EXA_API_KEY = originalKey;
+		});
+
+		it("falls back to DuckDuckGo when Exa is unavailable", async () => {
+			const result = await webLookup("rust programming language", 3);
+			expect(result.query).toBe("rust programming language");
+			expect(result.results.length).toBeGreaterThan(0);
+			// Exa skipped (no key), DuckDuckGo served the results.
+			expect(result.engines).toEqual(["duckduckgo"]);
+			expect(result.partialFailures.some((pf) => pf.engine === "exa")).toBe(
+				true,
+			);
+		});
+
+		it("honors a forced engine choice", async () => {
+			const result = await webLookup(
+				"rust programming language",
+				3,
+				undefined,
+				"duckduckgo",
+			);
+			expect(result.engines).toEqual(["duckduckgo"]);
+			expect(result.results.length).toBeGreaterThan(0);
+		});
+
+		it("forced exa with no key returns no results and reports the skip", async () => {
+			const result = await webLookup(
+				"rust programming language",
+				3,
+				undefined,
+				"exa",
+			);
+			expect(result.results).toEqual([]);
+			expect(result.engines).toEqual([]);
+			expect(result.partialFailures.some((pf) => pf.engine === "exa")).toBe(
+				true,
+			);
+		});
 	});
 
 	it("webLookup deduplicates by URL", async () => {
@@ -211,15 +279,6 @@ describe("search composition", () => {
 		const urls = result.results.map((r) => r.url);
 		const uniqueUrls = new Set(urls);
 		expect(urls.length).toBe(uniqueUrls.size);
-	});
-
-	it("webLookup records partial failures", async () => {
-		// When one engine fails, results from the other should still come through
-		const result = await webLookup("rust programming language", 3);
-		// At least one engine should have succeeded
-		const hadSuccess = result.results.length > 0;
-		const hadFailure = result.partialFailures.length > 0;
-		expect(hadSuccess || hadFailure).toBe(true);
 	});
 });
 

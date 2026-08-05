@@ -41,7 +41,8 @@ export default function (pi: ExtensionAPI) {
 		name: "web_lookup",
 		label: "Web Search",
 		description:
-			"Search the web using Exa and DuckDuckGo. Returns search results with title, URL, and snippet. " +
+			"Search the web. Uses Exa by default, falling back to DuckDuckGo if Exa is unavailable or returns nothing. " +
+			"Pass engine to force a specific engine. Returns search results with title, URL, and snippet. " +
 			"Use for finding documentation, facts, code examples, or discovering relevant pages.",
 		parameters: Type.Object({
 			query: Type.String({ description: "Search query string" }),
@@ -51,10 +52,29 @@ export default function (pi: ExtensionAPI) {
 						"Max results per engine, 1-50. Defaults to 10 if omitted.",
 				}),
 			),
+			engine: Type.Optional(
+				Type.Union(
+					[
+						Type.Literal("auto"),
+						Type.Literal("exa"),
+						Type.Literal("duckduckgo"),
+					],
+					{
+						description:
+							"Engine to use: 'auto' (default) walks the fallback chain — Exa first, DuckDuckGo as backup. " +
+							"'exa' or 'duckduckgo' force a single engine.",
+					},
+				),
+			),
 		}),
 		async execute(_id: string, params: any, signal?: AbortSignal) {
 			const limit = Math.min(Math.max(params.limit ?? 10, 1), 50);
-			const result = await webLookup(params.query, limit, signal);
+			const result = await webLookup(
+				params.query,
+				limit,
+				signal,
+				params.engine,
+			);
 
 			let text = `Query: "${result.query}"\n`;
 			text += `Engines: ${result.engines.join(", ") || "none"}\n`;

@@ -1,7 +1,7 @@
 ---
 name: web-search
 description: Search the web and fetch page content using direct API calls. No installation, no API keys for DuckDuckGo. Use for finding documentation, facts, code examples, or reading web pages.
-version: 2.0.0
+version: 2.1.0
 ---
 
 # Web Search
@@ -11,7 +11,8 @@ Search the web and fetch page content using direct API calls. Zero setup — no 
 ## How It Works
 
 Two tools are available:
-- **`web_lookup`** — Search Exa and DuckDuckGo simultaneously. Exa results appear first.
+
+- **`web_lookup`** — Searches Exa by default; falls back to DuckDuckGo when Exa is unavailable or returns nothing. Pass `engine` to force a specific engine.
 - **`fetch_web`** — Fetch a URL and extract readable content using Mozilla Readability.
 
 ## Decision Rules
@@ -25,10 +26,18 @@ Follow this priority order when the user asks for web information:
 
 ## Engine Selection
 
-Both Exa and DuckDuckGo are queried automatically on every `web_lookup` call. No engine parameter needed — the results are merged and deduplicated.
+`web_lookup` walks a fallback chain and uses the **first engine that returns results**:
 
-- **Exa** — AI-curated results, requires `EXA_API_KEY` in `.env`. Skipped silently if no key is set.
-- **DuckDuckGo** — Privacy-focused, no API key required.
+1. **Exa** (default) — AI-curated results, requires `EXA_API_KEY` in `.env` or the environment. Skipped if no key is set.
+2. **DuckDuckGo** (first backup) — Privacy-focused, no API key required.
+
+The `engine` parameter overrides the chain:
+
+- `engine: "auto"` (default) — Exa first, DuckDuckGo fallback.
+- `engine: "exa"` — force Exa only.
+- `engine: "duckduckgo"` — force DuckDuckGo only (e.g. when Exa is flaky or you want a comparison).
+
+`engines` in the response lists which engine actually served the results; `partialFailures` explains why a backup was used (unavailable, empty result set, or error).
 
 ## Commands
 
@@ -37,12 +46,14 @@ Both Exa and DuckDuckGo are queried automatically on every `web_lookup` call. No
 ```bash
 # Via tool call (not CLI)
 web_lookup({ query: "Rust async runtime comparison", limit: 10 })
+web_lookup({ query: "Rust async runtime comparison", engine: "duckduckgo" })  # force engine
 ```
 
 Parameters:
 
 - `query` (required): Search query string
 - `limit` (optional): Max results per engine, 1-50, default 10
+- `engine` (optional): `"auto"` (default) | `"exa"` | `"duckduckgo"` — see Engine Selection
 
 ### Fetch Page Content
 
@@ -71,7 +82,7 @@ Parameters:
       "engine": "exa"
     }
   ],
-  "engines": ["exa", "duckduckgo"],
+  "engines": ["exa"],
   "partialFailures": []
 }
 ```
@@ -101,4 +112,4 @@ Parameters:
 | --------- | ------------- | -------- |
 | Empty search results | Rate limiting or network issue | Wait a few seconds, retry, or try a different query |
 | Fetch returns error | Site blocks scrapers or JS-rendered | Try a different URL or search for the content instead |
-| `partialFailures` in search | One engine failed | Check the failures array — the other engine's results still came through |
+| `partialFailures` in search | One engine failed or was skipped | Check the failures array — e.g. "exa: engine not available" explains why DuckDuckGo served the results |

@@ -39,7 +39,7 @@ When adding a feature, decide which half it needs. Guidance-only additions (`cus
 
 Direct API calls — no `open-websearch`, no `npx`, no daemon. Architecture:
 
-- `extensions/web-search/search.ts` — `webLookup()` runs the registered engines (Exa first, then DuckDuckGo), merges and dedupes by URL, tracks `partialFailures` for engines that threw.
+- `extensions/web-search/search.ts` — `webLookup()` walks an ordered fallback chain (`resolveChain`): the first engine that returns results wins. Exa is the default, DuckDuckGo the first backup; an optional `engine` param (`"auto" | "exa" | "duckduckgo"`) forces a single engine. Tracks `partialFailures` for unavailable/empty/errored engines so the agent sees why a backup was used.
 - `extensions/web-search/engines/exa.ts` — ExaEngine. `POST https://api.exa.ai/search` with `x-api-key` from env `EXA_API_KEY` or the repo-root `.env` file (resolved via `../../../.env` from `engines/`). Skipped silently (`isAvailable()` false) when no key.
 - `extensions/web-search/engines/duckduckgo.ts` — DuckDuckGoEngine. Scrapes `duckduckgo.com/html/` with a Firefox UA; decodes `uddg=` redirect URLs and strips the `&rut=` suffix; no API key needed.
 - `extensions/web-search/strategies/readability.ts` — ReadabilityStrategy. Native `fetch()` + `linkedom` parse + `@mozilla/readability` extraction; 30s abort timeout; returns `{url, title, content, error}`.

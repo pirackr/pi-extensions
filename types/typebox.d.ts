@@ -11,5 +11,13 @@ declare module "typebox" {
 			options?: { description?: string; minItems?: number; maxItems?: number },
 		): unknown;
 		Optional<T>(item: T): unknown;
+		Union<T extends unknown[]>(
+			anyOf: [...T],
+			options?: { description?: string },
+		): unknown;
+		Literal<T extends string | number | boolean>(
+			value: T,
+			options?: { description?: string },
+		): unknown;
 	};
 }

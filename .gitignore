@@ -1,0 +1,6 @@
+.pi/
+.worktrees/
+node_modules/
+scratchpad/
+package-lock.json
+research/

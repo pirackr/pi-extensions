@@ -1,0 +1,7 @@
+* Description
+Build a deep research extension for pi, reference:
+- Claude Deep Research
+- ChatGPT deep research
+- https://github.com/karpathy/autoresearch
+- https://github.com/langchain-ai/open_deep_research
+- https://github.com/czhiming-maker/pi-deep-research

@@ -1,0 +1,13 @@
+{
+  "models": {
+    "fast": "provider/fast-model-id",
+    "strong": "provider/strong-model-id"
+  },
+  "childExtensions": [],
+  "toolAccess": {},
+  "agentDirs": [],
+  "loadContextFiles": true,
+  "maxTasks": 4,
+  "defaultTimeoutSeconds": 300,
+  "retainArtifacts": "on_failure"
+}

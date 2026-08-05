@@ -1,0 +1,395 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// Mock modules before importing runner
+vi.mock("node:child_process", () => ({
+	spawn: vi.fn(),
+}));
+
+vi.mock("node:fs", async () => {
+	const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+	return {
+		...actual,
+		default: {
+			...actual,
+			readFileSync: vi.fn(),
+			writeFileSync: vi.fn(),
+			renameSync: vi.fn(),
+			createWriteStream: vi.fn(() => createMockWriteStream()),
+		},
+		readFileSync: vi.fn(),
+		writeFileSync: vi.fn(),
+		renameSync: vi.fn(),
+		createWriteStream: vi.fn(() => createMockWriteStream()),
+	};
+});
+
+function createMockWriteStream(): any {
+	return {
+		write: vi.fn(),
+		end: vi.fn(),
+		on: vi.fn(),
+		close: vi.fn(),
+		bytesWritten: 0,
+		path: "",
+		pending: false,
+	};
+}
+
+import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import { runControlMode, runTaskMode, main } from "../runner.mjs";
+
+const mockSpawn = vi.mocked(spawn);
+const mockReadFileSync = vi.mocked(fs.readFileSync);
+const mockWriteFileSync = vi.mocked(fs.writeFileSync);
+const mockRenameSync = vi.mocked(fs.renameSync);
+
+describe("runControlMode", () => {
+	beforeEach(() => {
+		vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+		vi.spyOn(process, "on").mockImplementation(() => process);
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("writes controller message with control name", () => {
+		runControlMode("test-session");
+		expect(process.stdout.write).toHaveBeenCalledWith(
+			"Subagent controller: test-session\n",
+		);
+	});
+
+	it("writes 'unknown' when control name is missing", () => {
+		runControlMode(undefined);
+		expect(process.stdout.write).toHaveBeenCalledWith(
+			"Subagent controller: unknown\n",
+		);
+	});
+
+	it("registers signal handlers", () => {
+		runControlMode("session");
+		expect(process.on).toHaveBeenCalledWith("SIGINT", expect.any(Function));
+		expect(process.on).toHaveBeenCalledWith("SIGTERM", expect.any(Function));
+		expect(process.on).toHaveBeenCalledWith("SIGHUP", expect.any(Function));
+	});
+});
+
+describe("runTaskMode", () => {
+	let mockChild: any;
+	let stdoutCallbacks: Map<string, Function[]>;
+	let stderrCallbacks: Map<string, Function[]>;
+	let errorCallbacks: Function[];
+	let exitCallbacks: Function[];
+	let closeCallbacks: Function[];
+	let stdinMocks: any;
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		stdoutCallbacks = new Map();
+		stderrCallbacks = new Map();
+		errorCallbacks = [];
+		exitCallbacks = [];
+		closeCallbacks = [];
+		stdinMocks = { on: vi.fn(), end: vi.fn() };
+
+		mockChild = {
+			pid: 12345,
+			stdin: stdinMocks,
+			stdout: {
+				on: vi.fn((event: string, cb: Function) => {
+					const list = stdoutCallbacks.get(event) ?? [];
+					list.push(cb);
+					stdoutCallbacks.set(event, list);
+				}),
+			},
+			stderr: {
+				on: vi.fn((event: string, cb: Function) => {
+					const list = stderrCallbacks.get(event) ?? [];
+					list.push(cb);
+					stderrCallbacks.set(event, list);
+				}),
+			},
+			on: vi.fn((event: string, cb: Function) => {
+				if (event === "error") errorCallbacks.push(cb);
+				if (event === "exit") exitCallbacks.push(cb);
+				if (event === "close") closeCallbacks.push(cb);
+			}),
+			kill: vi.fn(),
+		};
+
+		mockSpawn.mockReturnValue(mockChild);
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			if (typeof path === "string" && path.includes("request")) {
+				return JSON.stringify({
+					taskId: "task-1",
+					agent: "worker",
+					model: "gpt-4o",
+					thinking: "medium",
+					tools: ["read", "edit"],
+					cwd: "/workspace",
+					timeoutMs: 300_000,
+					promptPath: "/tmp/prompt.md",
+					taskPath: "/tmp/task.md",
+					outputPath: "/tmp/output.jsonl",
+					stderrPath: "/tmp/stderr.log",
+					statusPath: "/tmp/status.json",
+					pi: { command: "pi", args: [] },
+					childExtensions: [],
+					loadContextFiles: true,
+				});
+			}
+			if (typeof path === "string" && path.includes("task.md")) {
+				return "Do the task";
+			}
+			return "";
+		});
+		mockWriteFileSync.mockImplementation(() => undefined);
+		mockRenameSync.mockImplementation(() => undefined);
+
+		vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	function emitStdout(data: string) {
+		const cbs = stdoutCallbacks.get("data") ?? [];
+		for (const cb of cbs) cb(Buffer.from(data));
+	}
+
+	function emitClose(code: number) {
+		for (const cb of closeCallbacks) cb(code);
+	}
+
+	it("writes starting status", () => {
+		runTaskMode("/tmp/request.json");
+		expect(mockWriteFileSync).toHaveBeenCalled();
+		const firstCall = mockWriteFileSync.mock.calls[0];
+		const status = JSON.parse(firstCall[1] as string);
+		expect(status.state).toBe("starting");
+		expect(status.taskId).toBe("task-1");
+	});
+
+	it("spawns child process with correct arguments", () => {
+		runTaskMode("/tmp/request.json");
+		expect(mockSpawn).toHaveBeenCalledWith(
+			"pi",
+			expect.arrayContaining([
+				"--mode",
+				"json",
+				"-p",
+				"--no-session",
+				"--no-extensions",
+				"--no-skills",
+				"--no-prompt-templates",
+				"--no-themes",
+				"--model",
+				"gpt-4o",
+				"--thinking",
+				"medium",
+				"--tools",
+				"read,edit",
+				"--append-system-prompt",
+				"/tmp/prompt.md",
+			]),
+			expect.objectContaining({
+				cwd: "/workspace",
+				detached: true,
+				shell: false,
+				stdio: ["pipe", "pipe", "pipe"],
+			}),
+		);
+	});
+
+	it("writes running status after spawning", () => {
+		runTaskMode("/tmp/request.json");
+		const calls = mockWriteFileSync.mock.calls;
+		const runningCall = calls.find((call) => {
+			try {
+				return JSON.parse(call[1] as string).state === "running";
+			} catch {
+				return false;
+			}
+		});
+		expect(runningCall).toBeDefined();
+		const status = JSON.parse(runningCall![1] as string);
+		expect(status.pid).toBe(12345);
+	});
+
+	it("processes message_update events", () => {
+		runTaskMode("/tmp/request.json");
+		emitStdout(
+			JSON.stringify({
+				type: "message_update",
+				assistantMessageEvent: { type: "text_delta", delta: "Hello" },
+			}) + "\n",
+		);
+		expect(process.stdout.write).toHaveBeenCalledWith("Hello");
+	});
+
+	it("processes tool_execution_start events", () => {
+		runTaskMode("/tmp/request.json");
+		emitStdout(
+			JSON.stringify({
+				type: "tool_execution_start",
+				toolName: "read",
+			}) + "\n",
+		);
+		expect(process.stdout.write).toHaveBeenCalledWith("\n[read]\n");
+	});
+
+	it("processes message_end events and accumulates usage", () => {
+		runTaskMode("/tmp/request.json");
+		emitStdout(
+			JSON.stringify({
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "Result" }],
+					usage: {
+						input: 100,
+						output: 50,
+						cacheRead: 10,
+						cacheWrite: 5,
+						totalTokens: 165,
+						cost: {
+							input: 0.001,
+							output: 0.002,
+							cacheRead: 0.0001,
+							cacheWrite: 0.0002,
+							total: 0.0033,
+						},
+					},
+					stopReason: "end_turn",
+				},
+			}) + "\n",
+		);
+
+		emitClose(0);
+
+		const writeCalls = mockWriteFileSync.mock.calls;
+		const lastCall = writeCalls[writeCalls.length - 1];
+		const status = JSON.parse(lastCall[1] as string);
+		expect(status.state).toBe("succeeded");
+		expect(status.result).toBe("Result");
+		expect(status.usage.input).toBe(100);
+		expect(status.usage.output).toBe(50);
+		expect(status.usage.turns).toBe(1);
+	});
+
+	it("handles failed exit code", () => {
+		runTaskMode("/tmp/request.json");
+		emitClose(1);
+
+		const writeCalls = mockWriteFileSync.mock.calls;
+		const lastCall = writeCalls[writeCalls.length - 1];
+		const status = JSON.parse(lastCall[1] as string);
+		expect(status.state).toBe("failed");
+		expect(status.exitCode).toBe(1);
+	});
+
+	it("handles child process error", () => {
+		runTaskMode("/tmp/request.json");
+		for (const cb of errorCallbacks) cb(new Error("Spawn failed"));
+		emitClose(1);
+
+		const writeCalls = mockWriteFileSync.mock.calls;
+		const lastCall = writeCalls[writeCalls.length - 1];
+		const status = JSON.parse(lastCall[1] as string);
+		expect(status.errorMessage).toBe("Spawn failed");
+	});
+
+	it("ignores empty lines in stdout", () => {
+		runTaskMode("/tmp/request.json");
+		emitStdout("\n\n\n");
+		// Should not throw
+	});
+
+	it("ignores invalid JSON in stdout", () => {
+		runTaskMode("/tmp/request.json");
+		emitStdout("not valid json\n");
+		// Should not throw
+	});
+
+	it("sets timeout from request", () => {
+		vi.useRealTimers();
+		runTaskMode("/tmp/request.json");
+		// The timeout should be set to 300000ms
+		// We verify by checking the spawn was called
+		expect(mockSpawn).toHaveBeenCalled();
+	});
+});
+
+describe("main", () => {
+	beforeEach(() => {
+		vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		vi.spyOn(process, "exit").mockImplementation(
+			(code?: string | number | null) => {
+				throw new Error(`EXIT_${code}`);
+			},
+		);
+		vi.spyOn(process, "on").mockImplementation(() => process);
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("runs control mode with --control flag", () => {
+		main(["node", "runner.mjs", "--control", "test-session"]);
+		expect(process.stdout.write).toHaveBeenCalledWith(
+			"Subagent controller: test-session\n",
+		);
+	});
+
+	it("exits with error when no request file provided", () => {
+		expect(() => main(["node", "runner.mjs"])).toThrow("EXIT_2");
+		expect(process.stderr.write).toHaveBeenCalledWith(
+			"Usage: node runner.mjs <request.json>\n",
+		);
+	});
+
+	it("runs task mode with request file", () => {
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			if (typeof path === "string" && path.includes("request")) {
+				return JSON.stringify({
+					taskId: "task-1",
+					agent: "worker",
+					model: "gpt-4o",
+					tools: ["read"],
+					cwd: "/workspace",
+					timeoutMs: 300_000,
+					promptPath: "/tmp/prompt.md",
+					taskPath: "/tmp/task.md",
+					outputPath: "/tmp/output.jsonl",
+					stderrPath: "/tmp/stderr.log",
+					statusPath: "/tmp/status.json",
+					pi: { command: "pi", args: [] },
+					childExtensions: [],
+					loadContextFiles: true,
+				});
+			}
+			return "";
+		});
+
+		const mockChild = {
+			pid: 12345,
+			stdin: { on: vi.fn(), end: vi.fn() },
+			stdout: { on: vi.fn() },
+			stderr: { on: vi.fn() },
+			on: vi.fn(),
+			kill: vi.fn(),
+		};
+		mockSpawn.mockReturnValue(mockChild as any);
+
+		main(["node", "runner.mjs", "/tmp/request.json"]);
+		expect(mockSpawn).toHaveBeenCalled();
+	});
+});

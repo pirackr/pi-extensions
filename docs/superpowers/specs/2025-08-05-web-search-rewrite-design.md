@@ -99,25 +99,15 @@ interface ExtractedContent {
 - **Built-in:** `fetch`, `DOMParser` (Node 24)
 - **Zero browser dependencies**
 
-## Tool parameters (unchanged names)
+## Tool parameters
 
-### lookup_web
-
+### web_lookup
 - `query` (required): Search query string
 - `limit` (optional): Max results per engine, 1-50, default 10
-- `engine` (optional): Currently ignored — always queries both Exa and DuckDuckGo
-- `search_mode` (optional): Currently ignored
 
-### fetch_web_content
-
+### fetch_web
 - `url` (required): Public HTTP(S) URL to fetch
 - `max_chars` (optional): Accepted for schema compatibility, ignored in v1 (no truncation)
-- `readability` (optional): Accepted for schema compatibility, ignored in v1 (always on)
-- `include_links` (optional): Accepted for schema compatibility, ignored in v1
-
-### fetch_github_readme
-
-- `url` (required): GitHub repository URL (https or ssh form)
 
 ## Files changed
 

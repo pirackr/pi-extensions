@@ -103,8 +103,8 @@ Use org-mode headings and markup:
 2. Attack the 1–3 weakest sub-questions (lowest scores).
 3. Fire 2–4 parallel `web_lookup` queries (distinct phrasings; quoted exact
    terms; `site:`/`filetype:` filters when useful).
-4. Deep-read the 2–3 most authoritative hits with `fetch_web`
-   (readability=1). Prefer primary sources, official docs, papers.
+4. Deep-read the 2–3 most authoritative hits with `fetch_web`.
+   Prefer primary sources, official docs, papers.
    Distrust SEO content farms and generic listicles.
 5. Append to `research/notes.md`: claim → source URL → confidence (0–100) → credibility (1-5).
 6. Triangulate: every key claim needs 2+ independent sources spanning

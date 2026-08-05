@@ -512,7 +512,8 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 			};
 			// research: plan approval gate — confirm before burning tokens
 			if (opts.isResearch) {
-				const yesFlag = flags["yes"] !== undefined || flags["no-confirm"] !== undefined;
+				const yesFlag =
+					flags["yes"] !== undefined || flags["no-confirm"] !== undefined;
 				if (!yesFlag && ctx.ui?.confirm) {
 					const profile = loop!.profile ?? "standard";
 					const planSummary = `🔬 Deep research: "${truncate(mission)}"\nProfile: ${profile} · Max rounds: ${maxRounds} · Min sources: ${RESEARCH_THRESHOLDS[profile as keyof typeof RESEARCH_THRESHOLDS]?.minSources ?? 20}\n\nSub-questions and search strategy will be defined in Round 0. Do you want to proceed?`;
@@ -596,97 +597,98 @@ export default function piLoop(pi: ExtensionAPI) {
 		},
 	});
 
-	 // research_checkpoint — code-enforced floor against premature conclusion.
-	 // Thresholds are hardcoded (source-of-truth); program.md mirrors them for
-	 // the agent's reference. If they diverge, the extension wins.
-	 pi.registerTool({
-	  name: "research_checkpoint",
-	  label: "Research Checkpoint",
-	  description:
-	   "MANDATORY after each search round. Returns CONTINUE or PROCEED based on code-enforced thresholds for the active profile. Call every round with current round number and total unique sources.",
-	  promptSnippet:
-	   "Call research_checkpoint every round to check if you have enough coverage",
-	  promptGuidelines: [
-	   "Call after each search round: research_checkpoint({profile, round, totalSources}).",
-	   "Do NOT call complete_loop unless research_checkpoint returns PROCEED.",
-	  ],
-	  parameters: Type.Object({
-	   profile: Type.String({
-	    description: "Research profile: quick | standard | intermediate | deep",
-	   }),
-	   round: Type.Number({
-	    description:
-	     "Current round number (1-indexed). Increment each search round.",
-	   }),
-	   totalSources: Type.Number({
-	    description:
-	     "Number of unique sources collected so far (count distinct URLs).",
-	   }),
-	   contradictions: Type.Optional(
-	    Type.Array(Type.String(), {
-	     description: "List of unresolved contradictions (informational).",
-	    }),
-	   ),
-	  }),
-	  async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-	   const p = params as {
-	    profile?: string;
-	    round?: number;
-	    totalSources?: number;
-	    contradictions?: string[];
-	   };
-	   const profile = p.profile ?? "standard";
-	   const thresholds = RESEARCH_THRESHOLDS[profile as keyof typeof RESEARCH_THRESHOLDS];
-	   if (!thresholds) {
-	    return {
-	     content: [
-	      {
-	       type: "text",
-	       text: `Unknown profile "${profile}". Use: quick, standard, intermediate, deep.`,
-	      },
-	     ],
-	     isError: true,
-	    };
-	   }
-	   const round = p.round ?? 0;
-	   const sources = p.totalSources ?? 0;
-	   const issues: string[] = [];
-	   if (round < thresholds.minRounds) {
-	    issues.push(`⛔ min rounds: ${round}/${thresholds.minRounds}`);
-	   }
-	   if (sources < thresholds.minSources) {
-	    issues.push(`⛔ min sources: ${sources}/${thresholds.minSources}`);
-	   }
-	   if (round >= thresholds.maxRounds) {
-	    return {
-	     content: [
-	      {
-	       type: "text",
-	       text: `🟢 PROCEED (max rounds reached). Flag ${issues.length} gap(s) in Uncertainties & Gaps.`,
-	      },
-	     ],
-	    };
-	   }
-	   if (issues.length > 0) {
-	    return {
-	     content: [
-	      {
-	       type: "text",
-	       text: `🔴 CONTINUE — ${issues.join("; ")}`,
-	      },
-	     ],
-	    };
-	   }
-	   return {
-	    content: [
-	     {
-	      type: "text",
-	      text: `🟢 PROCEED — criteria met.`,
-	     },
-	    ],
-	   };
-	  },
-	 });
+	// research_checkpoint — code-enforced floor against premature conclusion.
+	// Thresholds are hardcoded (source-of-truth); program.md mirrors them for
+	// the agent's reference. If they diverge, the extension wins.
+	pi.registerTool({
+		name: "research_checkpoint",
+		label: "Research Checkpoint",
+		description:
+			"MANDATORY after each search round. Returns CONTINUE or PROCEED based on code-enforced thresholds for the active profile. Call every round with current round number and total unique sources.",
+		promptSnippet:
+			"Call research_checkpoint every round to check if you have enough coverage",
+		promptGuidelines: [
+			"Call after each search round: research_checkpoint({profile, round, totalSources}).",
+			"Do NOT call complete_loop unless research_checkpoint returns PROCEED.",
+		],
+		parameters: Type.Object({
+			profile: Type.String({
+				description: "Research profile: quick | standard | intermediate | deep",
+			}),
+			round: Type.Number({
+				description:
+					"Current round number (1-indexed). Increment each search round.",
+			}),
+			totalSources: Type.Number({
+				description:
+					"Number of unique sources collected so far (count distinct URLs).",
+			}),
+			contradictions: Type.Optional(
+				Type.Array(Type.String(), {
+					description: "List of unresolved contradictions (informational).",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+			const p = params as {
+				profile?: string;
+				round?: number;
+				totalSources?: number;
+				contradictions?: string[];
+			};
+			const profile = p.profile ?? "standard";
+			const thresholds =
+				RESEARCH_THRESHOLDS[profile as keyof typeof RESEARCH_THRESHOLDS];
+			if (!thresholds) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Unknown profile "${profile}". Use: quick, standard, intermediate, deep.`,
+						},
+					],
+					isError: true,
+				};
+			}
+			const round = p.round ?? 0;
+			const sources = p.totalSources ?? 0;
+			const issues: string[] = [];
+			if (round < thresholds.minRounds) {
+				issues.push(`⛔ min rounds: ${round}/${thresholds.minRounds}`);
+			}
+			if (sources < thresholds.minSources) {
+				issues.push(`⛔ min sources: ${sources}/${thresholds.minSources}`);
+			}
+			if (round >= thresholds.maxRounds) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `🟢 PROCEED (max rounds reached). Flag ${issues.length} gap(s) in Uncertainties & Gaps.`,
+						},
+					],
+				};
+			}
+			if (issues.length > 0) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `🔴 CONTINUE — ${issues.join("; ")}`,
+						},
+					],
+				};
+			}
+			return {
+				content: [
+					{
+						type: "text",
+						text: `🟢 PROCEED — criteria met.`,
+					},
+				],
+			};
+		},
+	});
 
 	// /loop — generic program-driven loop (default program: ./program.md in cwd).
 	registerLoopCommand(pi, {

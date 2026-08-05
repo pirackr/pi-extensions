@@ -3,10 +3,21 @@ import type { SearchEngine, SearchResult } from '../types.ts';
 
 const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0';
 
-function decodeDdgUrl(encoded: string): string {
+export function decodeDdgUrl(encoded: string): string {
   // Remove the duckduckgo redirect prefix
   const raw = encoded.replace(/^\/\/duckduckgo\.com\/l\/\?uddg=/, '');
-  return decodeURIComponent(raw);
+  // Strip everything from the first & (or &amp; HTML entity) onward — DDG appends &rut=<64-hex hash>
+  const clean = raw.replace(/&.*$/, '');
+  try {
+    return decodeURIComponent(clean);
+  } catch {
+    // Guard against URIError from bare % in non-prefix URLs
+    return clean;
+  }
+}
+
+export function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, '').trim();
 }
 
 export class DuckDuckGoEngine implements SearchEngine {
@@ -32,7 +43,8 @@ export class DuckDuckGoEngine implements SearchEngine {
     const results: SearchResult[] = [];
     const linkRegex = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>/gi;
     const titleRegex = /<a[^>]*class="result__a"[^>]*>([^<]*)<\/a>/gi;
-    const snippetRegex = /<a[^>]*class="result__snippet[^"]*"[^>]*>([^<]*)<\/a>/gi;
+    // Use [\s\S]*? to match across newlines and allow inner tags like <b>
+    const snippetRegex = /<a[^>]*class="result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
 
     const links = [...html.matchAll(linkRegex)];
     const titles = [...html.matchAll(titleRegex)];
@@ -48,7 +60,7 @@ export class DuckDuckGoEngine implements SearchEngine {
       results.push({
         title: titleMatch?.trim() || 'No title',
         url,
-        snippet: snippetMatch?.trim() || '',
+        snippet: stripHtml(snippetMatch || ''),
         engine: 'duckduckgo',
       });
     }

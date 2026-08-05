@@ -37,7 +37,7 @@ describe('types', () => {
 });
 
 import { ExaEngine } from '../extensions/web-search/engines/exa';
-import { DuckDuckGoEngine } from '../extensions/web-search/engines/duckduckgo';
+import { DuckDuckGoEngine, decodeDdgUrl, stripHtml } from '../extensions/web-search/engines/duckduckgo';
 
 describe('ExaEngine', () => {
   let engine: ExaEngine;
@@ -67,6 +67,44 @@ describe('ExaEngine', () => {
     const results = await engine.search('test', 3);
     expect(results).toEqual([]);
     if (original) process.env.EXA_API_KEY = original;
+  });
+});
+
+describe('DuckDuckGoEngine helpers', () => {
+  it('decodeDdgUrl strips &rut suffix (bare &)', () => {
+    const encoded = '//duckduckgo.com/l/?uddg=https%3A%2F%2Frust-lang.org%2F&rut=0c07a1b2c3d4e5f6';
+    expect(decodeDdgUrl(encoded)).toBe('https://rust-lang.org/');
+  });
+
+  it('decodeDdgUrl strips &rut suffix (amp HTML entity &amp;)', () => {
+    const encoded = '//duckduckgo.com/l/?uddg=https%3A%2F%2Frust-lang.org%2F&amp;rut=0c07a1b2c3d4e5f6';
+    expect(decodeDdgUrl(encoded)).toBe('https://rust-lang.org/');
+  });
+
+  it('decodeDdgUrl handles clean URL without suffix', () => {
+    const encoded = '//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2F';
+    expect(decodeDdgUrl(encoded)).toBe('https://example.com/');
+  });
+
+  it('decodeDdgUrl guards against URIError from bare %', () => {
+    const encoded = '//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%';
+    expect(decodeDdgUrl(encoded)).toBe('https%3A%2F%2Fexample.com%');
+  });
+
+  it('stripHtml removes inner <b> tags', () => {
+    expect(stripHtml('<b>Rust</b> is a fast')).toBe('Rust is a fast');
+  });
+
+  it('stripHtml handles mixed inner tags', () => {
+    expect(stripHtml('<b>Rust</b> is a <i>fast</i>, <b>safe</b> language')).toBe('Rust is a fast, safe language');
+  });
+
+  it('snippetRegex matches snippets with embedded <b> tags', () => {
+    const html = '<a class="result__snippet"><b>Rust</b> is a fast, safe systems programming language</a>';
+    const snippetRegex = /<a[^>]*class="result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
+    const matches = [...html.matchAll(snippetRegex)];
+    expect(matches.length).toBe(1);
+    expect(stripHtml(matches[0][1])).toBe('Rust is a fast, safe systems programming language');
   });
 });
 

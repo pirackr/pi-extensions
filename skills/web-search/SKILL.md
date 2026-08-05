@@ -1,7 +1,7 @@
 ---
 name: web-search
 description: Search the web and fetch page content using direct API calls. No installation, no API keys for DuckDuckGo. Use for finding documentation, facts, code examples, or reading web pages.
-version: 2.1.0
+version: 2.2.0
 ---
 
 # Web Search
@@ -31,6 +31,12 @@ Follow this priority order when the user asks for web information:
 1. **Exa** (default) — AI-curated results, requires `EXA_API_KEY` in `.env` or the environment. Skipped if no key is set.
 2. **DuckDuckGo** (first backup) — Privacy-focused, no API key required.
 
+### Opt-in engines (not in the chain)
+
+Engines listed here never run in the `"auto"` chain. They execute only when explicitly requested via `engine: "<name>"`:
+
+- **Tavily** — advanced-depth crawl, good for heavy deep research. Requires `TAVILY_API_KEY` in `.env`. `engine: "tavily"` runs it alone (no fallback); without a key it is skipped and reported in `partialFailures`.
+
 The `engine` parameter overrides the chain:
 
 - `engine: "auto"` (default) — Exa first, DuckDuckGo fallback.
@@ -53,7 +59,7 @@ Parameters:
 
 - `query` (required): Search query string
 - `limit` (optional): Max results per engine, 1-50, default 10
-- `engine` (optional): `"auto"` (default) | `"exa"` | `"duckduckgo"` — see Engine Selection
+- `engine` (optional): `"auto"` (default) | `"exa"` | `"duckduckgo"` | `"tavily"` (opt-in) — see Engine Selection
 
 ### Fetch Page Content
 

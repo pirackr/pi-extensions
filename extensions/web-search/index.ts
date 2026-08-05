@@ -42,7 +42,8 @@ export default function (pi: ExtensionAPI) {
 		label: "Web Search",
 		description:
 			"Search the web. Uses Exa by default, falling back to DuckDuckGo if Exa is unavailable or returns nothing. " +
-			"Pass engine to force a specific engine. Returns search results with title, URL, and snippet. " +
+			"Pass engine to force a specific engine ('tavily' for heavy deep research — runs alone, needs TAVILY_API_KEY). " +
+			"Returns search results with title, URL, and snippet. " +
 			"Use for finding documentation, facts, code examples, or discovering relevant pages.",
 		parameters: Type.Object({
 			query: Type.String({ description: "Search query string" }),
@@ -58,11 +59,12 @@ export default function (pi: ExtensionAPI) {
 						Type.Literal("auto"),
 						Type.Literal("exa"),
 						Type.Literal("duckduckgo"),
+						Type.Literal("tavily"),
 					],
 					{
 						description:
 							"Engine to use: 'auto' (default) walks the fallback chain — Exa first, DuckDuckGo as backup. " +
-							"'exa' or 'duckduckgo' force a single engine.",
+							"'exa' or 'duckduckgo' force a single engine; 'tavily' runs Tavily alone (advanced depth, requires TAVILY_API_KEY) for heavy research.",
 					},
 				),
 			),

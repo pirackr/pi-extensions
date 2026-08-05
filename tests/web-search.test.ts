@@ -186,6 +186,122 @@ describe("DuckDuckGoEngine", () => {
 	});
 });
 
+import { TavilyEngine } from "../extensions/web-search/engines/tavily";
+
+describe("TavilyEngine", () => {
+	let engine: TavilyEngine;
+
+	beforeEach(() => {
+		engine = new TavilyEngine();
+	});
+
+	it("has correct name", () => {
+		expect(engine.name).toBe("tavily");
+	});
+
+	it("isAvailable returns false when no API key", () => {
+		const original = process.env.TAVILY_API_KEY;
+		delete process.env.TAVILY_API_KEY;
+		expect(engine.isAvailable()).toBe(false);
+		if (original) process.env.TAVILY_API_KEY = original;
+	});
+
+	it("isAvailable returns true when API key exists", () => {
+		process.env.TAVILY_API_KEY = "test-key";
+		expect(engine.isAvailable()).toBe(true);
+		delete process.env.TAVILY_API_KEY;
+	});
+
+	it("search returns empty results when no API key", async () => {
+		const original = process.env.TAVILY_API_KEY;
+		delete process.env.TAVILY_API_KEY;
+		const results = await engine.search("test", 3);
+		expect(results).toEqual([]);
+		if (original) process.env.TAVILY_API_KEY = original;
+	});
+
+	it("clamps max_results to 1-20 and sends advanced depth", async () => {
+		process.env.TAVILY_API_KEY = "test-key";
+		const bodies: any[] = [];
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (_url: any, opts: any) => {
+			bodies.push(JSON.parse(opts.body));
+			return { ok: true, json: async () => ({ results: [] }) };
+		};
+		try {
+			await engine.search("q", 500);
+			await engine.search("q", 0);
+			expect(bodies[0].max_results).toBe(20);
+			expect(bodies[0].search_depth).toBe("advanced");
+			expect(bodies[1].max_results).toBe(1);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			delete process.env.TAVILY_API_KEY;
+		}
+	});
+
+	it("maps results with content as snippet", async () => {
+		process.env.TAVILY_API_KEY = "test-key";
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async () => ({
+			ok: true,
+			json: async () => ({
+				results: [
+					{
+						title: "T1",
+						url: "https://example.com/1",
+						content: "  snippet one  ",
+					},
+					{
+						title: "T2",
+						url: "https://example.com/2",
+						content: "snippet two",
+					},
+					{ url: "https://example.com/3" }, // no title/content
+				],
+			}),
+		});
+		try {
+			const results = await engine.search("q", 3);
+			expect(results).toEqual([
+				{
+					title: "T1",
+					url: "https://example.com/1",
+					snippet: "snippet one",
+					engine: "tavily",
+				},
+				{
+					title: "T2",
+					url: "https://example.com/2",
+					snippet: "snippet two",
+					engine: "tavily",
+				},
+				{
+					title: "No title",
+					url: "https://example.com/3",
+					snippet: "",
+					engine: "tavily",
+				},
+			]);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			delete process.env.TAVILY_API_KEY;
+		}
+	});
+
+	it("returns empty results on non-ok response", async () => {
+		process.env.TAVILY_API_KEY = "test-key";
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async () => ({ ok: false, status: 429 });
+		try {
+			expect(await engine.search("q", 3)).toEqual([]);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			delete process.env.TAVILY_API_KEY;
+		}
+	});
+});
+
 import {
 	resolveChain,
 	searchEngines,
@@ -193,9 +309,9 @@ import {
 } from "../extensions/web-search/search";
 
 describe("search composition", () => {
-	it("registers both engines with exa first (default chain)", () => {
+	it("full registry lists chain engines first, then opt-in tavily", () => {
 		const names = searchEngines.map((e) => e.name);
-		expect(names).toEqual(["exa", "duckduckgo"]);
+		expect(names).toEqual(["exa", "duckduckgo", "tavily"]);
 	});
 
 	describe("resolveChain", () => {
@@ -216,10 +332,24 @@ describe("search composition", () => {
 			expect(resolveChain("duckduckgo").map((e) => e.name)).toEqual([
 				"duckduckgo",
 			]);
+			expect(resolveChain("tavily").map((e) => e.name)).toEqual([
+				"tavily",
+			]);
 		});
 
 		it("degrades unknown choices to the default chain", () => {
 			expect(resolveChain("bogus" as any).map((e) => e.name)).toEqual([
+				"exa",
+				"duckduckgo",
+			]);
+		});
+
+		it("auto chain never includes opt-in engines", () => {
+			expect(resolveChain().map((e) => e.name)).toEqual([
+				"exa",
+				"duckduckgo",
+			]);
+			expect(resolveChain("auto").map((e) => e.name)).toEqual([
 				"exa",
 				"duckduckgo",
 			]);
@@ -230,11 +360,14 @@ describe("search composition", () => {
 		// These tests assume no EXA_API_KEY is set: the fs mock neutralizes .env
 		// and we clear the env var explicitly so Exa is always skipped.
 		const originalKey = process.env.EXA_API_KEY;
+		const originalTavilyKey = process.env.TAVILY_API_KEY;
 		beforeEach(() => {
 			delete process.env.EXA_API_KEY;
+			delete process.env.TAVILY_API_KEY;
 		});
 		afterEach(() => {
 			if (originalKey) process.env.EXA_API_KEY = originalKey;
+			if (originalTavilyKey) process.env.TAVILY_API_KEY = originalTavilyKey;
 		});
 
 		it("falls back to DuckDuckGo when Exa is unavailable", async () => {
@@ -271,6 +404,20 @@ describe("search composition", () => {
 			expect(result.partialFailures.some((pf) => pf.engine === "exa")).toBe(
 				true,
 			);
+		});
+
+		it("forced tavily with no key returns no results and reports the skip", async () => {
+			const result = await webLookup(
+				"rust programming language",
+				3,
+				undefined,
+				"tavily",
+			);
+			expect(result.results).toEqual([]);
+			expect(result.engines).toEqual([]);
+			expect(
+				result.partialFailures.some((pf) => pf.engine === "tavily"),
+			).toBe(true);
 		});
 	});
 
@@ -349,6 +496,16 @@ describe("extension tools", () => {
 		expect(res.details).toHaveProperty("results");
 		expect(res.details).toHaveProperty("engines");
 		expect(res.details).toHaveProperty("partialFailures");
+	});
+
+	it("web_lookup schema advertises the tavily engine", async () => {
+		const results: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => results.push(tool),
+		};
+		createExtension(mockPi as any);
+		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+		expect(JSON.stringify(lookupTool.parameters)).toContain("tavily");
 	});
 
 	it("fetch_web returns FetchResponse shape", async () => {

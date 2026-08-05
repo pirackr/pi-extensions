@@ -2,8 +2,9 @@
  * Engine selection for web_lookup:
  * - "auto": walk the fallback chain (Exa first, DuckDuckGo backup).
  * - "exa" / "duckduckgo": force a single engine, bypassing the chain.
+ * - "tavily": opt-in engine for heavy deep research (advanced depth, needs TAVILY_API_KEY).
  */
-export type EngineChoice = "auto" | "exa" | "duckduckgo";
+export type EngineChoice = "auto" | "exa" | "duckduckgo" | "tavily";
 
 export interface SearchResult {
 	title: string;

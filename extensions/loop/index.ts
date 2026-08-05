@@ -10,8 +10,14 @@ import { Type } from "typebox";
 const CUSTOM_TYPE = "pi-loop";
 const EVENT_TYPE = "pi-loop-event";
 const DEFAULT_MAX_ROUNDS = 10;
-const RESEARCH_MAX_ROUNDS = 6;
 const DEFAULT_NO_PROGRESS_TURNS = 3;
+
+const PROFILE_MAX_ROUNDS = {
+	quick: 10,
+	standard: 6,
+	intermediate: 8,
+	deep: 10,
+};
 
 // Bundled deep-research program — the default program for /research. Resolved
 // from this module's location so it works regardless of cwd.
@@ -52,6 +58,7 @@ interface LoopState {
 	noProgressCount: number;
 	lastFingerprint: string | null;
 	updatedAt: number;
+	profile?: string; // research profile: quick|standard|intermediate|deep
 }
 
 let loop: LoopState | null = null;
@@ -109,6 +116,7 @@ function assistantFingerprint(message: unknown): string {
 function normalizeState(s: LoopState): LoopState {
 	return {
 		...s,
+		profile: s.profile ?? "standard",
 		guardId:
 			s.guardId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
 		noProgressTurns: s.noProgressTurns ?? DEFAULT_NO_PROGRESS_TURNS,
@@ -133,7 +141,8 @@ function parseArgs(args: string): {
 				key === "program" ||
 				key === "max-rounds" ||
 				key === "tokens" ||
-				key === "no-progress"
+				key === "no-progress" ||
+				key === "profile"
 			) {
 				if (val && !val.startsWith("--")) {
 					flags[key] = val;
@@ -327,6 +336,7 @@ interface LoopCommandOptions {
 	description: string;
 	defaultProgram: string; // absolute, or cwd-relative
 	defaultMaxRounds: number;
+	isResearch?: boolean;
 }
 
 function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
@@ -412,6 +422,23 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 				);
 				return;
 			}
+			// research: profile flag overrides default maxRounds
+			let profile: string | undefined;
+			if (opts.isResearch && flags.profile) {
+				const p = flags.profile;
+				if (!(p in PROFILE_MAX_ROUNDS)) {
+					ctx.ui.notify(
+						`Unknown profile: ${p}. Use quick, standard, intermediate, or deep.`,
+						"warning",
+					);
+					return;
+				}
+				profile = p;
+				// Only override if user didn't explicitly set --max-rounds
+				if (!flags["max-rounds"]) {
+					maxRounds = PROFILE_MAX_ROUNDS[p as keyof typeof PROFILE_MAX_ROUNDS];
+				}
+			}
 			let tokenBudget: number | null = null;
 			if (flags.tokens) {
 				tokenBudget = Number(flags.tokens);
@@ -467,6 +494,7 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 				noProgressTurns,
 				noProgressCount: 0,
 				lastFingerprint: null,
+				profile,
 				status: "active",
 				updatedAt: now,
 			};
@@ -544,13 +572,14 @@ export default function piLoop(pi: ExtensionAPI) {
 	});
 
 	// /research — deep-research front-end of the same engine: defaults to the
-	// bundled research program and a research-appropriate round cap.
+	// bundled research program. Profile-based maxRounds set from PROFILE_MAX_ROUNDS.
 	registerLoopCommand(pi, {
 		command: "research",
 		description:
-			"Deep research: run the bundled research program (program.md) as an autonomous loop — searches, fetches sources, and compiles research/report.md with claim-level citations.",
+			"Deep research: run the bundled research program (program.md) as an autonomous loop — searches, fetches sources, and compiles research/report.org with claim-level citations.",
 		defaultProgram: RESEARCH_PROGRAM_PATH,
-		defaultMaxRounds: RESEARCH_MAX_ROUNDS,
+		defaultMaxRounds: PROFILE_MAX_ROUNDS.standard,
+		isResearch: true,
 	});
 
 	// NOTE: these handlers are registered here exactly once. pi loads each

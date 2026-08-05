@@ -14,7 +14,7 @@
 Each profile defines a different research depth. Pick one with `--profile`:
 
 | Profile | Min Rounds | Min Sources | Max Rounds | Subagents | Verification |
-|---------|-----------|-------------|------------|-----------|-------------|
+| --------- | ----------- | ------------- | ------------ | ----------- | ------------- |
 | quick | 10 | 15 | 10 | None | Self-judge |
 | standard | 6 | 20 | 6 | None | Self-judge |
 | intermediate | 8 | 30 | 8 | scout ×5, fetch ×3 | Judge subagent |
@@ -34,14 +34,14 @@ Write `research/report.org` — an org-mode report with claim-level citations.
 
 Use org-mode headings and markup:
 
-- `* ` for level-1 headings, `** ` for level-2, `*** ` for level-3
-- `**bold**`, `*italic*`, `=code=`
+- `*` for level-1 headings, `**` for level-2, `***` for level-3
+- `*bold*` for bold, `/italic/` for italics, `=code=` for code
 - `[[URL][description]]` for links
 - `| col1 | col2 |` for tables
 - `[[source:N]]` for claim-level citations
 - `[[:date]]` for retrieval dates
-- `----` for horizontal rules
-- `- ` for bullet lists, `1. ` for numbered lists
+- `-----` (≥5 dashes) for horizontal rules
+- `-` for bullet lists, `1.` for numbered lists
 
 ### Report structure
 
@@ -148,6 +148,7 @@ run_subagents({
 After the main research rounds, run a verification pass:
 
 1. **Judge subagent** (intermediate+): Dispatch a `judge` subagent with the draft report.
+
    ```
 
    run_subagents({
@@ -155,7 +156,7 @@ After the main research rounds, run a verification pass:
        agent: "judge",
        objective: "Judge the research report against the credibility rubric. Evaluate claim quality, triangulation, contradictions, and completeness.",
        scope: ["research/report.org", "research/notes.md", "research/score.md"],
-       inputs: ["docs/006-deep-research-spec.md (Section 5.2 — credibility rubric)"],
+       inputs: ["docs/006-deep-research-spec.md (Section 4.3 — judge rubric)"],
        expected_output: "Judge verdict with score, verdict, and required fixes"
      }],
      timeout_seconds: 300,
@@ -163,9 +164,11 @@ After the main research rounds, run a verification pass:
    })
 
    ```
+
    If judge returns FAIL or CONDITIONAL PASS, fix the reported issues and re-judge.
 
 2. **CitationAgent** (intermediate+): Map every claim to its exact source.
+
    ```
 
    run_subagents({
@@ -180,6 +183,7 @@ After the main research rounds, run a verification pass:
    ```
 
 3. **SourceAuditor** (intermediate+): Rate all sources and flag low-quality ones.
+
    ```
 
    run_subagents({
@@ -194,6 +198,7 @@ After the main research rounds, run a verification pass:
    ```
 
 4. **ContradictionResolver** (deep only): Investigate and resolve contradictions.
+
    ```
 
    run_subagents({

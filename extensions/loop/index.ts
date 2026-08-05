@@ -352,7 +352,7 @@ interface LoopCommandOptions {
 
 function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 	const cmd = opts.command;
-	const usage = `/${cmd} [--program <path>] [--max-rounds N] [--tokens N] [--no-progress N|off] <mission>`;
+	const usage = `/${cmd} [--program <path>] [--max-rounds N] [--tokens N] [--no-progress N|off]${opts.isResearch ? " [--profile <p>] [--yes]" : ""} <mission>`;
 
 	pi.registerCommand(cmd, {
 		description: `${opts.description} Usage: ${usage}`,
@@ -485,10 +485,11 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 					"warning",
 				);
 			}
-			if (loop && loop.status !== "complete") {
+			const previous = loop; // prior run (or null) — restored if the research gate is declined
+			if (previous && previous.status !== "complete") {
 				const ok = await ctx.ui.confirm(
 					"Replace active run?",
-					`Current (/${loop.commandName}): ${truncate(loop.mission)}\n\nNew: ${truncate(mission)}`,
+					`Current (/${previous.commandName}): ${truncate(previous.mission)}\n\nNew: ${truncate(mission)}`,
 				);
 				if (!ok) return;
 			}
@@ -520,9 +521,12 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 						planSummary,
 					);
 					if (!approved) {
-						// Cancel: clear the loop state
-						loop = null;
+						// Cancel: restore the prior run (if any) instead of silently
+						// discarding it — the replace-confirm is undone by this decline.
+						loop = previous;
 						persist(pi, ctx);
+						if (previous && previous.status === "active" && ctx.isIdle())
+							queueContinuation(pi, ctx, previous);
 						return;
 					}
 				}

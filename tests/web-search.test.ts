@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import createExtension from '../extensions/web-search/index.ts';
 import type { SearchResult, SearchResponse, ExtractedContent, FetchResponse, SearchEngine, FetchStrategy } from '../extensions/web-search/types';
 
 // Mock node:fs readFileSync to throw ENOENT so the real repo .env cannot
@@ -188,5 +189,62 @@ describe('ReadabilityStrategy', () => {
     const result = await strategy.fetch('https://this-domain-does-not-exist-12345.com/page');
     expect(result).not.toBeNull();
     expect(result!.error).toBeTruthy();
+  });
+});
+
+describe('extension tools', () => {
+  it('registers web_lookup tool', () => {
+    const registered: string[] = [];
+    const mockPi = {
+      registerTool: (tool: { name: string }) => registered.push(tool.name),
+    };
+    createExtension(mockPi as any);
+    expect(registered).toContain('web_lookup');
+  });
+
+  it('registers fetch_web tool', () => {
+    const registered: string[] = [];
+    const mockPi = {
+      registerTool: (tool: { name: string }) => registered.push(tool.name),
+    };
+    createExtension(mockPi as any);
+    expect(registered).toContain('fetch_web');
+  });
+
+  it('web_lookup returns SearchResponse shape', async () => {
+    const results: any[] = [];
+    const mockPi = {
+      registerTool: (tool: any) => results.push(tool),
+    };
+    createExtension(mockPi as any);
+    const lookupTool = results.find((t: any) => t.name === 'web_lookup');
+    expect(lookupTool).toBeDefined();
+
+    const res = await lookupTool.execute('test-id', { query: 'rust async' });
+    expect(res.content).toHaveLength(1);
+    expect(res.content[0].type).toBe('text');
+    expect(res.details).toHaveProperty('query');
+    expect(res.details).toHaveProperty('results');
+    expect(res.details).toHaveProperty('engines');
+    expect(res.details).toHaveProperty('partialFailures');
+  });
+
+  it('fetch_web returns FetchResponse shape', async () => {
+    const results: any[] = [];
+    const mockPi = {
+      registerTool: (tool: any) => results.push(tool),
+    };
+    createExtension(mockPi as any);
+    const fetchTool = results.find((t: any) => t.name === 'fetch_web');
+    expect(fetchTool).toBeDefined();
+
+    const res = await fetchTool.execute('test-id', { url: 'https://rust-lang.github.io/async-book/08_ecosystem/00_chapter.html' });
+    expect(res.content).toHaveLength(1);
+    expect(res.content[0].type).toBe('text');
+    expect(res.details).toHaveProperty('url');
+    expect(res.details).toHaveProperty('title');
+    expect(res.details).toHaveProperty('content');
+    expect(res.details).toHaveProperty('strategy');
+    expect(res.details).toHaveProperty('error');
   });
 });

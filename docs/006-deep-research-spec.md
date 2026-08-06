@@ -317,6 +317,12 @@ All three, then write the report and call `complete_loop`:
 - Stay inside the research working directory.
 ```
 
+The authoritative copy of the program lives at
+`examples/deep-research/program.md` (v2, 2026-08-05 — adds plan revision,
+selective query refinement, skim→gist→expand, robustness/UGC discipline,
+context management with an evolving draft, agentic judge, and honest source
+counting). The template above is illustrative only.
+
 ---
 
 ## 6. Extension Tools
@@ -353,6 +359,13 @@ standard: min_rounds=6,  min_sources=20, max_rounds=6
 intermediate: min_rounds=8, min_sources=30, max_rounds=8
 deep:     min_rounds=10, min_sources=40, max_rounds=10
 ```
+
+> **Reality (2026-08-05, program v2):** thresholds are hardcoded in
+> `extensions/loop/index.ts` (`RESEARCH_THRESHOLDS`) and are the source of
+> truth; program.md mirrors them for the agent's reference. If they diverge,
+> the extension wins. `research_checkpoint` also cross-checks the reported
+> source count against unique URLs recorded in the run's `notes.md` and uses
+> the minimum, appending a mismatch hint when the model over-reports.
 
 ### 6.2 Subagent Dispatch (tmux-subagent integration)
 

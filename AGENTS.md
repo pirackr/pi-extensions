@@ -53,3 +53,10 @@ Dependencies: `@mozilla/readability` + `linkedom` (DOMParser doesn't exist in No
 `.pi/settings.json` is this workspace's own pi config and includes `".."` — the repo installs itself so the extensions and skills under development are live while working here. It also pulls `git:github.com/obra/superpowers` and the `pi-hashline-edit` / `pi-lens` / `pi-lean-ctx` npm packages.
 
 `.pi/git/` and `.pi/npm/` are pi's local package caches (each self-ignores via its own `.gitignore`). Don't commit `.pi/` contents or treat vendored code under `.pi/git/` as part of this project.
+
+<!-- lean-ctx -->
+## lean-ctx
+
+lean-ctx is active — the MCP tools replace native equivalents.
+Full rules: LEAN-CTX.md (open on demand — do not auto-load).
+<!-- /lean-ctx -->

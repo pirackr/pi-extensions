@@ -1,0 +1,316 @@
+#+TITLE: Techniques to Improve AI Agent Deep Research
+#+DATE: 2026-08-05
+#+AUTHOR: /research run — Mission 2 (deep profile)
+
+* Executive Summary
+
+- Deep research quality is driven less by any single model and more by *system design*: externalized plans, isolated sub-agent contexts, filesystem handoff, and search-grounded verification move quality more than raw prompt cleverness. [[https://www.anthropic.com/engineering/multi-agent-research-system][Anthropic multi-agent system]] [[https://www.langchain.com/blog/open-deep-research][LangChain open deep research]]
+- *External grounding beats introspection*: reflection, self-critique, and verification improve research only when anchored to external evidence (tool results, fresh retrieval, different-model-family verifiers); intrinsic "think again" self-correction is at best neutral and often error-entrenching. [[https://arxiv.org/abs/2607.28576][Sample More, Reflect Less]] [[https://aclanthology.org/2026.acl-long.1636/][Echo Trap]]
+- *Context is the scarce resource*: context rot degrades recall before hard limits; Anthropic's memory tool + context editing delivered +39% on internal agentic-search evals and −84% token consumption on a 100-turn web-search run. [[https://www.anthropic.com/news/context-management][Anthropic context management]] [[https://research.trychroma.com/context-rot][Chroma context rot]]
+- *More tokens ≠ better*: token efficiency (Tavily −66% tokens vs LangChain's Open Deep Research; SLIM 4–6× fewer tool calls) now contests the earlier "more tokens = better" scaling view; the axis is *efficient* spend (productive parallel exploration + summarization), not raw accumulation. [[https://www.tavily.com/blog/research-en][Tavily retrospective]] [[https://arxiv.org/abs/2510.18939][SLIM]]
+- *Robustness is a first-class concern*: deep-research agents can be poisoned through user-generated content (a ~13-word poisoned snippet achieves 38–51% mention rates) and no standard defense mitigates it without degrading quality. [[https://arxiv.org/html/2605.24245v1][WARP]]
+
+* Findings
+
+** SQ1 — Planning & decomposition: the plan is a load-bearing, persistable artifact
+
+- Research plans should be *decomposed before retrieval*: Plan-and-Solve (devise a plan before solving) beats zero-shot CoT, and PL-Search shows a global plan decomposing the question into ordered sub-questions anchors each search step and prevents query drift. [[https://arxiv.org/abs/2305.04091][Plan-and-Solve]] [[https://arxiv.org/html/2605.28354][PL-Search]]
+- The best academic anchor is the ACL 2024 survey *"Understanding the Planning of LLM Agents"*, which taxonomizes decomposition (static vs adaptive), refinement, and the planning loop. [[https://arxiv.org/abs/2402.02716][Planning survey]]
+- *Adaptive decomposition beats fixed*: Select-Then-Decompose (EMNLP 2025) shows task decomposition has an accuracy-vs-cost tradeoff and adaptive strategy selection wins. [[https://aclanthology.org/2025.emnlp-main.278/][Select-Then-Decompose]]
+- *Plan revision mid-run is essential*: AdaPlanner revises plans from execution feedback; Anthropic's lead agent refines its strategy mid-run (creating additional subagents when more research is needed); LangChain's supervisor "reasons about whether findings sufficiently address the brief" and spawns follow-up sub-agents. [[https://proceedings.neurips.cc/paper_files/paper/2023/file/b5c8c1c117618267944b2617add0a766-Paper-Conference.pdf][AdaPlanner]] [[https://www.langchain.com/blog/open-deep-research][LangChain]] [[https://www.anthropic.com/engineering/multi-agent-research-system][Anthropic]]
+- *A bad plan is worse than no plan*: the IBM/UIUC "From Plan to Action" study (16,991 SWE trajectories) found subpar plans hurt performance more than no plan, plans must match the model's internal strategy, and *periodic plan reminders* mitigate adherence decay as context grows. [[https://arxiv.org/html/2604.12147v1][From Plan to Action]]
+- *Plans must persist*: Anthropic saves the plan to Memory before the 200k-token context truncates; LangChain's "research brief" is a persistent north star [[https://www.langchain.com/blog/open-deep-research][LangChain]]. One practitioner synthesis (Sourceshift, claiming ~170 papers) distills a 4-stage pipeline (plan → explore → synthesize → report) *with feedback arrows back to plan* — "the smallest shape that survives realistic queries." [[https://www.anthropic.com/engineering/multi-agent-research-system][Anthropic]] [[https://blog.sourceshift.io/p/what-170-papers-agreed-on-about-deep-research-agents/][Sourceshift (low-cred)]]
+- *Skeptical view is real but dated*: Kambhampati et al. argue LLMs cannot autonomously plan or self-verify (LLM-Modulo: external verification scaffolds required); later work concedes reasoning models (o1-class) improve planning. [[https://proceedings.mlr.press/v235/kambhampati24a.html][Kambhampati ICML 2024]] [[https://arxiv.org/html/2409.13373][LLMs Still Can't Plan; Can LRMs?]]
+- Human-in-the-loop: Google exposes *collaborative plan review* before execution; OpenAI added interrupt-to-refine mid-run (Feb 2026); Anthropic Research plans internally (plan-to-memory) with no user-facing approval in the product. [[https://ai.google.dev/gemini-api/docs/deep-research][Google]] [[https://openai.com/index/introducing-deep-research/][OpenAI]]
+
+** SQ2 — Search & retrieval: query quality, source quality, and depth/width allocation
+
+- *Low-quality intermediate queries derail entire trajectories*: SmartSearch (SIGIR '26) uses process rewards to score each query and selectively refine only the bad ones — refinement must be selective and feedback-gated, not unconditional (naive multi-round reformulation causes query drift per ReformIR). [[https://arxiv.org/html/2601.04888][SmartSearch]] [[https://arxiv.org/html/2605.00560][ReformIR]]
+- *Operators need RL, not instructions*: even with explicit instructions, models rarely use site:/date/filetype filters; RL with a source-restricting reward is required to make them exploit search operators. [[https://arxiv.org/html/2508.07956v1][WebFilter]]
+- *Query diversity drives recall*: diverse multi-query rewriting (DMQR-RAG) significantly outperforms single-query retrieval in RAG settings. [[https://arxiv.org/html/2411.13154][DMQR-RAG]]
+- *Source quality is a measurable problem*: SourceBench finds systems cite low-quality sources at alarming rates; knowledge-based trust (inferring source trustworthiness from inter-source agreement, VLDB 2015) is a foundational method. [[https://arxiv.org/html/2602.16942][SourceBench]] [[https://dl.acm.org/doi/10.14778/2777598.2777603][Knowledge-based Trust]]
+- *Depth vs breadth is the structural debate*: DeepWideSearch (Alibaba) defines width × depth as orthogonal axes — no existing benchmark covers high-width + high-depth and SOTA agents only reach 2.39% success; the four failure modes are lack of reflection, overreliance on internal knowledge, insufficient retrieval, and context overflow. [[https://arxiv.org/html/2510.20168][DeepWideSearch]]
+- *Depth should be adaptive*: AutoSearch (ACL 2026) shows RL-allocated search depth beats fixed depth; "start wide, narrow down" (Anthropic) is one allocation policy, not a law. [[https://aclanthology.org/2026.findings-acl.1399.pdf][AutoSearch]]
+- *Reading strategy matters*: ReadAgent (Google DeepMind, ICML 2024) — skim → gist memory → expand on demand — increases effective context up to 20×, and shows long-context models "are not able to robustly consume long inputs" even within window. [[https://proceedings.mlr.press/v235/lee24c.html][ReadAgent]]
+- *Comprehensiveness is a distinct gap*: DeepSearchQA (Google) shows even correct deep-research answers miss breadth. [[https://arxiv.org/html/2601.20975v1][DeepSearchQA]]
+- *Search-engine fallback chains are production practice*: ordered provider fallback + dedup + rerank is widely deployed (Vellum 6 providers, kiln provider-neutral routing, pi-search-multi 12 backends), though no public A/B data exists on ordering. [[https://www.vellum.ai/docs/key-concepts/web-search][Vellum]] [[https://github.com/sequelcore/kiln/blob/main/docs/research/web-retrieval-provider-routing.md][kiln ADR]] [[https://github.com/ronnieops/pi-search-multi][pi-search-multi]]
+- *Perplexity rearchitected search as code generation*: atomized retrieval/ranking/filtering/fanout/rendering primitives composed by model-generated code in a sandbox — tool-side context engineering matters as much as agent-side orchestration. [[https://research.perplexity.ai/articles/rethinking-search-as-code-generation][Perplexity]]
+
+** SQ3 — Verification, hallucination prevention & robustness
+
+- *Citation-by-requirement + external grounding is the core pattern*: Chain-of-Verification (generate → verify → cross-check) reduces hallucination; Proof-of-Use mitigates tool-call hacking (citing sources never actually read). [[https://aclanthology.org/anthology-files/anthology-files/pdf/findings/2024.findings-acl.212.pdf][Chain-of-Verification]] [[https://arxiv.org/html/2510.10931v2][Proof-of-Use]]
+- *Rewards should be citation-aware, not binary*: "Chaining the Evidence" (ACL 2026) shows binary outcome rewards cause shortcut exploitation and hallucination; citation-aware rubric rewards fix it. [[https://aclanthology.org/2026.acl-long.950/][Chaining the Evidence]]
+- *Claim-level factuality needs its own benchmark*: DeepFact (ACL 2026) shows existing fact-checkers don't transfer to deep research reports. [[https://aclanthology.org/2026.acl-long.1586/][DeepFact]]
+- *LLM-as-judge has known biases*: MT-Bench origin paper documents position/verbosity/self-enhancement bias; FairEval shows rankings hackable by swapping response order; JudgeBench shows preference alignment ≠ correctness. [[https://arxiv.org/abs/2306.05685][MT-Bench]] [[https://aclanthology.org/2024.acl-long.511/][FairEval]] [[https://arxiv.org/abs/2410.12784][JudgeBench]]
+- *Rubric-based judges have their own position bias*: score-option position and criteria ordering bias scores (model-specific direction); permuting rubric options attenuates the bias. [[https://arxiv.org/html/2602.02219][OMRON rubric bias]]
+- *Judge churn is a reproducibility event*: DeepResearch Bench switched its official evaluator Gemini-2.5-Pro → GPT-5.5 (May 2026) after a deprecation announcement; the best candidate judge (71.82) barely beats human inter-annotator agreement (68.78%). [[https://github.com/Ayanami0730/deep_research_bench][DRB README]]
+- *Static judges miss factuality — DREAM's "Mirage of Synthesis"*: fluent, well-cited reports score high despite obsolete info or flawed logic; capability parity (agentic evaluators with retrieval tools) degrades monotonically with staleness (79.35→22.34) where static rubrics stay flat (50.02→50.04). [[https://aclanthology.org/2026.acl-long.448/][DREAM]]
+- *Robustness — UGC poisoning*: WARP shows a ~13-word poisoned snippet appended to a frequently-retrieved UGC page achieves 38–51% mention rates; UGC pages are retrieved in up to 48% of queries and constitute 17–23% of retrieved URLs; the authors state that source blocking, input filtering, and output filtering "none mitigate the attack without degrading output quality." This is a content-promotion/citation-steering attack (not classic instruction hijack). [[https://arxiv.org/html/2605.24245v1][WARP]]
+- *Defense landscape*: Spotlighting/delineation helps against non-adaptive attackers but degrades under adaptive attacks (Google DeepMind); OWASP's Agentic Top 10 subsumes injection under Agent Goal Hijack and Memory/Context Poisoning; vendor coverage is uneven — OpenAI's Deep Research system card documents injection-resistance training and red teaming [[https://openai.com/index/deep-research-system-card/][OpenAI system card]], Anthropic reports ~1% attack-success rate for its browser agent but no deep-research-specific numbers exist [[https://www.anthropic.com/research/prompt-injection-defenses][Anthropic]]. [[https://arxiv.org/html/2505.14534][DeepMind lessons]] [[https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/][OWASP]]
+
+** SQ4 — Test-time compute & RL: the biggest lever, with compute-optimality caveats
+
+- *IterResearch (ICLR 2026)*: reframes deep research as an MDP with iterative workspace reconstruction (the evolving report is the agent's memory; Think/Report/Action per round); EAPO efficiency-aware RL uses geometric reward discounting (γ=0.995). Gains: +14.5pp average over open-source agents across 6 benchmarks; as a *pure prompting strategy* on frontier models it beats ReAct by +12.7pp (o3) / +19.2pp (DeepSeek-V3.1) on BrowseComp. [Verified by fetcher; caveats: ReAct baselines sourced from published SOTA, not re-run; interaction-scaling numbers internally inconsistent (3.5→42.5 abstract vs 5.5→50.1 §4.4); self-reported.] [[https://arxiv.org/html/2511.07327][IterResearch]]
+- *Test-time compute can beat parameter scaling*: Snell et al. (ICLR 2025 oral) show compute-optimal test-time inference can be more effective than scaling model parameters. [[https://arxiv.org/abs/2408.03314][Snell et al.]]
+- *…but more compute is not monotonic*: Thinking-Optimal (NeurIPS 2025) shows excessively long chains of thought impair reasoning in some domains; ATTS shows naive step-wise Best-of-N hurts agents (error accumulation) while parallel sampling BoN gives ~+8pp on GAIA; knowing *when* to reflect beats reflecting every step. [[https://arxiv.org/html/2502.18080][Thinking-Optimal]] [[https://arxiv.org/html/2506.12928][ATTS]]
+- *RL post-training works in real environments*: DeepResearcher (EMNLP 2025) — first end-to-end RL with authentic web search — +28.9pp over prompt-engineering baselines; RL induces emergent planning, cross-validation, and self-reflection. [[https://aclanthology.org/2025.emnlp-main.22/][DeepResearcher]]
+- *Open recipes exist*: DR Tulu (Ai2) — SFT cold-start → online RL with evolving positive/negative rubrics (RLER) + citation rewards; DR Tulu-8B matches or beats Gemini 3 Pro and Tongyi DeepResearch-30B on core benchmarks. [[https://allenai.org/blog/dr-tulu][DR Tulu]]
+- *Mid-training injects agentic inductive bias*: Tongyi DeepResearch (agentic mid-training + on-policy multi-turn RL) reports HLE 32.9, BrowseComp 43.4, GAIA 70.9. [[https://arxiv.org/html/2510.24701v2][Tongyi]]
+- *Multi-turn RL with knowledge graphs*: DeepDive (THUDM) — GRPO with KG-derived hard QA pairs + redundancy penalty — reaches 15.3% BrowseComp, beating WebSailor/DeepSeek-R1-Browse. [[https://arxiv.org/html/2509.10446v2][DeepDive]]
+- *RL vs prompting is contested*: DeepResearcher argues prompting is brittle (+28.9pp with RL); IterResearch shows training-free prompting alone adds +12.7–19.2pp on frontier models. Both can be true depending on base-model regime. [[https://aclanthology.org/2025.emnlp-main.22/][DeepResearcher]] [[https://arxiv.org/html/2511.07327][IterResearch]]
+
+** SQ5 — Multi-agent orchestration: parallelism wins only on parallelizable tasks
+
+- *The telephone problem is quantified*: delegation accuracy collapses from 90.7% to 22.5% over five planning stages (Ao et al., MIT); iterated LLM-to-LLM transmission drifts toward cultural attractors (Perez et al., ICLR 2025). Filesystem/artifact handoff (Anthropic) avoids lossy re-summarization. [[https://arxiv.org/abs/2603.26993][Ao et al.]] [[https://arxiv.org/abs/2407.04503][Perez et al.]]
+- *Message format buys fidelity, not correction*: at strong relay tiers message passing is near-lossless; at weak tiers errors persist in 83–100% of chains in every format — structure helps, but the weakest relay bounds you. [[https://arxiv.org/html/2607.09678v1][Faithful, Not Corrective]]
+- *Task type is the binding variable*: Google's 180-configuration study — centralized coordination improved performance 80.8% over a single agent on parallelizable tasks, while every multi-agent variant degraded 39–70% on sequential tasks; independent non-communicating agents amplified errors 17.2× vs 4.4× with central orchestration. [[https://research.google/blog/towards-a-science-of-scaling-agent-systems-when-and-why-agent-systems-work/][Google scaling study]]
+- *Debate is contested*: MAD (ICML 2024) claims debate improves factuality; "Should we be going MAD?" (DeepMind) finds no gain over equal-cost sampling; "Demystifying MAD" (ACL 2026) finds vanilla debate *underperforms majority vote* — diversity and confidence are the load-bearing variables. [[https://arxiv.org/abs/2305.14325][MAD]] [[https://arxiv.org/html/2311.17371v3][going MAD]] [[https://aclanthology.org/2026.findings-acl.1694/][Demystifying MAD]]
+- *Cognition's reversal refines the thesis*: "Don't Build Multi-Agents" objected to parallel *writers*; the follow-up approves parallel *readers* (search subagents — exactly what research agents use); clean-context reviewers catch more bugs. [[https://cognition.ai/blog/dont-build-multi-agents][Don't Build Multi-Agents]] [[https://cognition.com/blog/multi-agents-working][What's Actually Working]]
+- *Most multi-agent failures are misalignment, not capability*: MAST (UC Berkeley, NeurIPS 2025) — 1,642 annotated traces — attributes >⅓ of failures to inter-agent misalignment. [[https://arxiv.org/abs/2503.13657][MAST]]
+- *Capable models can outgrow collaboration*: Nature MI (MIT/Google, 260 configurations) — above a ~45% single-agent baseline, multi-agent gains fall off; collaboration helps mainly when the single agent is weak. [[https://www.nature.com/articles/s42256-026-01268-y][Nature MI]]
+- *Per-agent marginal value decays*: the Ringelmann effect in multi-agent LLM systems — naive agent counts conflate cost with independent evidence. [[https://arxiv.org/html/2606.02646v1][Ringelmann]]
+- *Orchestration topology matters*: LangChain's Tau-bench benchmark — supervisor (hub-and-spoke) wins on cost/latency over swarm/network patterns (~2× from rework). [[https://www.langchain.com/blog/benchmarking-multi-agent-architectures][LangChain benchmark]]
+- *2026 retrospectives converge on shallow structures*: Tavily rebuilt to reflection-only context; Onyx: "never nest more than 2 levels deep"; TinyFish removed the dedicated planner and per-query subagents. [[https://www.tavily.com/blog/research-en][Tavily]] [[https://onyx.app/blog/building-the-best-deep-research][Onyx]] [[https://www.tinyfish.ai/blog/lessons-from-building-a-deep-research-system][TinyFish]]
+
+** SQ6 — Memory, context & state management: the quantified win
+
+- *Anthropic's context management is the strongest quantified evidence*: memory tool + context editing = +39% over baseline on internal agentic-search evals; context editing alone +29%; a 100-turn web search workflow that previously failed from context exhaustion completed while *cutting token consumption 84%*. Research is a named use case ("Memory stores key findings while context editing removes old search results"). [Verified verbatim by fetcher; internal/self-reported.] [[https://www.anthropic.com/news/context-management][Anthropic context management]]
+- *Context rot is real*: Chroma's 18-model study shows increasing input tokens degrades recall even below hard limits — refuting "1M windows fix everything." [[https://research.trychroma.com/context-rot][Chroma]]
+- *The taxonomy: compaction vs tool-result clearing vs memory*: Claude cookbook distinguishes whole-transcript lossy compaction, sub-transcript tool-result clearing (placeholder + re-fetch, keeps the tool_use record), and external structured memory; worked example is a long-running research agent over a 329K-token corpus. [[https://platform.claude.com/cookbook/tool-use-context-engineering-context-engineering-tools][Claude cookbook]]
+- *SLIM: search/browse tool separation + periodic trajectory summarization* — beats all open-source frameworks on BrowseComp (56% w/ o3) and HLE (33%) with 4–6× fewer tool calls. [[https://arxiv.org/abs/2510.18939][SLIM]]
+- *Programmatic memory*: PRO-LONG keeps a complete structured interaction log searched by a coding agent — +18.0 ARC-AGI-3, 4.2–5.8× fewer tokens. [[https://arxiv.org/abs/2607.20064][PRO-LONG]]
+- *Durable execution & checkpoints*: LangChain checkpoints per super-step in PostgreSQL (thread_id-keyed), crash-resume, HITL pause/resume; two-tier memory (thread-scoped checkpoints vs cross-thread store with semantic search); delta channels cut checkpoint storage up to 100×. [[https://www.langchain.com/blog/runtime-behind-production-deep-agents][LangChain runtime]] [[https://www.langchain.com/blog/deep-agents-0-6][Deep Agents 0.6]]
+- *Active revision beats passive compression*: ARC (ACL 2026) — reflection-driven context revision gains up to 11% absolute on BrowseComp-ZH vs passive compression. [[https://aclanthology.org/2026.findings-acl.930/][ARC]]
+- *Open-source state machines*: timaliev/pi-deep-research — JSONL trace logs, soft caps (maxSearchCalls, maxElapsedSeconds), prefilter subprocess; LangChain ODR — typed graph state + resumable super-steps. [[https://github.com/timaliev/pi-deep-research][timaliev]] [[https://github.com/langchain-ai/open_deep_research][open_deep_research]]
+
+** SQ7 — Evaluation & benchmarks: QA benchmarks measure retrieval, not reports
+
+- *Benchmark landscape*: GAIA (450 assistant tasks; OpenAI DR 67.36%), HLE (2,500 expert questions; OpenAI DR 26.6%; Nature publication), BrowseComp (1,266 hard-to-find questions; humans 29.2%, OpenAI DR 51.5% but 91% calibration error). [[https://arxiv.org/abs/2311.12983][GAIA]] [[https://arxiv.org/abs/2501.14249][HLE]] [[https://openai.com/index/browsecomp/][BrowseComp]]
+- *Report-quality benchmarks are the right instrument*: DeepResearch Bench (100 PhD-level tasks, 22 fields, derived from 96k real queries; RACE rubric judge + FACT citation framework; ICLR 2026) and DRB II (hierarchical rubrics diagnosing the human-expert gap) explicitly argue QA-style benchmarks don't test evidence analysis. [[https://deepresearch-bench.github.io/][DeepResearch Bench]] [[https://arxiv.org/html/2601.08536][DRB II]]
+- *Live/user-centric evals*: LiveResearchBench (Salesforce) — 100 expert-curated tasks, 6 evaluation dimensions, 17 DRAs evaluated. [[https://livedeepresearch.github.io/][LiveResearchBench]]
+- *Fairness critiques*: BrowseComp-Plus (ACL 2026) — black-box web APIs hurt reproducibility; disentangled static-corpus evaluation needed. [[https://aclanthology.org/2026.acl-long.1023/][BrowseComp-Plus]]
+- *Judge reliability science*: MT-Bench biases; rating indeterminacy (human raters disagree — naive agreement metrics mislead); "Reliability without Validity" (21 judges, 541k judgments) documents a consistency-bias paradox; RAND shows a simple single rubric beats complex pipelines (error −9 to −25pp). [[https://proceedings.neurips.cc/paper_files/paper/2025/file/a309239c11a28c597d050bd4a1752d32-Paper-Conference.pdf][Indeterminacy]] [[https://doi.org/10.48550/arxiv.2606.19544][Reliability without Validity]] [[https://www.rand.org/pubs/research_reports/RRA4618-1.html][RAND]]
+- *SOTA numbers are vendor self-reports*: all recent HLE/BrowseComp SOTA comes from vendor claims mirrored by aggregators; only HAL (GAIA, verified-claims) is independent, and it's paused — treat single numbers as directional. [[https://hal.cs.princeton.edu/gaia][HAL]]
+- *Anthropic's eval vocabulary* (task/trial/grader/assertions/transcript/outcome/harness) is the working framework for agent evals. [[https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents][Anthropic evals]]
+
+** SQ8 — Cost, latency & scalability: efficiency is the new frontier
+
+- *Token spend explains variance — but efficiency wins at the margin*: Anthropic reports token usage alone explains 80% of BrowseComp variance; yet Tavily's reflection-only context cut tokens 66% while claiming SOTA, SLIM uses 4–6× fewer tool calls for better results, and the ACL 2026 SRW study shows sampling strategies "often spend 3–5× more tokens for comparatively small gains." The reconciliation: *productive* parallel exploration and summarization beat raw accumulation and blind sampling. [[https://www.anthropic.com/engineering/multi-agent-research-system][Anthropic]] [[https://www.tavily.com/blog/research-en][Tavily]] [[https://aclanthology.org/2026.acl-srw.82/][ACL SRW]]
+- *Tiered model routing is standard*: Anthropic Opus-lead/Sonnet-subagents; OpenAI o3-deep-research ($10/$40 per MTok) vs o4-mini-deep-research ($2/$8); timaliev prefilterModel routes planning to haiku-4-5; routing-as-budget-constrained-optimization is formalized in the "Doing More with Less" survey. [[https://openrouter.ai/openai/o3-deep-research][o3 pricing]] [[https://openrouter.ai/openai/o4-mini-deep-research][o4-mini pricing]] [[https://github.com/timaliev/pi-deep-research][timaliev]] [[https://arxiv.org/html/2502.00409v2][Doing More with Less]]
+- *Caching is high-leverage but strategy-sensitive*: Anthropic prompt caching up to −90% cost/−85% latency; Gemini context caching −75% (implicit caching); but PwC's study shows naive full-context caching can *increase* latency (cache-write costs for never-reused dynamic tool results) — cache stable prefixes, exclude dynamic results. [[https://claude.com/blog/prompt-caching][Anthropic caching]] [[https://developers.googleblog.com/gemini-2-5-models-now-support-implicit-caching/][Gemini implicit caching]] [[https://arxiv.org/html/2601.06007][PwC cache study]]
+- *Parallelism cuts wall-clock time*: Anthropic's two-level parallelism (3–5 parallel subagents + 3+ parallel tools) cut research time up to 90%; a tool-testing agent that rewrote tool descriptions gave −40% task completion time. [[https://www.anthropic.com/engineering/multi-agent-research-system][Anthropic]]
+- *Budgets: hard vs soft*: hard dual-budget control (tool calls + output tokens) with a Value-of-Information controller — "under explicit budgets, more inference-time compute and better answers are no longer equivalent"; open-source soft caps (timaliev) reduce intensity rather than crash. [[https://arxiv.org/html/2605.05701][VOI budget control]]
+- *Real per-run costs are vendor-opaque*: third-party estimates for OpenAI API deep research range $0.41–$8/query with hidden reasoning tokens making true cost unverifiable (low-confidence estimates, Cred 2-3; a full-run teardown instead estimates $18–42/run); Anthropic publishes no cost/run figures. [[https://tokencost.app/blog/openai-deep-research-api-pricing][TokenCost (low-cred)]] [[https://www.brianletort.ai/blog/llm-os-modes-part-4-deep-research][Brian Letort teardown (low-cred)]]
+
+** SQ9 — Report synthesis techniques (bonus: how the final product is written)
+
+- *Outlines are the scaffold*: WebWeaver and ScaffoldAgent structure web-scale evidence with *dynamic outlines* that evolve during research — the outline, not the prompt, carries long-form structure. [[https://arxiv.org/html/2509.13312v2][WebWeaver]] [[https://arxiv.org/pdf/2606.20122v1][ScaffoldAgent]]
+- *Interleave drafting and deepening*: AgentCPM-Report / "Writing As Reasoning" — draft, then deepen with more evidence, iteratively — beats plan-then-write-only pipelines. [[https://arxiv.org/html/2602.06540][AgentCPM-Report]]
+- *Raw sources re-supplied only at final report time*: Tavily keeps the tool caller on reflections only, then re-supplies raw information at synthesis to avoid information loss — echoing Anthropic's subagent-compression pattern. [[https://www.tavily.com/blog/research-en][Tavily]]
+- *On open frameworks*: LangChain ODR writes the report one-shot (multi-agent for research, single-shot for writing); Anthropic's demo uses a dedicated report writer (PDF) after analyst charts. [[https://github.com/langchain-ai/open_deep_research][open_deep_research]] [[https://github.com/anthropics/claude-agent-sdk-demos/tree/main/research-agent][Anthropic research-agent demo]]
+
+* Comparison Table
+
+| Topic | Vendor / Production practice | Academic evidence | Consensus |
+|-------|------------------------------|-------------------|-----------|
+| Planning | Externalized plan artifact; plan-to-memory at 200k; collaborative review (Google) | Adaptive decomposition; subpar-plan-worse-than-none; plan reminders restore adherence | Persistent, feedback-revised plan; match plan to model's strategy |
+| Search | Start wide→narrow; domain filters; fallback chains (Vellum/kiln) | Query drift; diversity wins; RL needed for operators; adaptive depth | Selective refinement + diversity + explicit source-quality heuristics |
+| Verification | CitationAgent; rubric-scored LLM-as-judge; checkpoint gates | CoVe; proof-of-use; citation-aware rewards; judge-bias science; DREAM capability parity | External grounding + citation-by-requirement; distrust static judges for factuality |
+| Test-time/RL | Heavy-mode test-time scaling (Tongyi); o3 end-to-end RL | IterResearch +14.5pp; Snell scaling; Thinking-Optimal impairment; DeepResearcher +28.9pp | Compute-optimal test-time allocation; RL in real environments; prompting still helps frontier models |
+| Multi-agent | Parallel subagents + filesystem handoff (Anthropic); supervisor topology (LangChain) | Telephone collapse; +80.8% parallel / −39-70% sequential; debate ≈ majority vote; ~45% outgrow threshold | Use parallel readers, serialize writers; match architecture to task parallelism |
+| Memory/context | Compaction + context editing + memory tool (+39%, −84%) | Context rot; SLIM; PRO-LONG; active revision +11% | Active context management over raw accumulation; just-in-time retrieval |
+| Evaluation | Internal rubric evals (Anthropic); DRB RACE/FACT | Judge-bias science; indeterminacy; DREAM; RAND simplicity | QA benchmarks ≠ report quality; agentic evaluators for factuality; pin judge versions |
+| Cost | Tiered models; prompt caching; 90% time cut | Routing-as-optimization; VOI budgets; 3–5× sampling waste; 66% token cut | Efficient spend: tiered routing + caching stable prefixes + budget caps |
+| Robustness | Constitutional Classifiers; injection-resistance RL; Safe Url | WARP UGC poisoning; adaptive-attack defense limits; OWASP ASI01/06 | Untrusted-content marking + task alignment + least privilege; no silver bullet |
+
+* Contradictions & Debates
+
+** Multi-agent vs single-agent vs shallow-structure
+
+Source A: Anthropic's orchestrator-worker (+90.2% over single-agent Opus 4 on internal breadth-first evals) [[https://www.anthropic.com/engineering/multi-agent-research-system][Anthropic]]. Source B: Cognition/Nature MI — multi-agents add coordination cost and help mainly when the single agent is weak (~45% threshold) [[https://www.nature.com/articles/s42256-026-01268-y][Nature MI]]. Source C: 2026 retrospectives (Grep, Onyx, TinyFish) converge on *shallow* structures for frontier models [[https://blog.grep.ai/blog/building-grep-deep-research][Grep]]. Resolution: *reconciled* — the binding variable is task parallelism (Google's +80.8% on parallel / −39-70% on sequential) plus model capability regime; deep research (parallel search of independent aspects) is the canonical aligned task, so orchestrator-worker with isolated reader contexts and serialized writing is the emerging consensus.
+
+** More tokens = better vs fewer tokens = better
+
+Source A: Anthropic — token usage explains 80% of BrowseComp variance [[https://www.anthropic.com/engineering/multi-agent-research-system][Anthropic]]. Source B: SLIM (4–6× fewer tool calls), PRO-LONG (4.2–5.8× fewer tokens), Tavily (−66%), ACL SRW (3–5× waste) [[https://arxiv.org/abs/2510.18939][SLIM]] [[https://arxiv.org/abs/2607.20064][PRO-LONG]] [[https://www.tavily.com/blog/research-en][Tavily]]. Resolution: *reconciled* — the axis is *efficient* token spend: productive parallel exploration and summarization beat raw accumulation and blind sampling; token volume is a proxy for exploration, not a goal.
+
+** Intrinsic self-reflection: helps vs hurts
+
+Source A: Reflexion (91% HumanEval with external evaluator feedback) [[https://arxiv.org/abs/2303.11366][Reflexion]]; Self-Refine (~20% average gain across 7 tasks, later shown biased) [[https://arxiv.org/abs/2303.17651][Self-Refine]] [[https://aclanthology.org/2024.acl-long.826/][Pride & Prejudice]]; LATS (94.4% HumanEval) [[https://arxiv.org/abs/2310.04406][LATS]]. Source B: "Sample More, Reflect Less" — all 18 self-inspection comparisons lose to repeated sampling at equal token cost; Echo Trap (reward-preserving repetition collapse) [[https://arxiv.org/abs/2607.28576][Sample More, Reflect Less]] [[https://aclanthology.org/2026.acl-long.1636/][Echo Trap]]. Resolution: *reconciled* — reflection is reliable only when anchored to external verification (tool results, fresh retrieval, different-model verifiers); intrinsic "think again" is at best neutral. Production systems (Anthropic interleaved thinking, IterResearch round-based reflection) are search-grounded.
+
+** RL post-training vs pure test-time prompting
+
+Source A: DeepResearcher — prompt engineering is brittle; RL in real environments +28.9pp [[https://aclanthology.org/2025.emnlp-main.22/][DeepResearcher]]. Source B: IterResearch — training-free prompting alone adds +12.7–19.2pp on frontier models [[https://arxiv.org/html/2511.07327][IterResearch]]. Resolution: *reconciled* — both true depending on base-model regime; RL is the path for open/smaller models, prompting/test-time compute for frontier models; the strategies compose (IterResearch's EAPO-trained models also benefit from test-time interaction scaling).
+
+** Reference-based vs reference-free evaluation
+
+Source A: DRB RACE (reference-based rubric judge) is the de-facto standard and reports strong human alignment [[https://deepresearch-bench.github.io/][DRB]]. Source B: DREAM argues references become outdated and static judges miss factuality (Mirage of Synthesis) — reference-free agentic evaluation needed; empirically RACE is flat on temporal decay where DREAM degrades monotonically; DREAM's own reference-free Writing Quality correlates with RACE rankings at Kendall's τ=0.6 (vs human readability agreement 0.5–0.7) [[https://aclanthology.org/2026.acl-long.448/][DREAM]]. Resolution: *unresolved* — a genuine methodological disagreement between the two flagship 2026 deep-research eval papers; the empirical sensitivity evidence favors agentic evaluators for factuality, but DREAM's validity rests partly on RACE rankings (τ=0.6).
+
+** Prompt-injection defenses: filtering vs impact-constraining
+
+Source A: Google DeepMind deploys classifier layers + model hardening via adversarial fine-tuning [[https://deepmind.google/blog/advancing-geminis-security-safeguards/][DeepMind]]; Anthropic deploys Constitutional Classifiers scanning untrusted content [[https://www.anthropic.com/research/prompt-injection-defenses][Anthropic]]; Microsoft deploys Prompt Shields + sandboxing patterns [[https://arxiv.org/html/2506.08837v3][design patterns]] [[https://arxiv.org/html/2403.14720][Spotlighting]]. Source B: OpenAI argues input filtering can't catch social-engineering-style injection ("detecting a malicious input becomes the same very difficult problem as detecting a lie") and pushes impact constraining (source-sink analysis, Safe Url) [[https://openai.com/index/designing-agents-to-resist-prompt-injection/][OpenAI]]. Also: WARP shows UGC content-poisoning (a citation/entity-promotion attack) defeats the defenses studied — source blocking, input filtering, output filtering — without quality cost [[https://arxiv.org/html/2605.24245v1][WARP]]. Resolution: *partially reconciled* — layered defense (marking + task alignment + least privilege + output checks), with the caveat that no published defense mitigates UGC poisoning without quality cost.
+
+** Sequential vs parallel plan execution
+
+Source A: Deep Researcher Reflect Evolve — sequential research-plan refinement beats parallel scaling (95.6% of configurations; parallel sub-agents suffer "siloed knowledge") [[https://arxiv.org/html/2601.20843][Reflect Evolve]]. Source B: Anthropic — parallel subagents with isolated contexts outperform single-agent Opus 4 by 90.2% on breadth-first research evals [[https://www.anthropic.com/engineering/multi-agent-research-system][Anthropic]]. Resolution: *unresolved on matched tasks* — task type is the discriminator: breadth-first, parallelizable tasks favor parallel exploration; depth-first, interdependent PhD-level synthesis favors sequential refinement. No head-to-head on matched tasks exists; both axes are needed (cf. Super Research's wide+deep passes).
+
+** Passive compaction vs active context revision
+
+Source A: Anthropic treats compaction (one-shot summarization) as the first lever for long-horizon agents [[https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents][Anthropic context engineering]]. Source B: ARC (ACL 2026) — active, reflection-driven context revision beats passive compression by up to 11% absolute on BrowseComp-ZH (passive summarization treats context as a "static artifact") [[https://aclanthology.org/2026.findings-acl.930/][ARC]]. Resolution: *unresolved* — one paper vs vendor practice; note Anthropic's context editing (active removal of stale tool results) leans toward the active-revision side.
+
+** Multi-agent judging: cure or amplifier
+
+Source A: Multi-Agent-as-Judge (ACL 2026) — multi-agent judging improves alignment with human multidimensional evaluation [[https://aclanthology.org/2026.acl-long.790/][Multi-Agent-as-Judge]]. Source B: "Judging with Many Minds" (EMNLP 2025 Findings) — multi-agent judging can *amplify* shared biases; more perspectives ≠ less prejudice [[https://aclanthology.org/2025.findings-emnlp.941/][Judging with Many Minds]]. Resolution: *unresolved* — dependent on role separation/debate design; naive ensembles of same-biased models don't help.
+
+** Parallel tool calls: speedup or no-op
+
+Source A: Anthropic reports parallel subagents + parallel tools cut research time up to 90% [[https://www.anthropic.com/engineering/multi-agent-research-system][Anthropic]]; independent practitioner estimates put parallel tool calls at 40–70% latency reduction and tool execution at 35–60% of agent latency (low-credibility, no methodology published) [[https://aiworkflowlab.dev/article/parallel-tool-calls-openai-anthropic-gemini-2026][aiworkflowlab (Cred 2)]] [[https://tianpan.co/blog/2026-04-10-parallel-tool-calls-hidden-coupling][tianpan (Cred 3)]]. Source B: "Parallel vs Sequential Tool Calling" — parallelism only helps if the runtime actually executes concurrently and the tool-latency distribution justifies it; parallel emission ≠ parallel execution (opinion piece, Cred 2) [[https://dreaming.press/posts/2026-06-24-parallel-vs-sequential-tool-calling.html][parallel-tool-calling critique]]. Resolution: *partially reconciled* — parallelism is necessary but not sufficient; the runtime must genuinely execute concurrently; the counter-claim is opinion-level.
+
+
+* Uncertainties & Gaps
+
+- **Vendor numbers are self-reported and unaudited**: the flagship quantified claims (Anthropic +39%/−84%, Tavily −66%, IterResearch +14.5pp, DRB judge alignment 71.82%) all come from internal evals with no published methodology or external reproduction. Confidence on these is capped (~75-85), not 95.
+- **IterResearch internal inconsistency**: interaction-scaling endpoints differ between the abstract (3.5%→42.5%) and §4.4 (5.5%→50.1% on a 200-question subset); ReAct prompting baselines were sourced from published SOTA, not re-run — the headline prompting gains depend on comparability of external numbers.
+- **No matched-cost study of reflection vs sampling on deep-research workloads**: the strong negative results (Sample More, Reflect Less) use math benchmarks; the positive results (Reflexion/LATS) use code/web tasks — attribution of production reflection gains (interleaved thinking, iterative refine) to reflection *per se* vs extra tokens/search is unestablished.
+- **Filesystem vs message-passing for research agents**: no controlled experiment compares "subagent writes findings.json" vs "subagent returns structured message" on an equal-compute research workload; the relay testbed covers message formats only.
+- **Real per-run costs are vendor-opaque**: OpenAI doesn't publish per-query deep-research costs; third-party estimates conflict ($0.41–$8/query for API calls per TokenCost/TokenMix, Cred 2; $18–42/run for a full teardown per Brian Letort, Cred 2-3; hidden reasoning tokens possibly 2–5M/query, single blogger claim); Anthropic publishes none. Cost-latency Pareto curves for deep research are unpublished.
+- **"deep-research-benchmarks" repo identity unresolved**: no GitHub repo with that exact name exists; nearest are Ayanami0730/deep_research_bench, imlrz/DeepResearch-Bench-II, SalesforceAIResearch/LiveResearchBench. Any citation to "deep-research-benchmarks" should resolve to DeepResearch Bench.
+- **SOTA benchmark numbers are contested**: all recent HLE/BrowseComp SOTA comes from vendor self-reports mirrored by aggregators (BenchLM/BenchmarkList); only HAL (GAIA) is verified-claims and it is paused; BrowseComp saturates fast (GPT-4o 0.6% at launch → GPT-5.6 Sol 92.2% self-reported within ~15 months, per OpenAI's own paper + aggregators).
+- **Judge churn lacks a community standard**: only DRB documents judge-model pinning; no formal recommendation exists for reporting judge model/version in leaderboard results.
+- **Anthropic gives no isolated compaction number**: context editing (29%) and memory+editing (39%) are quantified, but compaction's standalone contribution to long-run performance is unquantified in primary sources.
+- **Genuine open question — agentic memory benchmarks**: no primary source was found quantifying chunk-size choices for document reading in *research* agents specifically (chunked-reading evidence comes from long-doc QA).
+- **Single-source load-bearing claims (triangulation gaps)**: WARP UGC poisoning (executive bullet 5, SQ3) — one preprint, no independent confirmation yet; DR Tulu "matches or beats Gemini 3 Pro" (SQ4) — vendor research-org self-report; Tongyi HLE 32.9/BrowseComp 43.4/GAIA 70.9 (SQ4) — vendor tech report; SLIM BrowseComp 56% — single paper. Each is cited to its primary source; treat as strong-but-single-source.
+- **Low-credibility sources flagged**: cost estimates (TokenCost, Brian Letort, Cred 2-3) and the Brian Letort run teardown ($18–42/run, 28–52 parallel searchers) are engineering guesses, not audited measurements; the per-query vs per-run figures measure different things and should not be combined.
+- **Unresolved contradictions on scored questions (acknowledged per completion condition)**: (a) *Reference-based vs reference-free evaluation* (SQ7) — DRB RACE vs DREAM are two peer-reviewed flagship methods with a genuine methodological disagreement; the empirical sensitivity evidence favors agentic evaluators, but DREAM's own validity partially rests on RACE rankings (τ=0.6). (b) *Sequential vs parallel plan execution* (SQ1) — Reflect Evolve (sequential refinement, 95.6% of configs) vs Anthropic (parallel subagents, +90.2%) appear reconciled by task type (breadth-first parallelizable vs depth-first interdependent), but no head-to-head on matched tasks exists — an evidence gap rather than a settled conflict. (c) *Multi-agent judging* (SQ7) — Multi-Agent-as-Judge (ACL 2026, improves human alignment) vs Judging with Many Minds (EMNLP 2025, bias amplification) directly conflict with no clear winner. (d) *Passive compaction vs active context revision* (SQ6) — ARC (+11% BrowseComp-ZH) vs Anthropic's compaction-as-first-lever; unresolved because Anthropic publishes no isolated compaction number.
+- **Model-size regime in reflection evidence**: the strongest reflection negatives (Sample More, Reflect Less; Echo Trap) are on 1.5B–7B models; the strongest positives (Reflexion 91%, LATS 94.4%) are GPT-4-class with external evaluator feedback — both the size regime and the external-anchoring boundary matter.
+
+* Sources
+
+> Format note: findings use inline [[URL][label]] citation markers; every URL in the body maps to a numbered entry below. The block lists the ~116 key sources used in this report; the full ~175-source corpus with per-claim confidence and credibility lives in =research/notes.md=.
+
+#+BEGIN_EXAMPLE
+[1] https://www.anthropic.com/engineering/multi-agent-research-system — Anthropic multi-agent research system — Official (vendor) — 2026-08-05
+[2] https://www.anthropic.com/news/context-management — Anthropic context management (memory tool + context editing) — Official (vendor) — 2026-08-05
+[3] https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents — Anthropic context engineering — Official (vendor) — 2026-08-05
+[4] https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents — Anthropic evals for AI agents — Official (vendor) — 2026-08-05
+[5] https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents — Anthropic long-running agent harnesses — Official (vendor) — 2026-08-05
+[6] https://www.anthropic.com/research/prompt-injection-defenses — Anthropic prompt-injection defenses (browser agent) — Official (vendor) — 2026-08-05
+[7] https://platform.claude.com/cookbook/tool-use-context-engineering-context-engineering-tools — Claude context-engineering cookbook — Official (vendor) — 2026-08-05
+[8] https://claude.com/blog/prompt-caching — Anthropic prompt caching — Official (vendor) — 2026-08-05
+[9] https://openai.com/index/introducing-deep-research/ — OpenAI Deep Research announcement — Official (vendor) — 2026-08-05
+[10] https://openai.com/index/browsecomp/ — OpenAI BrowseComp — Official (vendor) — 2026-08-05
+[11] https://openai.com/index/designing-agents-to-resist-prompt-injection/ — OpenAI agent injection resistance — Official (vendor) — 2026-08-05
+[12] https://cdn.openai.com/deep-research-system-card.pdf — OpenAI Deep Research system card — Official (vendor) — 2026-08-05
+[13] https://openrouter.ai/openai/o3-deep-research — o3-deep-research pricing — Independent (vendor mirror) — 2026-08-05
+[14] https://ai.google.dev/gemini-api/docs/deep-research — Gemini Deep Research API docs — Official (vendor) — 2026-08-05
+[15] https://research.google/blog/towards-a-science-of-scaling-agent-systems-when-and-why-agent-systems-work/ — Google agent scaling study — Official (vendor) — 2026-08-05
+[16] https://deepmind.google/blog/advancing-geminis-security-safeguards/ — Google DeepMind security safeguards — Official (vendor) — 2026-08-05
+[17] https://research.trychroma.com/context-rot — Chroma context rot study — Independent (research report) — 2026-08-05
+[18] https://www.langchain.com/blog/open-deep-research — LangChain open deep research — Official (vendor) — 2026-08-05
+[19] https://www.langchain.com/blog/runtime-behind-production-deep-agents — LangChain deep agents runtime — Official (vendor) — 2026-08-05
+[20] https://www.langchain.com/blog/benchmarking-multi-agent-architectures — LangChain multi-agent benchmark — Official (vendor) — 2026-08-05
+[21] https://www.langchain.com/blog/evaluating-deep-agents-our-learnings — LangChain deep-agent eval learnings — Official (vendor) — 2026-08-05
+[22] https://www.tavily.com/blog/research-en — Tavily deep research retrospective — Official (vendor) — 2026-08-05
+[23] https://onyx.app/blog/building-the-best-deep-research — Onyx AI deep research lessons — Official (vendor) — 2026-08-05
+[24] https://www.tinyfish.ai/blog/lessons-from-building-a-deep-research-system — TinyFish lessons — Independent (engineering blog) — 2026-08-05
+[25] https://research.perplexity.ai/articles/rethinking-search-as-code-generation — Perplexity search-as-code — Official (vendor) — 2026-08-05
+[26] https://cognition.ai/blog/dont-build-multi-agents — Cognition: don't build multi-agents — Independent (vendor opinion) — 2026-08-05
+[27] https://cognition.com/blog/multi-agents-working — Cognition: what's actually working — Independent (vendor follow-up) — 2026-08-05
+[28] https://blog.sourceshift.io/p/what-170-papers-agreed-on-about-deep-research-agents/ — Sourceshift 170-paper consensus — Independent (blog) — 2026-08-05
+[29] https://arxiv.org/html/2511.07327 — IterResearch (ICLR 2026) — Academic (peer-reviewed) — 2026-08-05
+[30] https://arxiv.org/abs/2408.03314 — Snell et al. test-time scaling (ICLR 2025) — Academic (peer-reviewed) — 2026-08-05
+[31] https://arxiv.org/html/2502.18080 — Thinking-Optimal (NeurIPS 2025) — Academic (peer-reviewed) — 2026-08-05
+[32] https://arxiv.org/html/2506.12928 — ATTS agentic test-time scaling — Academic (preprint) — 2026-08-05
+[33] https://aclanthology.org/2025.emnlp-main.22/ — DeepResearcher (EMNLP 2025) — Academic (peer-reviewed) — 2026-08-05
+[34] https://allenai.org/blog/dr-tulu — DR Tulu (Ai2) — Official (research org) — 2026-08-05
+[35] https://arxiv.org/html/2510.24701v2 — Tongyi DeepResearch mid-training — Academic (tech report) — 2026-08-05
+[36] https://arxiv.org/html/2509.10446v2 — DeepDive multi-turn RL (THUDM) — Academic (preprint) — 2026-08-05
+[37] https://arxiv.org/abs/2510.18939 — SLIM (COLM 2026) — Academic (peer-reviewed) — 2026-08-05
+[38] https://arxiv.org/abs/2607.20064 — PRO-LONG programmatic memory — Academic (preprint) — 2026-08-05
+[39] https://aclanthology.org/2026.findings-acl.930/ — ARC active context management — Academic (peer-reviewed) — 2026-08-05
+[40] https://arxiv.org/abs/2603.26993 — Ao et al. delegation reliability (MIT) — Academic (preprint) — 2026-08-05
+[41] https://arxiv.org/abs/2407.04503 — Perez et al. cultural attractors (ICLR 2025) — Academic (peer-reviewed) — 2026-08-05
+[42] https://arxiv.org/abs/2503.13657 — MAST multi-agent failure taxonomy (NeurIPS 2025) — Academic (peer-reviewed) — 2026-08-05
+[43] https://www.nature.com/articles/s42256-026-01268-y — Nature MI outgrow-collaboration — Academic (peer-reviewed) — 2026-08-05
+[44] https://arxiv.org/abs/2305.14325 — MAD debate (ICML 2024) — Academic (peer-reviewed) — 2026-08-05
+[45] https://aclanthology.org/2026.findings-acl.1694/ — Demystifying MAD (ACL 2026) — Academic (peer-reviewed) — 2026-08-05
+[46] https://arxiv.org/abs/2303.11366 — Reflexion (NeurIPS 2023) — Academic (peer-reviewed) — 2026-08-05
+[47] https://arxiv.org/abs/2607.28576 — Sample More, Reflect Less — Academic (preprint) — 2026-08-05
+[48] https://aclanthology.org/2026.acl-long.1636/ — Echo Trap (ACL 2026) — Academic (peer-reviewed) — 2026-08-05
+[49] https://arxiv.org/abs/2303.17651 — Self-Refine (NeurIPS 2023) — Academic (peer-reviewed) — 2026-08-05
+[50] https://aclanthology.org/2024.acl-long.826/ — Pride and Prejudice self-bias (ACL 2024) — Academic (peer-reviewed) — 2026-08-05
+[51] https://arxiv.org/abs/2310.04406 — LATS (ICML 2024) — Academic (peer-reviewed) — 2026-08-05
+[52] https://arxiv.org/abs/2203.11171 — Self-consistency (ICLR 2023) — Academic (peer-reviewed) — 2026-08-05
+[53] https://arxiv.org/html/2601.04888 — SmartSearch (SIGIR 2026) — Academic (peer-reviewed) — 2026-08-05
+[54] https://arxiv.org/html/2508.07956v1 — WebFilter RL operators — Academic (preprint) — 2026-08-05
+[55] https://arxiv.org/html/2510.20168 — DeepWideSearch width×depth — Academic (preprint) — 2026-08-05
+[56] https://arxiv.org/html/2602.16942 — SourceBench — Academic (preprint) — 2026-08-05
+[57] https://arxiv.org/html/2411.13154 — DMQR-RAG diversity — Academic (preprint) — 2026-08-05
+[58] https://proceedings.mlr.press/v235/lee24c.html — ReadAgent (ICML 2024) — Academic (peer-reviewed) — 2026-08-05
+[59] https://aclanthology.org/2026.findings-acl.1399.pdf — AutoSearch adaptive depth — Academic (peer-reviewed) — 2026-08-05
+[60] https://arxiv.org/html/2601.20975v1 — DeepSearchQA comprehensiveness — Academic (preprint) — 2026-08-05
+[61] https://aclanthology.org/2026.acl-long.950/ — Chaining the Evidence (ACL 2026) — Academic (peer-reviewed) — 2026-08-05
+[62] https://aclanthology.org/2026.acl-long.1586/ — DeepFact (ACL 2026) — Academic (peer-reviewed) — 2026-08-05
+[63] https://aclanthology.org/anthology-files/anthology-files/pdf/findings/2024.findings-acl.212.pdf — Chain-of-Verification (ACL 2024) — Academic (peer-reviewed) — 2026-08-05
+[64] https://arxiv.org/html/2510.10931v2 — Proof-of-Use tool-call hacking — Academic (preprint) — 2026-08-05
+[65] https://aclanthology.org/2026.acl-long.448/ — DREAM agentic evaluation (ACL 2026) — Academic (peer-reviewed) — 2026-08-05
+[66] https://arxiv.org/abs/2306.05685 — MT-Bench judge biases (NeurIPS 2023) — Academic (peer-reviewed) — 2026-08-05
+[67] https://aclanthology.org/2024.acl-long.511/ — FairEval position bias (ACL 2024) — Academic (peer-reviewed) — 2026-08-05
+[68] https://arxiv.org/abs/2410.12784 — JudgeBench (ICLR 2025) — Academic (peer-reviewed) — 2026-08-05
+[69] https://arxiv.org/html/2602.02219 — OMRON rubric position bias — Academic (preprint) — 2026-08-05
+[70] https://www.rand.org/pubs/research_reports/RRA4618-1.html — RAND autograder simplicity — Independent (research org) — 2026-08-05
+[71] https://arxiv.org/abs/2311.12983 — GAIA benchmark — Academic (peer-reviewed) — 2026-08-05
+[72] https://arxiv.org/abs/2501.14249 — HLE benchmark — Academic (peer-reviewed) — 2026-08-05
+[73] https://deepresearch-bench.github.io/ — DeepResearch Bench — Academic (peer-reviewed) — 2026-08-05
+[74] https://arxiv.org/html/2601.08536 — DeepResearch Bench II — Academic (preprint) — 2026-08-05
+[75] https://livedeepresearch.github.io/ — LiveResearchBench — Academic (preprint) — 2026-08-05
+[76] https://aclanthology.org/2026.acl-long.1023/ — BrowseComp-Plus (ACL 2026) — Academic (peer-reviewed) — 2026-08-05
+[77] https://arxiv.org/html/2605.24245v1 — WARP UGC poisoning — Academic (preprint) — 2026-08-05
+[78] https://arxiv.org/abs/2302.12173 — Greshake indirect prompt injection (ACM AISec 2023) — Academic (peer-reviewed) — 2026-08-05
+[79] https://arxiv.org/html/2505.14534 — Google DeepMind injection lessons — Academic (preprint) — 2026-08-05
+[80] https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/ — OWASP Agentic Top 10 — Independent (standards org) — 2026-08-05
+[81] https://arxiv.org/abs/2402.02716 — Understanding the Planning of LLM Agents (ACL 2024) — Academic (peer-reviewed) — 2026-08-05
+[82] https://arxiv.org/abs/2305.04091 — Plan-and-Solve (ACL 2023) — Academic (peer-reviewed) — 2026-08-05
+[83] https://arxiv.org/html/2605.28354 — PL-Search plan-before-search — Academic (preprint) — 2026-08-05
+[84] https://aclanthology.org/2025.emnlp-main.278/ — Select-Then-Decompose (EMNLP 2025) — Academic (peer-reviewed) — 2026-08-05
+[85] https://arxiv.org/html/2604.12147v1 — From Plan to Action plan compliance — Academic (preprint) — 2026-08-05
+[86] https://proceedings.mlr.press/v235/kambhampati24a.html — LLM-Modulo (ICML 2024) — Academic (peer-reviewed) — 2026-08-05
+[87] https://arxiv.org/html/2601.06007 — PwC agent caching study — Academic (preprint) — 2026-08-05
+[88] https://arxiv.org/html/2605.05701 — VOI dual-budget control — Academic (preprint) — 2026-08-05
+[89] https://arxiv.org/html/2502.00409v2 — Doing More with Less routing survey — Academic (preprint) — 2026-08-05
+[90] https://arxiv.org/html/2602.06540 — AgentCPM-Report interleaved drafting — Academic (preprint) — 2026-08-05
+[91] https://arxiv.org/html/2509.13312v2 — WebWeaver dynamic outlines — Academic (preprint) — 2026-08-05
+[92] https://arxiv.org/pdf/2606.20122v1 — ScaffoldAgent outline optimization — Academic (preprint) — 2026-08-05
+[93] https://github.com/langchain-ai/open_deep_research — LangChain open deep research (12.5k★) — Community (code) — 2026-08-05
+[94] https://github.com/dzhng/deep-research — dzhng/deep-research (19.4k★) — Community (code) — 2026-08-05
+[95] https://github.com/anthropics/claude-agent-sdk-demos/tree/main/research-agent — Anthropic research-agent demo — Official (code) — 2026-08-05
+[96] https://github.com/openai/openai-agents-python/tree/main/examples/research_bot — OpenAI Agents SDK research example — Official (code) — 2026-08-05
+[97] https://github.com/timaliev/pi-deep-research — timaliev/pi-deep-research — Community (code) — 2026-08-05
+[98] https://github.com/czhiming-maker/pi-deep-research — czhiming-maker/pi-deep-research — Community (code) — 2026-08-05
+[99] https://github.com/Ayanami0730/deep_research_bench — DeepResearch Bench code — Academic (code) — 2026-08-05
+[100] https://github.com/OthmanAdi/planning-with-files — planning-with-files — Community (code) — 2026-08-05
+[101] https://proceedings.neurips.cc/paper_files/paper/2023/file/b5c8c1c117618267944b2617add0a766-Paper-Conference.pdf — AdaPlanner (NeurIPS 2023) — Academic (peer-reviewed) — 2026-08-05
+[102] https://arxiv.org/html/2605.00560 — ReformIR: when more reformulations hurt — Academic (preprint) — 2026-08-05
+[103] https://dl.acm.org/doi/10.14778/2777598.2777603 — Knowledge-based Trust (VLDB 2015) — Academic (peer-reviewed) — 2026-08-05
+[104] https://www.vellum.ai/docs/key-concepts/web-search — Vellum web-search providers — Official (vendor docs) — 2026-08-05
+[105] https://github.com/sequelcore/kiln/blob/main/docs/research/web-retrieval-provider-routing.md — kiln provider-routing ADR — Community (ADR) — 2026-08-05
+[106] https://github.com/ronnieops/pi-search-multi — pi-search-multi (12 backends) — Community (code) — 2026-08-05
+[107] https://arxiv.org/html/2607.09678v1 — Faithful, Not Corrective (relay testbed) — Academic (preprint) — 2026-08-05
+[108] https://arxiv.org/html/2311.17371v3 — Should we be going MAD? (ICML 2024) — Academic (peer-reviewed) — 2026-08-05
+[109] https://arxiv.org/html/2606.02646v1 — Ringelmann effect in multi-agent LLM systems — Academic (preprint) — 2026-08-05
+[110] https://www.langchain.com/blog/deep-agents-0-6 — LangChain Deep Agents 0.6 (delta channels) — Official (vendor) — 2026-08-05
+[111] https://proceedings.neurips.cc/paper_files/paper/2025/file/a309239c11a28c597d050bd4a1752d32-Paper-Conference.pdf — Rating indeterminacy (NeurIPS 2025) — Academic (peer-reviewed) — 2026-08-05
+[112] https://doi.org/10.48550/arxiv.2606.19544 — Reliability without Validity (541k judgments) — Academic (preprint) — 2026-08-05
+[113] https://hal.cs.princeton.edu/gaia — HAL GAIA leaderboard — Independent (verified leaderboard) — 2026-08-05
+[114] https://aclanthology.org/2026.acl-srw.82/ — ReAct variants under token budgets (ACL 2026 SRW) — Academic (peer-reviewed) — 2026-08-05
+[115] https://tokencost.app/blog/openai-deep-research-api-pricing — TokenCost OpenAI DR pricing (low-cred) — Independent (blog, Cred 2) — 2026-08-05
+[116] https://www.brianletort.ai/blog/llm-os-modes-part-4-deep-research — Brian Letort deep-research teardown (low-cred) — Independent (blog, Cred 2-3) — 2026-08-05
+[117] https://developers.googleblog.com/gemini-2-5-models-now-support-implicit-caching/ — Gemini implicit caching — Official (vendor) — 2026-08-05
+[118] https://arxiv.org/html/2409.13373 — LLMs Still Can't Plan; Can LRMs? — Academic (preprint) — 2026-08-05
+[119] https://blog.grep.ai/blog/building-grep-deep-research — Grep morphing-agent retrospective — Independent (vendor blog) — 2026-08-05
+[120] https://dreaming.press/posts/2026-06-24-parallel-vs-sequential-tool-calling.html — Parallel vs sequential tool calling critique — Independent (blog, Cred 2) — 2026-08-05
+[121] https://openrouter.ai/openai/o4-mini-deep-research — o4-mini-deep-research pricing — Independent (vendor mirror) — 2026-08-05
+[122] https://arxiv.org/html/2601.20843 — Deep Researcher Reflect Evolve (sequential plan refinement) — Academic (preprint) — 2026-08-05
+[123] https://openai.com/index/deep-research-system-card/ — OpenAI Deep Research system card (page) — Official (vendor) — 2026-08-05
+[124] https://aiworkflowlab.dev/article/parallel-tool-calls-openai-anthropic-gemini-2026 — Parallel tool calls comparison (Cred 2) — Independent (blog) — 2026-08-05
+[125] https://tianpan.co/blog/2026-04-10-parallel-tool-calls-hidden-coupling — Parallel tool-call coupling analysis (Cred 3) — Independent (blog) — 2026-08-05
+> Retrieval date: 2026-08-05. ~125 key sources listed; full corpus (~175 unique) in research/notes.md with per-claim confidence and credibility.

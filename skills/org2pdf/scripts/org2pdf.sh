@@ -63,6 +63,7 @@ emacs --batch --kill -l ox-latex --eval '(progn
   (quote (("" "inputenc" t) ("" "fontenc" t) ("" "graphicx" t)
           ("" "longtable" t) ("" "url" t) ("" "amsmath" t) ("" "hyperref" nil))))
 (setq org-latex-packages-alist nil)
+(setq org-export-with-broken-links t)
 (find-file (getenv "ORG2PDF_INPUT")) (org-latex-export-to-latex))' >/dev/null
 
 [[ -f "$TEX" ]] || {
@@ -73,6 +74,7 @@ emacs --batch --kill -l ox-latex --eval '(progn
 # 2) minimal-texlive compatibility patch
 python3 - "$TEX" <<'PYEOF'
 import sys
+import re
 
 path = sys.argv[1]
 src = open(path, encoding="utf-8").read()
@@ -90,6 +92,10 @@ fix = r"""
 if "labelitemi" not in src:
     src = src.replace("\\begin{document}", fix + "\n\\begin{document}", 1)
 
+# org strikethrough (bare +...+ in prose, e.g. "+20.6%") exports as \sout{};
+# the soul package is absent on minimal texlive -> strip non-nested spans.
+src = re.sub(r"\\sout\{([^{}]*)\}", r"\1", src)
+
 # org escapes literal $ as \$; on minimal installs \$ -> textcomp/tcrm.
 # Replace with raw OT1 char 36 (renders $, no TS1 needed).
 src = src.replace("\\$", "\\char36{}")
@@ -102,6 +108,8 @@ table = {
     "\u2248": "$\\approx$",      # ~=
     "\u03c4": "$\\tau$",         # tau
     "\u03b3": "$\\gamma$",       # gamma
+    "\u03b2": "$\\beta$",         # beta
+    "\u2194": "$\\leftrightarrow$",  # <->
     "\u2605": "*",               # star
     "\u2153": "1/3",             # one third
     "\u2026": "\\ldots{}",       # ...
@@ -109,6 +117,11 @@ table = {
     "\u2014": "---",             # em dash
     "\u2013": "--",              # en dash
     "\u00a7": "S",               # section sign
+    "\u2264": "$\\leq$",           # <=
+    "\u2265": "$\\geq$",           # >=
+    "\u226a": "$\\ll$",            # <<
+    "\u26a0": "!",                # warning sign (avoid [..]: breaks in table cells)
+    "\u2713": "OK",              # checkmark
 }
 for u, r in table.items():
     src = src.replace(u, r)

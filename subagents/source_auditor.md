@@ -1,7 +1,7 @@
 ---
 name: source_auditor
 description: Rate all sources used in research — flag low-quality sources, suggest replacements
-model: fast
+model: nvidia_NVIDIA-Nemotron-Nano-9B-v2-GGUF-Q4_K_M
 thinking: low
 tools: read,grep,find,ls,web_lookup,fetch_web
 access: read

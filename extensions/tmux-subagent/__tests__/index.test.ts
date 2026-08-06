@@ -591,6 +591,11 @@ describe("renderProgress", () => {
 		expect(result).toContain("1 succeeded");
 		expect(result).toContain("1 running");
 		expect(result).toContain("1 failed");
+		expect(result).toContain("task-1 (worker) [gpt-4o] succeeded");
+		expect(result).toContain("task-2 (reviewer) [gpt-4o] running");
+		expect(result).toContain("task-3 (tester) [gpt-4o] failed");
+		expect(result).toContain("1 running");
+		expect(result).toContain("1 failed");
 	});
 
 	it("shows 'starting' when no statuses", () => {
@@ -611,6 +616,7 @@ describe("renderProgress", () => {
 
 		const result = renderProgress("session", statuses);
 		expect(result).toContain("1 running");
+		expect(result).toContain("task-1 (worker) [gpt-4o] running");
 	});
 });
 
@@ -628,7 +634,9 @@ describe("renderResults", () => {
 		];
 
 		const result = renderResults(statuses, null);
-		expect(result).toContain("=== worker / task-1 (succeeded) ===");
+		expect(result).toContain(
+			"=== worker / task-1 (succeeded) — model: gpt-4o ===",
+		);
 		expect(result).toContain("Done!");
 	});
 
@@ -646,7 +654,9 @@ describe("renderResults", () => {
 		];
 
 		const result = renderResults(statuses, null);
-		expect(result).toContain("=== worker / task-1 (failed) ===");
+		expect(result).toContain(
+			"=== worker / task-1 (failed) — model: gpt-4o ===",
+		);
 		expect(result).toContain("Something broke");
 		expect(result).toContain("Partial output:\nPartial");
 	});
@@ -703,8 +713,12 @@ describe("renderResults", () => {
 		];
 
 		const result = renderResults(statuses, null);
-		expect(result).toContain("=== worker / task-1 (succeeded) ===");
-		expect(result).toContain("=== reviewer / task-2 (failed) ===");
+		expect(result).toContain(
+			"=== worker / task-1 (succeeded) — model: gpt-4o ===",
+		);
+		expect(result).toContain(
+			"=== reviewer / task-2 (failed) — model: gpt-4o ===",
+		);
 	});
 });
 

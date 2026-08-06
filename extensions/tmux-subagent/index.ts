@@ -257,15 +257,26 @@ export function renderProgress(
 	const summary = Object.entries(counts)
 		.map(([state, count]) => `${count} ${state}`)
 		.join(", ");
-	return `Tmux session: ${session}\nAttach: tmux attach -t ${session}\nProgress: ${summary || "starting"}`;
+	const detail = statuses
+		.map(
+			(status) =>
+				`  ${status.taskId} (${status.agent}) [${status.model}] ${status.state}`,
+		)
+		.join("\n");
+	return `Tmux session: ${session}\nAttach: tmux attach -t ${session}\nProgress: ${summary || "starting"}\n${detail}`;
 }
 
 export function renderResults(
 	statuses: TaskStatus[],
 	artifactsPath: string | null,
+	prompts?: Record<string, { system: string; task: string }>,
 ): string {
 	const sections = statuses.map((status) => {
-		const heading = `=== ${status.agent} / ${status.taskId} (${status.state}) ===`;
+		const heading = `=== ${status.agent} / ${status.taskId} (${status.state}) — model: ${status.model} ===`;
+		const prompt = prompts?.[status.taskId];
+		const promptSection = prompt
+			? `Prompt sent:\n${truncateResult(`# System\n${prompt.system}\n\n# Task\n${prompt.task}`)}`
+			: "";
 		const body =
 			status.state === "succeeded"
 				? status.result || "(no output)"
@@ -275,7 +286,7 @@ export function renderResults(
 					]
 						.filter(Boolean)
 						.join("\n\n") || "(no output)";
-		return `${heading}\n${truncateResult(body)}`;
+		return `${heading}\n${promptSection}${promptSection ? "\n\n" : ""}${truncateResult(body)}`;
 	});
 	if (artifactsPath) sections.push(`Artifacts retained at: ${artifactsPath}`);
 	return sections.join("\n\n");
@@ -478,6 +489,10 @@ export default function (pi: ExtensionAPI) {
 			const runner = getRunnerInvocation();
 			const piInvocation = getPiInvocation();
 			const requests: RunnerRequest[] = [];
+			const promptContents = new Map<
+				string,
+				{ system: string; task: string }
+			>();
 			const statuses: TaskStatus[] = prepared.map(
 				(item: (typeof prepared)[number]) => ({
 					taskId: item.taskId,
@@ -540,8 +555,13 @@ export default function (pi: ExtensionAPI) {
 					await fs.promises.writeFile(promptPath, item.profile.systemPrompt, {
 						mode: 0o600,
 					});
-					await fs.promises.writeFile(taskPath, buildTaskPrompt(item.task), {
+					const taskPrompt = buildTaskPrompt(item.task);
+					await fs.promises.writeFile(taskPath, taskPrompt, {
 						mode: 0o600,
+					});
+					promptContents.set(item.taskId, {
+						system: item.profile.systemPrompt,
+						task: taskPrompt,
 					});
 					const request: RunnerRequest = {
 						taskId: item.taskId,
@@ -649,7 +669,11 @@ export default function (pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: renderResults(statuses, details.artifactsPath),
+							text: renderResults(
+								statuses,
+								details.artifactsPath,
+								Object.fromEntries(promptContents),
+							),
 						},
 					],
 					details,

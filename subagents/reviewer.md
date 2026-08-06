@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Independent correctness, security, regression, and test review
-model: strong
+model: Qwen3.6-35B-A3B-MTP-GGUF
 thinking: high
 tools: read,bash,grep,find,ls
 access: shell

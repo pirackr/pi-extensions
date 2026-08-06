@@ -38,6 +38,9 @@ These bite on minimal texlive (`texlive-combined-basic`) and manifest as
 | `§` maps to `\S`/`\textsection` (TS1) | tcrm1095 error at the `§` | transliterate to plain `S` |
 | escaped dollar `\$` (org writes it for prices) is TS1-only in modern LaTeX | tcrm1095 error at any price, even correctly-escaped | replace `\$` with `\char36{}` (raw OT1 char, renders `$`) |
 | Unicode `→ × ≠ ≈ τ γ ★ ⅓ − …` | LaTeX error or wrong glyph | transliterate to LaTeX math/ASCII equivalents |
+| Unicode `≤ ≥ ≪ ⚠ ✓` | LaTeX error or wrong glyph (not in older table) | transliterate: `$\leq$`/`$\geq$`/`$\ll$` (cmsy), `!`/`OK` (bracket-free — `[!]` breaks in table cells) |
+| broken links (`[[URL][desc]]` or dangling org links) | emacs export aborts: "Unable to resolve link" | set `org-export-with-broken-links t`; broken links export as their description |
+| bare `+` signs in prose (e.g. `+20.6%`) | org reads `+...+` as strikethrough → `\sout{}` (soul absent) → undefined control sequence | strip non-nested `\sout{...}` spans in the patch step |
 | em/en dashes `— –` in some contexts | TS1 fallback attempts | convert to `---` / `--` |
 | `\textsubscript`/`\textsuperscript` inside a *heading* | tcrm error via PDF-bookmark processing | `\pdfstringdefDisableCommands{...}` neutralizes them for bookmarks |
 | `#+BEGIN_EXAMPLE` sources with long URLs | overfull hbox warnings (harmless) | accept; or `#+ATTR_LATEX: :font \footnotesize` on the block |

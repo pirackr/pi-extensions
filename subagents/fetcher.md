@@ -1,7 +1,7 @@
 ---
 name: fetcher
 description: Deep read of URLs — extracts full content, summarizes key findings, flags credibility
-model: fast
+model: gemma-4-26B-A4B-it-GGUF-UD-Q4_K_XL
 thinking: minimal
 tools: read,web_lookup,fetch_web
 access: read

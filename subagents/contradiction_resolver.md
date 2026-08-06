@@ -1,7 +1,7 @@
 ---
 name: contradiction_resolver
 description: Investigate and resolve contradictions between sources — returns resolution or flags as unresolved
-model: fast
+model: gpt-oss-20b-GGUF-Q4_K_M
 thinking: medium
 tools: read,grep,find,ls,web_lookup,fetch_web
 access: read

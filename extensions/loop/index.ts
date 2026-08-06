@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { countUniqueSourceUrls, effectiveSourceCount } from "./sources.ts";
 import { fileURLToPath } from "node:url";
 import type {
 	ExtensionAPI,
@@ -120,6 +121,19 @@ function tokenDelta(usage: unknown): number {
 		0,
 		num("input") + num("output") + num("cacheRead") + num("cacheWrite"),
 	);
+}
+// Count unique source URLs actually recorded in the run's notes.md, so the
+// checkpoint floor is grounded in real evidence rather than self-reported
+// totals (the documented optimism failure mode). null = can't verify.
+function countNotesSources(workingDir: string | undefined): number | null {
+	if (!workingDir) return null;
+	const notesPath = path.join(workingDir, "notes.md");
+	try {
+		if (!fs.existsSync(notesPath)) return null;
+		return countUniqueSourceUrls(fs.readFileSync(notesPath, "utf8"));
+	} catch {
+		return null;
+	}
 }
 function extractAssistantText(message: unknown): string {
 	if (!message || typeof message !== "object") return "";
@@ -691,7 +705,9 @@ export default function piLoop(pi: ExtensionAPI) {
 				};
 			}
 			const round = p.round ?? 0;
-			const sources = p.totalSources ?? 0;
+			const reported = p.totalSources ?? 0;
+			const counted = countNotesSources(loop?.workingDir);
+			const { sources, hint } = effectiveSourceCount(reported, counted);
 			const issues: string[] = [];
 			if (round < thresholds.minRounds) {
 				issues.push(`⛔ min rounds: ${round}/${thresholds.minRounds}`);
@@ -704,7 +720,7 @@ export default function piLoop(pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: `🟢 PROCEED (max rounds reached). Flag ${issues.length} gap(s) in Uncertainties & Gaps.`,
+							text: `🟢 PROCEED (max rounds reached). Flag ${issues.length} gap(s) in Uncertainties & Gaps.${hint}`,
 						},
 					],
 				};
@@ -714,7 +730,7 @@ export default function piLoop(pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: `🔴 CONTINUE — ${issues.join("; ")}`,
+							text: `🔴 CONTINUE — ${issues.join("; ")}${hint}`,
 						},
 					],
 				};
@@ -723,7 +739,7 @@ export default function piLoop(pi: ExtensionAPI) {
 				content: [
 					{
 						type: "text",
-						text: `🟢 PROCEED — criteria met.`,
+						text: `🟢 PROCEED — criteria met.${hint}`,
 					},
 				],
 			};

@@ -156,6 +156,101 @@ export function nextEvents(outputPath, state) {
 	return { events, state };
 }
 
+// ---------- stream rendering ----------
+
+const truncate = (s, n = 120) =>
+	typeof s === "string" && s.length > n ? s.slice(0, n) + "…" : s ?? "";
+
+export function summarizeArgs(args) {
+	if (!args || typeof args !== "object") return "";
+	const parts = [];
+	if (typeof args.query === "string") parts.push(`query="${truncate(args.query)}"`);
+	if (typeof args.url === "string") parts.push(`url=${truncate(args.url)}`);
+	if (typeof args.path === "string") parts.push(`path=${truncate(args.path)}`);
+	if (args.limit) parts.push(`limit=${args.limit}`);
+	if (args.engine) parts.push(`engine=${args.engine}`);
+	if (typeof args.command === "string") parts.push(`cmd=${truncate(args.command)}`);
+	return parts.join(" ");
+}
+
+export function summarizeResult(toolName, event) {
+	const result = event.result;
+	const details = result?.details;
+	if (event.isError) return `ERROR: ${result?.error ?? "tool failed"}`;
+	if (toolName === "web_lookup") {
+		const results = Array.isArray(details?.results) ? details.results : [];
+		const engines = details?.engines?.length
+			? details.engines.join(",")
+			: "none";
+		const head = results
+			.slice(0, 2)
+			.map((r) => `${r.title} — ${r.url}`)
+			.join(" | ");
+		const failures = details?.partialFailures?.length
+			? ` | failures: ${details.partialFailures.map((p) => p.engine).join(",")}`
+			: "";
+		return `${results.length} results [${engines}]${results.length ? " | " + truncate(head, 180) : ""}${failures}`;
+	}
+	if (toolName === "fetch_web") {
+		const text = result?.content?.map((c) => c.text ?? "").join("") ?? "";
+		return `"${truncate(details?.title ?? "(no title)", 80)}" ${text.length} chars`;
+	}
+	const text =
+		result?.content
+			?.map((c) => c.text ?? "")
+			.join(" ")
+			.replace(/\s+/g, " ")
+			.trim() ?? "";
+	return truncate(text || "(no content)", 160);
+}
+
+export function createStreamState(maxLines = 2000) {
+	return { lines: [], current: "", maxLines };
+}
+
+function pushLine(acc, line) {
+	acc.lines.push(line);
+	if (acc.lines.length > acc.maxLines) {
+		acc.lines.splice(0, acc.lines.length - acc.maxLines);
+	}
+}
+
+/** Fold one JSONL stream event into a renderable line buffer. */
+export function accumulate(acc, event) {
+	if (!event || typeof event !== "object") return;
+	if (event.type === "message_update") {
+		const delta = event.assistantMessageEvent?.delta;
+		if (typeof delta === "string" && delta) {
+			acc.current += delta;
+			let idx;
+			while ((idx = acc.current.indexOf("\n")) !== -1) {
+				pushLine(acc, acc.current.slice(0, idx));
+				acc.current = acc.current.slice(idx + 1);
+			}
+		}
+	} else if (event.type === "tool_execution_start") {
+		const name = event.toolName || event.toolCall?.name || "tool";
+		const args = event.args ?? event.toolCall?.arguments ?? {};
+		const summary = summarizeArgs(args);
+		pushLine(acc, `[${name}]${summary ? " " + summary : ""}`);
+	} else if (event.type === "tool_execution_end") {
+		const name = event.toolName || "tool";
+		pushLine(acc, `  ${summarizeResult(name, event)}`);
+	}
+}
+
+/** Re-render a task's entire jsonl as plain text (for the pager). */
+export function renderFullOutput(task) {
+	const tail = createTailState();
+	const stream = createStreamState(100000);
+	const { events } = nextEvents(task.outputPath, tail);
+	for (const event of events) accumulate(stream, event);
+	const lines = [...stream.lines];
+	if (stream.current) lines.push(stream.current);
+	if (tail.partial) lines.push(tail.partial);
+	return lines.join("\n") || "(no output)";
+}
+
 // ---------- run loading ----------
 
 /** Load a run's task metadata from its request files (paths, labels). */

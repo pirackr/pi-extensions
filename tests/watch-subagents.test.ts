@@ -12,6 +12,11 @@ import {
 	loadRun,
 	createTailState,
 	nextEvents,
+	createStreamState,
+	accumulate,
+	summarizeArgs,
+	summarizeResult,
+	renderFullOutput,
 } from "../tools/watch-subagents.mjs";
 
 let base: string;
@@ -258,5 +263,107 @@ describe("tailing", () => {
 		const { events } = nextEvents(file, state);
 		expect(events).toHaveLength(1);
 		expect(events[0].delta).toBe("rewritten");
+	});
+});
+describe("stream rendering", () => {
+	it("accumulate joins text deltas into lines and splits on newlines", () => {
+		const acc = createStreamState();
+		accumulate(acc, {
+			type: "message_update",
+			assistantMessageEvent: { delta: "Hel" },
+		});
+		accumulate(acc, {
+			type: "message_update",
+			assistantMessageEvent: { delta: "lo\nWorld" },
+		});
+		expect(acc.lines).toEqual(["Hello"]);
+		expect(acc.current).toBe("World");
+		accumulate(acc, {
+			type: "message_update",
+			assistantMessageEvent: { delta: "\n" },
+		});
+		expect(acc.lines).toEqual(["Hello", "World"]);
+		expect(acc.current).toBe("");
+	});
+
+	it("accumulate renders tool start and end lines", () => {
+		const acc = createStreamState();
+		accumulate(acc, {
+			type: "tool_execution_start",
+			toolName: "web_lookup",
+			args: { query: "mini pc prices", limit: 5 },
+		});
+		accumulate(acc, {
+			type: "tool_execution_end",
+			toolName: "web_lookup",
+			result: {
+				details: {
+					results: [{ title: "A", url: "https://a" }],
+					engines: ["exa"],
+				},
+			},
+		});
+		expect(acc.lines[0]).toContain('query="mini pc prices" limit=5');
+		expect(acc.lines[1]).toContain("1 results [exa]");
+	});
+
+	it("accumulate caps lines at maxLines", () => {
+		const acc = createStreamState(3);
+		for (let i = 0; i < 10; i++) {
+			accumulate(acc, {
+				type: "message_update",
+				assistantMessageEvent: { delta: `line${i}\n` },
+			});
+		}
+		expect(acc.lines).toEqual(["line7", "line8", "line9"]);
+	});
+
+	it("summarizeArgs handles strings, numbers and truncation", () => {
+		expect(summarizeArgs({ query: "hello", limit: 5 })).toBe('query="hello" limit=5');
+		expect(summarizeArgs({ query: "x".repeat(200) })).toContain("…");
+		expect(summarizeArgs(null)).toBe("");
+	});
+
+	it("summarizeResult reports errors and web results", () => {
+		expect(
+			summarizeResult("web_lookup", {
+				isError: true,
+				result: { error: "boom" },
+			}),
+		).toBe("ERROR: boom");
+		expect(
+			summarizeResult("web_lookup", {
+				result: { details: { results: [], engines: [] } },
+			}),
+		).toContain("0 results");
+	});
+
+	it("renderFullOutput renders the complete stream", () => {
+		const dir = path.join(base, "pi-subagent-full");
+		for (const sub of ["status", "output", "stderr", "request"]) {
+			fs.mkdirSync(path.join(dir, sub), { recursive: true });
+		}
+		fs.writeFileSync(
+			path.join(dir, "output", "task-1.jsonl"),
+			[
+				'{"type":"message_update","assistantMessageEvent":{"delta":"hello"}}',
+				'{"type":"tool_execution_start","toolName":"read","args":{"path":"a.ts"}}',
+				'{"type":"message_update","assistantMessageEvent":{"delta":"\\nworld"}}',
+				"",
+			].join("\n"),
+		);
+		const task = {
+			taskId: "task-1",
+			agent: "scout",
+			model: "m",
+			cwd: "",
+			statusPath: path.join(dir, "status", "task-1.json"),
+			outputPath: path.join(dir, "output", "task-1.jsonl"),
+			stderrPath: path.join(dir, "stderr", "task-1.log"),
+		};
+		const text = renderFullOutput(task);
+		expect(text).toContain("hello");
+		expect(text).toContain("[read] path=a.ts");
+		expect(text).toContain("world");
 	});
 });

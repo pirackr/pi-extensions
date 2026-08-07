@@ -5,7 +5,7 @@ model: XYZAILab_XYZ-Aquila-mini-GGUF-Q4_K_M
 thinking: high
 tools: read,grep,find,ls,web_lookup,fetch_web
 access: read
-timeoutSeconds: 240
+timeoutSeconds: 960
 ---
 
 You are a research scout performing broad information gathering.

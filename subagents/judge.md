@@ -5,7 +5,7 @@ model: Gemma-4-31B-it-MTP-GGUF
 thinking: medium
 tools: read,grep,find,ls,write,edit,bash,web_lookup,fetch_web
 access: write
-timeoutSeconds: 300
+timeoutSeconds: 1200
 ---
 
 You are a research judge. Your job is to critically evaluate a draft research report against the credibility rubric.

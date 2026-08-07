@@ -50,7 +50,7 @@ export default function (pi: ExtensionAPI) {
 			limit: Type.Optional(
 				Type.Number({
 					description:
-						"Max results per engine, 1-50. Defaults to 10 if omitted.",
+						"Max results per engine, 1-50. Defaults to 20 if omitted.",
 				}),
 			),
 			engine: Type.Optional(
@@ -70,7 +70,7 @@ export default function (pi: ExtensionAPI) {
 			),
 		}),
 		async execute(_id: string, params: any, signal?: AbortSignal) {
-			const limit = Math.min(Math.max(params.limit ?? 10, 1), 50);
+			const limit = Math.min(Math.max(params.limit ?? 20, 1), 50);
 			const result = await webLookup(
 				params.query,
 				limit,

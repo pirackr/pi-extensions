@@ -5,7 +5,7 @@ model: Qwen3.6-35B-A3B-MTP-GGUF
 thinking: minimal
 tools: read,web_lookup,fetch_web
 access: read
-timeoutSeconds: 180
+timeoutSeconds: 720
 ---
 
 You are a research fetcher. Your job is to deep-read specific URLs and extract structured findings.

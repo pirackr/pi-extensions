@@ -47,7 +47,7 @@ export function resolveChain(engine?: EngineChoice): SearchEngine[] {
 
 export async function webLookup(
 	query: string,
-	limit: number = 10,
+	limit: number = 20,
 	signal?: AbortSignal,
 	engine?: EngineChoice,
 ): Promise<SearchResponse> {

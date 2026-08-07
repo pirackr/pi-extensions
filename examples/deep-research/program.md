@@ -214,7 +214,7 @@ run_subagents({
     },
     // ... more scouts, same agent, different objective
   ],
-  timeout_seconds: 240,
+  timeout_seconds: 960,
   retain_artifacts: "on_failure"
 })
 ```
@@ -240,7 +240,7 @@ run_subagents({
     expected_output: "One-line summary: scores, unique URL count, contradictions, gaps",
     constraints: ["Do not run in parallel with other agents.", "Do not delegate.", "Prune notes.md hard each round: delete stale search-result dumps and collapse redundant claims; keep it under ~250 lines. A bloated notes.md slows every later merge and causes timeouts."]
   }],
-  timeout_seconds: 300,
+  timeout_seconds: 1200,
   retain_artifacts: "on_failure"
 })
 ```
@@ -265,7 +265,7 @@ run_subagents({
     }
     // ... one task per fragment
   ],
-  timeout_seconds: 240,
+  timeout_seconds: 960,
   retain_artifacts: "on_failure"
 })
 ```
@@ -281,7 +281,7 @@ run_subagents({
     expected_output: "report.org assembled from all fragments with every required section",
     constraints: ["Do not rewrite fragment prose.", "Every section of the structure spec present.", "Do not delegate."]
   }],
-  timeout_seconds: 300,
+  timeout_seconds: 1200,
   retain_artifacts: "on_failure"
 })
 ```
@@ -302,7 +302,7 @@ After the main research rounds, run a verification pass:
        inputs: ["docs/006-deep-research-spec.md (Section 4.3 — judge rubric)"],
        expected_output: "Judge verdict with score, verdict, and required fixes"
      }],
-     timeout_seconds: 300,
+     timeout_seconds: 1200,
      retain_artifacts: "on_failure"
    })
    ```

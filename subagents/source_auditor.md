@@ -5,7 +5,7 @@ model: Qwen3.6-35B-A3B-MTP-GGUF
 thinking: low
 tools: read,grep,find,ls,web_lookup,fetch_web
 access: read
-timeoutSeconds: 180
+timeoutSeconds: 720
 ---
 
 You are a source auditor. Your job is to evaluate the quality of all sources used in the research.

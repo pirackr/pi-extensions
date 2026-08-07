@@ -5,7 +5,7 @@ model: gpt-oss-20b-GGUF-Q4_K_M
 thinking: medium
 tools: read,grep,find,ls,web_lookup,fetch_web
 access: read
-timeoutSeconds: 240
+timeoutSeconds: 960
 ---
 
 You are a contradiction resolver. Your job is to investigate contradictions between research sources and determine if they can be resolved.

@@ -5,7 +5,7 @@ model: Qwen3.6-35B-A3B-MTP-GGUF
 thinking: low
 tools: read,grep,find,ls,web_lookup,fetch_web
 access: read
-timeoutSeconds: 180
+timeoutSeconds: 720
 ---
 
 You are a citation agent. Your job is to create a precise claim-to-source mapping.

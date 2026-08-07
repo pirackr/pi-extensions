@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
+import * as readline from "node:readline";
 
 export const LIVE_STATES = new Set(["starting", "running"]);
 export const TERMINAL_STATES = new Set([
@@ -554,15 +556,232 @@ export function applyTuiStyles(text, titles) {
 	return lines.join("\n");
 }
 
-// ---------- entry guard (TUI main lands in Task 8) ----------
+// ---------- TUI ----------
+
+const REFRESH_MS = 500;
+const TICK_MS = 1000;
+
+function enterTui() {
+	process.stdout.write("\x1b[?1049h\x1b[?25l"); // alternate screen, hide cursor
+	process.stdin.setRawMode(true);
+	process.stdin.resume();
+}
+
+function restoreTerminal() {
+	process.stdout.write("\x1b[?25h\x1b[?1049l"); // show cursor, leave alt screen
+	try {
+		process.stdin.setRawMode(false);
+	} catch {
+		// stdin not a TTY
+	}
+	process.stdin.pause();
+}
+
+async function chooseRun(runs) {
+	if (runs.length <= 1) return runs[0] || null;
+	if (!process.stdin.isTTY) return runs[0];
+	const rl = readline.createInterface({
+		input: process.stdin,
+		output: process.stdout,
+	});
+	process.stdout.write(
+		listRunsText(runs) +
+			`\n\nSelect run 1-${runs.length} (Enter = most recent): `,
+	);
+	return new Promise((resolve) => {
+		rl.question("", (answer) => {
+			rl.close();
+			const n = parseInt(answer.trim(), 10);
+			if (Number.isNaN(n) || n < 1 || n > runs.length) resolve(runs[0]);
+			else resolve(runs[n - 1]);
+		});
+	});
+}
+
+function runProcess(cmd, args) {
+	return new Promise((resolve) => {
+		let child;
+		try {
+			child = spawn(cmd, args, { stdio: "inherit" });
+		} catch {
+			resolve();
+			return;
+		}
+		child.on("exit", () => resolve());
+		child.on("error", () => resolve());
+	});
+}
+
+function runPager(text) {
+	return new Promise((resolve) => {
+		const child = spawn("less", ["-R"], {
+			stdio: ["pipe", "inherit", "inherit"],
+		});
+		child.on("exit", () => resolve());
+		child.on("error", () => {
+			process.stdout.write(text + "\n");
+			resolve();
+		});
+		child.stdin.on("error", () => {});
+		child.stdin.write(text);
+		child.stdin.end();
+	});
+}
+
+async function openTask(run, task) {
+	restoreTerminal();
+	const status = task.status;
+	const isLive = !status || LIVE_STATES.has(status.state);
+	if (isLive) {
+		await runProcess("tmux", ["attach", "-t", run.session]);
+	} else {
+		await runPager(renderFullOutput(task));
+	}
+	enterTui();
+}
+
+async function tui(runInfo) {
+	const run = loadRun(runInfo.dir);
+	const tailers = new Map();
+	const streams = new Map();
+	for (const task of run.tasks) {
+		tailers.set(task.taskId, createTailState());
+		streams.set(task.taskId, createStreamState());
+	}
+	let selected = 0;
+	let paused = false;
+	let live = runInfo.live;
+	let lastDraw = 0;
+
+	const onExit = () => {
+		restoreTerminal();
+		process.exit(0);
+	};
+	process.on("SIGINT", onExit);
+	process.on("SIGTERM", onExit);
+	if (process.stdout.on) process.stdout.on("resize", () => tick(true));
+	enterTui();
+
+	let keyBuf = "";
+	const n = run.tasks.length;
+	const tick = (force = false) => {
+		let changed = false;
+		if (!paused) {
+			for (const task of run.tasks) {
+				task.status = readStatus(task.statusPath);
+				const { events } = nextEvents(
+					task.outputPath,
+					tailers.get(task.taskId),
+				);
+				for (const event of events)
+					accumulate(streams.get(task.taskId), event);
+				if (events.length) changed = true;
+			}
+			live = run.tasks.some((task) => {
+				const s = task.status;
+				return !s || LIVE_STATES.has(s.state);
+			});
+		}
+		const now = Date.now();
+		if (paused && !force) return; // paused: only redraw on explicit keys
+		if (!changed && !force && now - lastDraw < TICK_MS) return;
+		lastDraw = now;
+		const [w, h] = process.stdout.getWindowSize
+			? process.stdout.getWindowSize()
+			: [80, 24];
+		const { text, titles } = renderFrame({
+			run,
+			streams,
+			selected,
+			paused,
+			live,
+			width: Math.max(1, w),
+			height: Math.max(1, h),
+		});
+		process.stdout.write("\x1b[H" + applyTuiStyles(text, titles));
+	};
+
+	process.stdin.on("data", (chunk) => {
+		keyBuf += chunk.toString();
+		while (keyBuf.length > 0) {
+			if (keyBuf.startsWith("\x1b[A") || keyBuf.startsWith("\x1b[B")) {
+				const up = keyBuf.startsWith("\x1b[A");
+				keyBuf = keyBuf.slice(3);
+				selected = up ? (selected - 1 + n) % n : (selected + 1) % n;
+				tick(true);
+				continue;
+			}
+			const ch = keyBuf[0];
+			keyBuf = keyBuf.slice(1);
+			if (ch === "q") {
+				onExit();
+			} else if (ch === "r") {
+				paused = !paused;
+				tick(true);
+			} else if (ch === "j") {
+				selected = (selected + 1) % n;
+				tick(true);
+			} else if (ch === "k") {
+				selected = (selected - 1 + n) % n;
+				tick(true);
+			} else if (ch === "\r" || ch === "\n") {
+				openTask(run, run.tasks[selected]).then(() => tick(true));
+			}
+		}
+	});
+
+	tick(true);
+	setInterval(() => tick(false), REFRESH_MS);
+}
+
+async function main(argv) {
+	const args = argv.slice(2);
+	if (args.includes("-l") || args.includes("--list")) {
+		process.stdout.write(listRunsText(findRuns()) + "\n");
+		return;
+	}
+	if (args.includes("-h") || args.includes("--help")) {
+		process.stdout.write(
+			"usage: watch-subagents [-l] [<session-suffix> | <run-dir>]\n" +
+				"  no args  pick most recent run (picker when several)\n" +
+				"  -l       list runs and exit\n" +
+				"  <suffix> match a pi-subagent-* session name\n" +
+				"  <dir>    replay a retained artifacts dir\n",
+		);
+		return;
+	}
+	const target = args[0];
+	let runInfo;
+	if (target) {
+		const resolved = resolveRunArg(target);
+		if (resolved.error) {
+			process.stderr.write(resolved.error + "\n");
+			process.exit(2);
+		}
+		runInfo = resolved.run;
+	} else {
+		const runs = findRuns();
+		if (runs.length === 0) {
+			process.stderr.write(
+				"No subagent runs found.\n" +
+					'Start one with run_subagents, or pass a retained artifacts dir (retain_artifacts: "always").\n',
+			);
+			process.exit(1);
+		}
+		runInfo = await chooseRun(runs);
+	}
+	if (!runInfo) process.exit(1);
+	await tui(runInfo);
+}
 
 const isMainModule =
 	process.argv[1] === fileURLToPath(import.meta.url) ||
 	process.argv[1]?.endsWith("/tools/watch-subagents.mjs");
 
 if (isMainModule) {
-	import("./main.ts").catch(() => {
-		process.stderr.write("TUI not yet implemented (Task 8).\n");
+	main(process.argv).catch((error) => {
+		restoreTerminal();
+		process.stderr.write((error && error.message) || String(error) + "\n");
 		process.exit(1);
 	});
 }

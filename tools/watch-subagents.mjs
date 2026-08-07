@@ -329,8 +329,47 @@ export function formatAge(ms) {
 	const s = Math.floor(ms / 1000);
 	if (s < 60) return `${s}s`;
 	const m = Math.floor(s / 60);
-	if (m < 60) return `${m}m`;
+	if (m < 60) return `${m}m${s % 60}s`;
 	return `${Math.floor(m / 60)}h${m % 60}m`;
+}
+
+export function formatDuration(startedAt, finishedAt) {
+	const start = Date.parse(startedAt || "");
+	if (Number.isNaN(start)) return "–";
+	const end = finishedAt ? Date.parse(finishedAt) : Date.now();
+	if (Number.isNaN(end)) return "–";
+	return formatAge(end - start);
+}
+
+export function formatTokens(n) {
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+	return String(n);
+}
+
+export function aggregateStats(statuses) {
+	const counts = {};
+	let totalTokens = 0;
+	let totalCost = 0;
+	let turns = 0;
+	for (const status of statuses) {
+		if (!status) continue;
+		counts[status.state] = (counts[status.state] || 0) + 1;
+		totalTokens += status.usage?.totalTokens || 0;
+		totalCost += status.usage?.cost?.total || 0;
+		turns += status.usage?.turns || 0;
+	}
+	return { counts, totalTokens, totalCost, turns };
+}
+
+export function formatStatus(task) {
+	const status = task.status;
+	const state = status?.state || "unknown";
+	const elapsed = formatDuration(status?.startedAt, status?.finishedAt);
+	const tokens = status?.usage?.totalTokens
+		? ` · ${formatTokens(status.usage.totalTokens)} tok`
+		: "";
+	return `${task.taskId} · ${task.agent} · ${state.toUpperCase()} · ${elapsed}${tokens}`;
 }
 
 // ---------- entry guard (TUI main lands in Task 8) ----------

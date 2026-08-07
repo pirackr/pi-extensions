@@ -17,6 +17,11 @@ import {
 	summarizeArgs,
 	summarizeResult,
 	renderFullOutput,
+	formatAge,
+	formatDuration,
+	formatTokens,
+	aggregateStats,
+	formatStatus,
 } from "../tools/watch-subagents.mjs";
 
 let base: string;
@@ -365,5 +370,68 @@ describe("stream rendering", () => {
 		expect(text).toContain("hello");
 		expect(text).toContain("[read] path=a.ts");
 		expect(text).toContain("world");
+	});
+});
+describe("formatting", () => {
+	it("formatAge handles seconds, minutes, hours", () => {
+		expect(formatAge(42_000)).toBe("42s");
+		expect(formatAge(3 * 60_000 + 12_000)).toBe("3m12s");
+		expect(formatAge(65 * 60_000)).toBe("1h5m");
+		expect(formatAge(-5)).toBe("0s");
+	});
+
+	it("formatDuration uses finishedAt when given, else now", () => {
+		const start = "2026-08-07T10:00:00Z";
+		const end = "2026-08-07T10:03:12Z";
+		expect(formatDuration(start, end)).toBe("3m12s");
+		expect(formatDuration(undefined, end)).toBe("–");
+		expect(formatDuration("garbage")).toBe("–");
+	});
+
+	it("formatTokens", () => {
+		expect(formatTokens(856)).toBe("856");
+		expect(formatTokens(21_400)).toBe("21.4k");
+		expect(formatTokens(1_200_000)).toBe("1.2M");
+	});
+
+	it("aggregateStats sums tokens, cost and counts states", () => {
+		const statuses = [
+			{
+				state: "running",
+				usage: { totalTokens: 1000, cost: { total: 0.01 }, turns: 2 },
+			},
+			{
+				state: "succeeded",
+				usage: { totalTokens: 500, cost: { total: 0.005 }, turns: 1 },
+			},
+			null,
+			{ state: "running" },
+		];
+		const stats = aggregateStats(statuses);
+		expect(stats.counts).toEqual({ running: 2, succeeded: 1 });
+		expect(stats.totalTokens).toBe(1500);
+		expect(stats.totalCost).toBeCloseTo(0.015);
+		expect(stats.turns).toBe(3);
+	});
+
+	it("formatStatus includes state, duration and tokens", () => {
+		const task = {
+			taskId: "task-2",
+			agent: "scout",
+			model: "m",
+			cwd: "",
+			statusPath: "",
+			outputPath: "",
+			stderrPath: "",
+			status: {
+				state: "running",
+				startedAt: new Date(Date.now() - 84_000).toISOString(),
+				usage: { totalTokens: 21_400 },
+			},
+		};
+		const line = formatStatus(task);
+		expect(line).toContain("task-2 · scout · RUNNING");
+		expect(line).toContain("1m24s");
+		expect(line).toContain("21.4k tok");
 	});
 });

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { loadSubagentConfiguration } from "./config.ts";
+import { renderSummaryResults } from "./render.ts";
 
 const MAX_RESULT_BYTES = 50 * 1024;
 const POLL_INTERVAL_MS = 250;
@@ -55,6 +56,7 @@ export interface RunSubagentsParams {
 	tasks: TaskItem[];
 	timeout_seconds?: number;
 	retain_artifacts?: string;
+	return_mode?: "full" | "summary";
 }
 
 export interface TaskStatus {
@@ -291,7 +293,6 @@ export function renderResults(
 	if (artifactsPath) sections.push(`Artifacts retained at: ${artifactsPath}`);
 	return sections.join("\n\n");
 }
-
 export function delay(ms: number, signal?: AbortSignal): Promise<void> {
 	return new Promise((resolve, reject) => {
 		let timer: NodeJS.Timeout;
@@ -380,6 +381,12 @@ export default function (pi: ExtensionAPI) {
 				description: `Artifact policy: "never", "on_failure", or "always"; configured default is "${config.retainArtifacts}"`,
 			}),
 		),
+		return_mode: Type.Optional(
+			Type.Union([Type.Literal("full"), Type.Literal("summary")], {
+				description:
+					'"full" (default) returns each agent\'s complete output plus the prompts sent. "summary" returns a ~600-char digest per agent and paths to the full outputs — pair with retain_artifacts: "always" so full outputs stay on disk (research loops).',
+			}),
+		),
 	});
 
 	pi.registerTool({
@@ -389,11 +396,14 @@ export default function (pi: ExtensionAPI) {
 			"Run one or more independently scoped Pi agents in visible tmux windows. " +
 			"Use one task for single-agent delegation or multiple non-overlapping tasks for parallel work. " +
 			"The tool owns process isolation, timeouts, cancellation, status capture, and cleanup; chaining remains parent-driven. " +
-			`Configured profiles: ${profileSummary}. User configuration: ${userConfigPath}`,
+			`Configured profiles: ${profileSummary}. User configuration: ${userConfigPath}. For research loops: pass return_mode: "summary" with retain_artifacts: "always" to keep the coordinator context thin — the tool returns digests plus artifact paths, and full outputs stay on disk.`,
 		parameters: Params,
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const typedParams = params as RunSubagentsParams;
+			const returnMode = (typedParams.return_mode ?? "full") as
+				| "full"
+				| "summary";
 			if (
 				typedParams.tasks.length === 0 ||
 				typedParams.tasks.length > config.maxTasks
@@ -669,11 +679,14 @@ export default function (pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: renderResults(
-								statuses,
-								details.artifactsPath,
-								Object.fromEntries(promptContents),
-							),
+							text:
+								returnMode === "summary"
+									? renderSummaryResults(statuses, details.artifactsPath)
+									: renderResults(
+											statuses,
+											details.artifactsPath,
+											Object.fromEntries(promptContents),
+										),
 						},
 					],
 					details,

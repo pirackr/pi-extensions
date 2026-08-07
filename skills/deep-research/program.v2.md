@@ -1,9 +1,11 @@
 # Deep Research Program
 
 > Human-edited contract for a `/research` run (driven by the shared `/loop`
-> engine). The loop re-reads this file at the start of every round, so edits
-> apply from the next round on — steer the run live. The mission argument
-> passed to `/research` overrides the placeholder below.
+> engine). The loop re-injects this file when it changes (mtime); on
+> unchanged rounds it skips re-embedding the full text — it is already in
+> context. Edits therefore apply from the next round on — steer the run
+> live. The mission argument passed to `/research` overrides the
+> placeholder below.
 >
 > **Subagent-first execution:** the coordinator never does research work — no
 > direct `web_lookup`/`fetch_web`, no reading report corpora. All planning,
@@ -29,8 +31,8 @@ Each profile defines a different research depth. Pick one with `--profile`:
 Default: `standard`. Override max rounds with `--max-rounds N`.
 
 Subagent counts are total dispatches across the run — a cap, not a target
-(stop adding scouts once coverage is real). `run_subagents` accepts max 4
-tasks per call: dispatch in batches of ≤4.
+(stop adding scouts once coverage is real). `run_subagents` accepts max 1
+task per call: dispatch sequentially.
 
 ## Profile
 
@@ -160,7 +162,7 @@ this exact sequence:
 4. Echo each returned scout report verbatim to
    `scout-outputs/<round>-<slug>-scout.md`.
 5. If the scout reports surfaced URLs that would change an answer, dispatch
-   ≤4 `fetcher` tasks (next batch) with those URLs in their objectives to
+   a `fetcher` task with those URLs in its objective to
    deep-read them. Prefer primary sources, official docs, papers; distrust
    SEO content farms and generic listicles. Echo reports to
    `scout-outputs/<round>-<slug>-fetch.md`.
@@ -224,7 +226,7 @@ run_subagents({
   marginal value decays. Profile scout counts are caps, not targets.
 - **Quick:** ~3 scouts + 1 fetcher total. **Standard:** ~8 scouts + 4
   fetchers. **Intermediate:** ~12 scouts + 6 fetchers. **Deep:** ~32 scouts +
-  16 fetchers. Dispatch in batches of ≤4 (`run_subagents` max 4 per call).
+  16 fetchers. Dispatch one at a time (`run_subagents` max 1 per call).
 - **Order matters:** scouts → echo → fetchers → echo → consolidator. Never
   run the consolidator in parallel with scouts/fetchers.
 
@@ -250,7 +252,7 @@ in every fragment objective). Split the writing — one worker per fragment,
 then one assembler. A single worker writing the whole report times out
 deterministically on runs with 50+ sources; never do it in one dispatch.
 
-Fragment writers (≤4 per call; one task per fragment, split the Findings
+Fragment writers (≤1 per call; one task per fragment, split the Findings
 subsections across them):
 
 ```js
@@ -383,6 +385,13 @@ Deep profile adds dedicated verification rounds AFTER the main research:
   results, page content, or report corpora in context. `scout-outputs/` is
   the raw archive; `notes.md` is the consolidated knowledge base; workers
   write all reports from files.
+- **run_subagents diet (mandatory):** every dispatch passes
+  `return_mode: "summary"` and `retain_artifacts: "always"`. The tool then
+  returns only a ~600-char digest per agent plus paths to the on-disk
+  outputs (`output/<taskId>.jsonl` under the artifacts dir) — the
+  coordinator never sees full subagent payloads or its own prompts echoed
+  back. Echo each digest into `scout-outputs/`; the full outputs stay on
+  disk for the consolidator to read. Never request `return_mode: "full"`.
 - **Prune:** the consolidator removes stale search-result dumps from
   `notes.md` each round. Keep claim → source lines and exact quotes for
   load-bearing claims. `notes.md` is a working log, not an archive.

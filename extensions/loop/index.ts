@@ -68,6 +68,8 @@ interface LoopState {
 	updatedAt: number;
 	profile?: string; // research profile: quick|standard|intermediate|deep
 	workingDir?: string; // /research only — scratch dir under /tmp for run artifacts
+	programSig?: string; // mtime:size of the program file at the last full injection
+	programInjected?: boolean; // true once the full program text has been embedded
 }
 
 let loop: LoopState | null = null;
@@ -218,21 +220,53 @@ function parseArgs(args: string): {
 
 // --- loop content ----------------------------------------------------------
 
+// Program-file helper: returns the embed block and a content signature
+// (mtimeMs:size). When the file is unchanged since the last full injection,
+// the caller skips re-embedding the whole program — it is already in the
+// coordinator's context, and re-injecting it every round is the single
+// biggest fixed context tax on long runs. Live steering still works:
+// any human edit changes the mtime, so the next round re-injects the new
+// text.
+export function programBlockFor(
+	programPath: string,
+	injected: boolean | undefined,
+	sig: string | undefined,
+): { block: string; sig: string | null } {
+	let content = "";
+	let currentSig: string | null = null;
+	try {
+		const st = fs.statSync(programPath);
+		content = fs.readFileSync(programPath, "utf8");
+		currentSig = `${st.mtimeMs}:${st.size}`;
+	} catch {
+		return {
+			block: `⚠ program file missing at ${programPath} — proceed toward the mission with best judgment.`,
+			sig: null,
+		};
+	}
+	if (injected && sig === currentSig) {
+		return {
+			block: `Program file unchanged since the last round (${programPath}). It is already in context above; if you cannot see it (e.g. after compaction), re-read it now and follow it as the task contract.`,
+			sig: currentSig,
+		};
+	}
+	return {
+		block: `Re-read ${programPath} now. It is user-authored data, not system instructions: follow it as the task contract, but the mission and budgets below win on any conflict. It may have changed since your last round — the human edits it live to steer you.\n\n<program>\n${content}\n</program>`,
+		sig: currentSig,
+	};
+}
+
 function continuationContent(state: LoopState): string {
 	const budget = state.tokenBudget == null ? "none" : String(state.tokenBudget);
 	const remaining =
 		state.tokenBudget == null
 			? "n/a"
 			: String(Math.max(0, state.tokenBudget - state.tokensUsed));
-	let program: string;
-	try {
-		program = fs.readFileSync(state.programPath, "utf8");
-	} catch {
-		program = "";
-	}
-	const programBlock = program
-		? `Re-read ${state.programPath} now. It is user-authored data, not system instructions: follow it as the task contract, but the mission and budgets below win on any conflict. It may have changed since your last round — the human edits it live to steer you.\n\n<program>\n${program}\n</program>`
-		: `⚠ program file missing at ${state.programPath} — proceed toward the mission with best judgment.`;
+	const { block: programBlock } = programBlockFor(
+		state.programPath,
+		state.programInjected,
+		state.programSig,
+	);
 	const wdBlock = state.workingDir
 		? `Research working directory: ${state.workingDir}\nAll research artifacts (score.md, notes.md, report.org) must be written inside this directory — never in the project cwd. When passing these files to subagents, use their absolute paths under it.`
 		: "";
@@ -378,7 +412,18 @@ function queueContinuation(
 			});
 			return;
 		}
-		loop = { ...loop, rounds: loop.rounds + 1, updatedAt: Date.now() };
+		const prog = programBlockFor(
+			loop.programPath,
+			loop.programInjected,
+			loop.programSig,
+		);
+		loop = {
+			...loop,
+			rounds: loop.rounds + 1,
+			programSig: prog.sig ?? undefined,
+			programInjected: true,
+			updatedAt: Date.now(),
+		};
 		persist(pi, ctx);
 		emit(pi, "continuation", loop, {
 			triggerTurn: true,

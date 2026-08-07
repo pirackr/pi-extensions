@@ -79,6 +79,52 @@ export function runTaskMode(requestPath) {
 		killTimer = setTimeout(() => killChild("SIGKILL"), 5_000);
 	};
 
+	const truncate = (s, n = 120) =>
+		typeof s === "string" && s.length > n ? s.slice(0, n) + "…" : s ?? "";
+
+	const summarizeArgs = (args) => {
+		if (!args || typeof args !== "object") return "";
+		const parts = [];
+		if (typeof args.query === "string") parts.push(`query="${truncate(args.query)}"`);
+		if (typeof args.url === "string") parts.push(`url=${truncate(args.url)}`);
+		if (typeof args.path === "string") parts.push(`path=${truncate(args.path)}`);
+		if (args.limit) parts.push(`limit=${args.limit}`);
+		if (args.engine) parts.push(`engine=${args.engine}`);
+		if (typeof args.command === "string") parts.push(`cmd=${truncate(args.command)}`);
+		return parts.join(" ");
+	};
+
+	const summarizeResult = (toolName, event) => {
+		const result = event.result;
+		const details = result?.details;
+		if (event.isError) return `ERROR: ${result?.error ?? "tool failed"}`;
+		if (toolName === "web_lookup") {
+			const results = Array.isArray(details?.results) ? details.results : [];
+			const engines = details?.engines?.length ? details.engines.join(",") : "none";
+			const head = results
+				.slice(0, 2)
+				.map((r) => `${r.title} — ${r.url}`)
+				.join(" | ");
+			const failures = details?.partialFailures?.length
+				? ` | failures: ${details.partialFailures.map((p) => p.engine).join(",")}`
+				: "";
+			return `${results.length} results [${engines}]${results.length ? " | " + truncate(head, 180) : ""}${failures}`;
+		}
+		if (toolName === "fetch_web") {
+			const text = result?.content?.map((c) => c.text ?? "").join("") ?? "";
+			return `"${truncate(details?.title ?? "(no title)", 80)}" ${text.length} chars`;
+		}
+		const text =
+			result?.content
+				?.map((c) => c.text ?? "")
+				.join(" ")
+				.replace(/\s+/g, " ")
+				.trim() ?? "";
+		return truncate(text || "(no content)", 160);
+	};
+
+	const toolCounts = {};
+
 	const processEvent = (line) => {
 		if (!line.trim()) return;
 		let event;
@@ -96,7 +142,15 @@ export function runTaskMode(requestPath) {
 
 		if (event.type === "tool_execution_start") {
 			const name = event.toolName || event.toolCall?.name || "tool";
-			process.stdout.write(`\n[${name}]\n`);
+			toolCounts[name] = (toolCounts[name] ?? 0) + 1;
+			const args = event.args ?? event.toolCall?.arguments ?? {};
+			const summary = summarizeArgs(args);
+			process.stdout.write(`\n[${name}]${summary ? " " + summary : ""}\n`);
+		}
+
+		if (event.type === "tool_execution_end") {
+			const name = event.toolName || "tool";
+			process.stdout.write(`  ${summarizeResult(name, event)}\n`);
 		}
 
 		if (event.type === "message_end" && event.message?.role === "assistant") {
@@ -231,6 +285,13 @@ export function runTaskMode(requestPath) {
 			usage,
 		});
 		process.stdout.write(`\n\n[${request.agent} ${state}]\n`);
+		if (Object.keys(toolCounts).length) {
+			const summary = Object.entries(toolCounts)
+				.sort((a, b) => b[1] - a[1])
+				.map(([k, v]) => `${k}=${v}`)
+				.join(" ");
+			process.stdout.write(`tool calls: ${summary}\n`);
+		}
 		process.exitCode = state === "succeeded" ? 0 : 1;
 	});
 

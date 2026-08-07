@@ -12,7 +12,7 @@
   },
   "agentDirs": [],
   "loadContextFiles": true,
-  "maxTasks": 4,
+  "maxTasks": 1,
   "defaultTimeoutSeconds": 300,
   "retainArtifacts": "on_failure"
 }

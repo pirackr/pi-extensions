@@ -116,6 +116,76 @@ export function listRunsText(runs) {
 		})
 		.join("\n");
 }
+// ---------- run loading ----------
+
+/** Load a run's task metadata from its request files (paths, labels). */
+export function loadRun(dir) {
+	const requestDir = path.join(dir, "request");
+	let requestFiles = [];
+	try {
+		requestFiles = fs
+			.readdirSync(requestDir)
+			.filter((f) => f.endsWith(".json"));
+	} catch {
+		// no request dir — fall back to status files below
+	}
+	const tasks = [];
+	const seen = new Set();
+	for (const file of requestFiles.sort()) {
+		const taskId = path.basename(file, ".json");
+		let agent = taskId;
+		let model = "";
+		let cwd = "";
+		let statusPath = path.join(dir, "status", `${taskId}.json`);
+		let outputPath = path.join(dir, "output", `${taskId}.jsonl`);
+		let stderrPath = path.join(dir, "stderr", `${taskId}.log`);
+		try {
+			const req = JSON.parse(
+				fs.readFileSync(path.join(requestDir, file), "utf8"),
+			);
+			if (req && typeof req === "object") {
+				if (typeof req.agent === "string") agent = req.agent;
+				if (typeof req.model === "string") model = req.model;
+				if (typeof req.cwd === "string") cwd = req.cwd;
+				if (typeof req.statusPath === "string") statusPath = req.statusPath;
+				if (typeof req.outputPath === "string") outputPath = req.outputPath;
+				if (typeof req.stderrPath === "string") stderrPath = req.stderrPath;
+			}
+		} catch {
+			// unreadable request file — use derived paths
+		}
+		seen.add(taskId);
+		tasks.push({ taskId, agent, model, cwd, statusPath, outputPath, stderrPath });
+	}
+	// status files without a request file (partial runs)
+	const statusDir = path.join(dir, "status");
+	let statusFiles = [];
+	try {
+		statusFiles = fs
+			.readdirSync(statusDir)
+			.filter((f) => f.endsWith(".json"));
+	} catch {
+		// no status dir — nothing to fall back to
+	}
+	for (const file of statusFiles) {
+		const taskId = path.basename(file, ".json");
+		if (seen.has(taskId)) continue;
+		tasks.push({
+			taskId,
+			agent: taskId,
+			model: "",
+			cwd: "",
+			statusPath: path.join(statusDir, file),
+			outputPath: path.join(dir, "output", `${taskId}.jsonl`),
+			stderrPath: path.join(dir, "stderr", `${taskId}.log`),
+		});
+	}
+	tasks.sort((a, b) =>
+		a.taskId.localeCompare(b.taskId, undefined, { numeric: true }),
+	);
+	return { dir, session: path.basename(dir), tasks };
+}
+
 
 // ---------- formatting (used above; full impl in Task 5) ----------
 

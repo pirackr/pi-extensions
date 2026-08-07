@@ -9,6 +9,7 @@ import {
 	listRunsText,
 	resolveRunArg,
 	LIVE_STATES,
+	loadRun,
 } from "../tools/watch-subagents.mjs";
 
 let base: string;
@@ -160,5 +161,43 @@ describe("discovery", () => {
 	it("LIVE_STATES contains starting and running", () => {
 		expect(LIVE_STATES.has("starting")).toBe(true);
 		expect(LIVE_STATES.has("running")).toBe(true);
+	});
+});
+describe("loading", () => {
+	it("loadRun reads agent/model/cwd and paths from request files", () => {
+		const dir = writeRun("pi-subagent-load", [
+			{
+				taskId: "task-1",
+				status: makeStatus({ agent: "scout" }),
+			},
+			{
+				taskId: "task-2",
+				status: makeStatus({ taskId: "task-2", agent: "fetcher" }),
+			},
+		]);
+		const run = loadRun(dir);
+		expect(run.session).toBe("pi-subagent-load");
+		expect(run.tasks.map((t) => t.taskId)).toEqual(["task-1", "task-2"]);
+		expect(run.tasks[0].agent).toBe("scout");
+		expect(run.tasks[0].model).toBe("deepseek-v4-flash");
+		expect(run.tasks[0].cwd).toBe("/work");
+		expect(run.tasks[0].outputPath).toContain("output/task-1.jsonl");
+		expect(run.tasks[0].statusPath).toContain("status/task-1.json");
+	});
+
+	it("loadRun falls back to derived paths and taskId agent without request files", () => {
+		const dir = path.join(base, "pi-subagent-fallback");
+		for (const sub of ["status", "output", "stderr", "request"]) {
+			fs.mkdirSync(path.join(dir, sub), { recursive: true });
+		}
+		fs.writeFileSync(
+			path.join(dir, "status", "task-1.json"),
+			JSON.stringify(makeStatus({})),
+		);
+		const run = loadRun(dir);
+		expect(run.tasks).toHaveLength(1);
+		expect(run.tasks[0].agent).toBe("task-1");
+		expect(run.tasks[0].cwd).toBe("");
+		expect(run.tasks[0].outputPath.endsWith("output/task-1.jsonl")).toBe(true);
 	});
 });

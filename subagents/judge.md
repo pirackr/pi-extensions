@@ -1,7 +1,7 @@
 ---
 name: judge
 description: Evaluate draft research report against credibility rubric — returns pass/fail with specific findings
-model: Qwen3.6-35B-A3B-MTP-GGUF
+model: Gemma-4-31B-it-MTP-GGUF
 thinking: medium
 tools: read,grep,find,ls,write,edit,bash,web_lookup,fetch_web
 access: write

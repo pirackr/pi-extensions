@@ -113,6 +113,7 @@ table = {
     "\u2605": "*",               # star
     "\u2153": "1/3",             # one third
     "\u2026": "\\ldots{}",       # ...
+    "\u00b2": "\\textsuperscript{2}",  # superscript two (O(N²))
     "\u2212": "-",               # minus sign
     "\u2014": "---",             # em dash
     "\u2013": "--",              # en dash
@@ -136,7 +137,7 @@ for _ in 1 2 3; do
 done
 
 rm -f "$BASE.aux" "$BASE.toc" "$BASE.out" "$BASE.log" missfont.log
-if [[ "$OUTPUT" != "$DIR/$BASE.pdf" ]]; then
+if [[ "$(readlink -f "$OUTPUT" 2>/dev/null)" != "$(readlink -f "$DIR/$BASE.pdf" 2>/dev/null)" ]]; then
 	mv "$DIR/$BASE.pdf" "$OUTPUT"
 fi
 echo "org2pdf: $OUTPUT ($(stat -c%s "$OUTPUT") bytes)"

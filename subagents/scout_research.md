@@ -1,7 +1,7 @@
 ---
 name: scout_research
 description: Broad research search with source evaluation — finds URLs, assesses credibility, returns findings + source list
-model: gpt-oss-20b-GGUF-Q4_K_M
+model: XYZAILab_XYZ-Aquila-mini-GGUF-Q4_K_M
 thinking: high
 tools: read,grep,find,ls,web_lookup,fetch_web
 access: read

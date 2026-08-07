@@ -176,6 +176,20 @@ this exact sequence:
    `notes.md`). Obey its verdict — do NOT call `complete_loop` unless
    PROCEED.
 
+   **Consolidation failure = round failure:** if the consolidator times out
+   or fails, the round is NOT complete. Re-dispatch it (idempotent — it
+   re-reads the same scout-output files) before checkpoint. Never pass an
+   estimated `totalSources`: it must come from a successful consolidator run
+   and equal the unique URL count in `notes.md`.
+
+   **Round checklist** — echo before every checkpoint; any unchecked item
+   means the round is not complete:
+   - [x] scouts echoed to `scout-outputs/`
+   - [x] fetchers dispatched on the top primary URLs (or explicitly skipped:
+     no URLs worth deep-reading surfaced — state which)
+   - [x] consolidator succeeded (did not time out or fail)
+   - [x] totalSources taken from the consolidator's summary, not estimated
+
 ### Subagent dispatch (all profiles)
 
 All profiles dispatch subagents — there is no "coordinator does it directly"
@@ -224,7 +238,7 @@ run_subagents({
     scope: ["<research-dir>/notes.md", "<research-dir>/score.md", "<research-dir>/scout-outputs/"],
     inputs: ["<research-dir>/notes.md", "<research-dir>/score.md", "<research-dir>/scout-outputs/"],
     expected_output: "One-line summary: scores, unique URL count, contradictions, gaps",
-    constraints: ["Do not run in parallel with other agents.", "Do not delegate.", "Keep notes.md compact — it is a working log, not an archive."]
+    constraints: ["Do not run in parallel with other agents.", "Do not delegate.", "Prune notes.md hard each round: delete stale search-result dumps and collapse redundant claims; keep it under ~250 lines. A bloated notes.md slows every later merge and causes timeouts."]
   }],
   timeout_seconds: 300,
   retain_artifacts: "on_failure"
@@ -232,16 +246,40 @@ run_subagents({
 ```
 
 **Synthesizer** (at completion; embed the Org-Mode Format section verbatim
-in the objective):
+in every fragment objective). Split the writing — one worker per fragment,
+then one assembler. A single worker writing the whole report times out
+deterministically on runs with 50+ sources; never do it in one dispatch.
+
+Fragment writers (≤4 per call; one task per fragment, split the Findings
+subsections across them):
+
+```js
+run_subagents({
+  tasks: [
+    {
+      agent: "worker",
+      objective: "Write the Executive Summary + Findings for sub-questions <subset> of the research report to <research-dir>/findings-<n>.org. This is a document-writing task — do NOT inspect or modify repository code. Read <research-dir>/notes.md (claim → source → confidence → credibility), <research-dir>/score.md (scores + gaps), and the matching <research-dir>/scout-outputs/ files (raw quotes). Every claim must carry an inline [[URL][description]] citation present in notes.md; uncited/low-confidence claims go to an appended 'Uncertainties (fragment <n>)' list. [embed Org-Mode Format section here]",
+      scope: ["<research-dir>/findings-<n>.org"],
+      expected_output: "findings-<n>.org written with claim-level citations",
+      constraints: ["Every claim cites a source from notes.md.", "Do not delegate."]
+    }
+    // ... one task per fragment
+  ],
+  timeout_seconds: 240,
+  retain_artifacts: "on_failure"
+})
+```
+
+Assembler (after all fragments exist):
 
 ```js
 run_subagents({
   tasks: [{
     agent: "worker",
-    objective: "Write the research report. This is a document-writing task — do NOT inspect or modify repository code. Read <research-dir>/notes.md (primary evidence: claim → source → confidence → credibility lines), <research-dir>/score.md (scores + gaps), and <research-dir>/scout-outputs/ (raw quotes for load-bearing claims). Write <research-dir>/draft-report.org, then <research-dir>/report.org following the embedded org-mode structure spec. Every claim in Findings must carry an inline [[URL][description]] citation present in notes.md; uncited or low-confidence claims go to Uncertainties & Gaps. Add the judge metadata line near the top: judge: <profile> + <model tier> + <date>. [embed Org-Mode Format section here]",
-    scope: ["<research-dir>/report.org", "<research-dir>/draft-report.org", "<research-dir>/notes.md", "<research-dir>/score.md"],
-    expected_output: "report.org written with claim-level citations",
-    constraints: ["Every claim cites a source from notes.md.", "Follow the embedded structure spec exactly.", "Do not delegate."]
+    objective: "Assemble the research report. Read every <research-dir>/findings-*.org fragment, then write <research-dir>/draft-report.org and <research-dir>/report.org by concatenating in order: fragments (Executive Summary first, then each Findings subsection), Comparison Table, Contradictions & Debates, Uncertainties & Gaps (merge the per-fragment lists), Sources (from <research-dir>/notes.md). Add the judge metadata line near the top: judge: <profile> + <model tier> + <date>. Do not rewrite fragment prose. [embed Org-Mode Format section here]",
+    scope: ["<research-dir>/report.org", "<research-dir>/draft-report.org"],
+    expected_output: "report.org assembled from all fragments with every required section",
+    constraints: ["Do not rewrite fragment prose.", "Every section of the structure spec present.", "Do not delegate."]
   }],
   timeout_seconds: 300,
   retain_artifacts: "on_failure"
@@ -355,9 +393,10 @@ Deep profile adds dedicated verification rounds AFTER the main research:
 
 ## Completion condition
 
-All three, then dispatch the synthesizer worker to write `report.org` from
-`draft-report.org`/`notes.md` in the research working directory, verify the
-file exists, and call `complete_loop` (status=complete):
+All four (three for quick/standard — see #4), then dispatch the synthesizer
+worker to write `report.org` from `draft-report.org`/`notes.md` in the
+research working directory, verify the file exists, and call `complete_loop`
+(status=complete):
 
 1. Every sub-question scored ≥ 80 in `score.md`
 2. Min sources reached (per profile): quick=15, standard=20, intermediate=30, deep=40
@@ -365,14 +404,20 @@ file exists, and call `complete_loop` (status=complete):
    count in `notes.md`.
 3. No unresolved contradiction on a scored question (or it is acknowledged
    in Uncertainties)
+4. Verification pass completed (intermediate+): judge verdict, citation
+   report, and source audit all echoed to `scout-outputs/`. The harness
+   refuses `status=complete` until these artifacts exist.
 
 **Hard floor:** `research_checkpoint` must return PROCEED before calling
-`complete_loop`.
+`complete_loop`, and for intermediate+ profiles the verification artifacts
+(condition 4) must be present. A missing verification pass is a caps-abort,
+not a normal completion — say so in the complete note.
 
 If the loop hits its round/token caps first, still dispatch the synthesizer
 to write `report.org` with the best evidence gathered, list every gap in
-Uncertainties & Gaps, and call `complete_loop` (status=complete, with a note
-about caps).
+Uncertainties & Gaps, run at minimum the judge (cheapest, read-only) on the
+draft, and call `complete_loop` (status=complete, with a note about caps and
+any skipped verification steps).
 
 ## Safety
 

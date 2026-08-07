@@ -418,6 +418,142 @@ export function renderTaskLines(task, stream, width, height, selected) {
 	return { lines, title: { text: title, selected } };
 }
 
+// ---------- frame rendering ----------
+
+export function renderHeader({ run, paused, live, width }) {
+	const stats = aggregateStats(run.tasks.map((task) => task.status ?? null));
+	const stateSummary =
+		Object.entries(stats.counts)
+			.map(([state, count]) => `${count} ${state}`)
+			.join(", ") || "starting";
+	const tokens = stats.totalTokens
+		? ` · ${formatTokens(stats.totalTokens)} tok`
+		: "";
+	const cost = stats.totalCost ? ` · $${stats.totalCost.toFixed(4)}` : "";
+	const pauseMark = paused ? " [paused]" : "";
+	const line1 = `${live ? "LIVE" : "ENDED"}  ${run.session}  ${stateSummary}${tokens}${cost}${pauseMark}`;
+	const line2 =
+		"j/k select · Enter: tmux attach (live) / pager (ended) · r pause · q quit";
+	return [truncateLine(line1, width), truncateLine(line2, width)];
+}
+
+const put = (grid, width, height, r, c, ch) => {
+	if (r >= 0 && r < height && c >= 0 && c < width) grid[r][c] = ch;
+};
+
+/** Render the whole screen as plain text + title metadata for styling. */
+export function renderFrame({
+	run,
+	streams,
+	selected,
+	paused,
+	live,
+	width,
+	height,
+}) {
+	const header = renderHeader({ run, paused, live, width });
+	const { cols, rows } = computeGrid(run.tasks.length);
+	const bodyH = Math.max(1, height - header.length);
+	const cellW = Math.max(1, Math.floor((width - (cols - 1)) / cols));
+	const cellH = Math.max(1, Math.floor((bodyH - (rows - 1)) / rows));
+	const grid = Array.from({ length: height }, () => Array(width).fill(" "));
+
+	// header
+	for (let r = 0; r < header.length; r++) {
+		const chars = Array.from(header[r]);
+		for (let c = 0; c < Math.min(chars.length, width); c++) grid[r][c] = chars[c];
+	}
+
+	// vertical gutters between pane columns
+	for (let r = 0; r < bodyH; r++) {
+		for (let c = 1; c < cols; c++) {
+			put(grid, width, height, header.length + r, c * (cellW + 1) - 1, "│");
+		}
+	}
+	// horizontal separators between pane rows
+	for (let r = 1; r < rows; r++) {
+		const y = header.length + r * (cellH + 1) - 1;
+		for (let c = 0; c < width; c++) put(grid, width, height, y, c, "─");
+	}
+	// intersections
+	for (let r = 1; r < rows; r++) {
+		for (let c = 1; c < cols; c++) {
+			put(
+				grid,
+				width,
+				height,
+				header.length + r * (cellH + 1) - 1,
+				c * (cellW + 1) - 1,
+				"┼",
+			);
+		}
+	}
+
+	// panes
+	const titles = [];
+	for (let i = 0; i < run.tasks.length; i++) {
+		const col = i % cols;
+		const row = Math.floor(i / cols);
+		const x = col * (cellW + 1);
+		const y = header.length + row * (cellH + 1);
+		const task = run.tasks[i];
+		const { lines, title } = renderTaskLines(
+			task,
+			streams.get(task.taskId) ?? createStreamState(),
+			cellW,
+			cellH,
+			i === selected,
+		);
+		for (let r = 0; r < lines.length; r++) {
+			const chars = Array.from(lines[r]);
+			for (let c = 0; c < Math.min(chars.length, cellW); c++) {
+				put(grid, width, height, y + r, x + c, chars[c]);
+			}
+		}
+		titles.push({
+			row: y,
+			col: x,
+			len: Array.from(title.text).length,
+			state: (task.status && task.status.state) || "unknown",
+			selected: i === selected,
+		});
+	}
+
+	const text = grid
+		.map((line) => line.join("").replace(/\s+$/, ""))
+		.join("\n");
+	return { text, titles };
+}
+
+const STATE_COLOR = {
+	succeeded: "32",
+	failed: "31",
+	timed_out: "31",
+	cancelled: "31",
+	running: "33",
+	starting: "2",
+	unknown: "2",
+};
+
+/** Apply SGR styling to the title spans of a plain frame. */
+export function applyTuiStyles(text, titles) {
+	const lines = text.split("\n");
+	for (const t of titles) {
+		const line = lines[t.row];
+		if (!line) continue;
+		const start = Math.min(t.col, line.length);
+		const end = Math.min(start + t.len, line.length);
+		const code = t.selected ? "7" : STATE_COLOR[t.state] || "0";
+		lines[t.row] =
+			line.slice(0, start) +
+			`\x1b[${code}m` +
+			line.slice(start, end) +
+			"\x1b[0m" +
+			line.slice(end);
+	}
+	return lines.join("\n");
+}
+
 // ---------- entry guard (TUI main lands in Task 8) ----------
 
 const isMainModule =

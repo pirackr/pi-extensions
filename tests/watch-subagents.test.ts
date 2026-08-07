@@ -25,6 +25,9 @@ import {
 	computeGrid,
 	truncateLine,
 	renderTaskLines,
+	renderHeader,
+	renderFrame,
+	applyTuiStyles,
 } from "../tools/watch-subagents.mjs";
 
 let base: string;
@@ -526,5 +529,99 @@ describe("grid and pane rendering", () => {
 		};
 		const { lines } = renderTaskLines(task, createStreamState(), 40, 2, false);
 		expect(lines[1]).toBe("(no output yet)");
+	});
+});
+describe("frame rendering", () => {
+	function frameRun() {
+		const dir = writeRun("pi-subagent-frame", [
+			{
+				taskId: "task-1",
+				status: makeStatus({ state: "running", agent: "scout" }),
+			},
+			{
+				taskId: "task-2",
+				status: makeStatus({
+					taskId: "task-2",
+					state: "succeeded",
+					agent: "fetcher",
+					result: "ok",
+				}),
+			},
+			{
+				taskId: "task-3",
+				status: makeStatus({ taskId: "task-3", state: "running", agent: "judge" }),
+			},
+		]);
+		return loadRun(dir);
+	}
+
+	function withStatuses(run) {
+		run.tasks[0].status = makeStatus({ state: "running", agent: "scout" });
+		run.tasks[1].status = makeStatus({
+			taskId: "task-2",
+			state: "succeeded",
+			agent: "fetcher",
+			result: "ok",
+		});
+		run.tasks[2].status = makeStatus({ taskId: "task-3", state: "running", agent: "judge" });
+		return run;
+	}
+
+	it("renderHeader shows mode, session, counts and pause mark", () => {
+		const run = withStatuses(frameRun());
+		const header = renderHeader({ run, paused: true, live: true, width: 80 });
+		expect(header[0]).toContain("LIVE");
+		expect(header[0]).toContain("pi-subagent-frame");
+		expect(header[0]).toContain("2 running");
+		expect(header[0]).toContain("1 succeeded");
+		expect(header[0]).toContain("[paused]");
+		expect(header[1]).toContain("q quit");
+	});
+
+	it("renderFrame lays out a 2x2 grid with gutters, separators and titles", () => {
+		const run = withStatuses(frameRun());
+		const streams = new Map();
+		for (const t of run.tasks) streams.set(t.taskId, createStreamState());
+		const { text, titles } = renderFrame({
+			run,
+			streams,
+			selected: 0,
+			paused: false,
+			live: true,
+			width: 60,
+			height: 12,
+		});
+		const lines = text.split("\n");
+		expect(lines.length).toBe(12);
+		expect(lines[0]).toContain("LIVE");
+		expect(titles).toHaveLength(3);
+		expect(titles[0].selected).toBe(true);
+		expect(titles[1].selected).toBe(false);
+		expect(titles[0].state).toBe("running");
+		expect(titles[1].state).toBe("succeeded");
+		// 3 tasks → rows=2, so one separator row at line 6 (2 header + 4 pane rows)
+		expect(lines[6].includes("─")).toBe(true);
+		// task-1 title appears at its recorded pane position
+		const row = lines[titles[0].row];
+		expect(row.slice(titles[0].col, titles[0].col + 6)).toBe("task-1");
+	});
+
+	it("applyTuiStyles wraps the selected title in inverse video", () => {
+		const run = withStatuses(frameRun());
+		const streams = new Map();
+		for (const t of run.tasks) streams.set(t.taskId, createStreamState());
+		const { text, titles } = renderFrame({
+			run,
+			streams,
+			selected: 0,
+			paused: false,
+			live: true,
+			width: 60,
+			height: 12,
+		});
+		const styled = applyTuiStyles(text, titles);
+		expect(styled).toContain("\x1b[7m");
+		expect(styled).toContain("\x1b[0m");
+		expect(styled).toContain("task-1 · scout");
 	});
 });

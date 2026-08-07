@@ -22,6 +22,9 @@ import {
 	formatTokens,
 	aggregateStats,
 	formatStatus,
+	computeGrid,
+	truncateLine,
+	renderTaskLines,
 } from "../tools/watch-subagents.mjs";
 
 let base: string;
@@ -433,5 +436,95 @@ describe("formatting", () => {
 		expect(line).toContain("task-2 · scout · RUNNING");
 		expect(line).toContain("1m24s");
 		expect(line).toContain("21.4k tok");
+	});
+});
+describe("grid and pane rendering", () => {
+	it("computeGrid: 1,2,3,4,16", () => {
+		expect(computeGrid(1)).toEqual({ cols: 1, rows: 1 });
+		expect(computeGrid(2)).toEqual({ cols: 2, rows: 1 });
+		expect(computeGrid(3)).toEqual({ cols: 2, rows: 2 });
+		expect(computeGrid(4)).toEqual({ cols: 2, rows: 2 });
+		expect(computeGrid(16)).toEqual({ cols: 4, rows: 4 });
+	});
+
+	it("truncateLine truncates and marks with ellipsis", () => {
+		expect(truncateLine("hello", 3)).toBe("he…");
+		expect(truncateLine("hello", 10)).toBe("hello");
+		expect(truncateLine("hello", 0)).toBe("");
+	});
+
+	it("renderTaskLines: running task shows title + stream tail + padding", () => {
+		const stream = createStreamState();
+		stream.lines = ["a", "b", "c", "d"];
+		const task = {
+			taskId: "task-1",
+			agent: "scout",
+			model: "m",
+			cwd: "",
+			statusPath: "",
+			outputPath: "",
+			stderrPath: "",
+			status: {
+				state: "running",
+				startedAt: new Date(Date.now() - 1000).toISOString(),
+			},
+		};
+		const { lines, title } = renderTaskLines(task, stream, 40, 4, true);
+		expect(lines).toHaveLength(4);
+		expect(lines[0]).toContain("task-1 · scout · RUNNING");
+		expect(lines[1]).toBe("b");
+		expect(lines[2]).toBe("c");
+		expect(lines[3]).toBe("d");
+		expect(title.selected).toBe(true);
+	});
+
+	it("renderTaskLines: succeeded task shows result, failed shows error", () => {
+		const baseTask = {
+			agent: "a",
+			model: "m",
+			cwd: "",
+			statusPath: "",
+			outputPath: "",
+			stderrPath: "",
+		};
+		const ok = {
+			...baseTask,
+			taskId: "task-1",
+			status: {
+				state: "succeeded",
+				startedAt: new Date().toISOString(),
+				result: "done!\nnext line",
+			},
+		};
+		const okRender = renderTaskLines(ok, createStreamState(), 40, 3, false);
+		expect(okRender.lines[1]).toBe("done!");
+		expect(okRender.lines[2]).toBe("next line");
+
+		const bad = {
+			...baseTask,
+			taskId: "task-2",
+			status: {
+				state: "failed",
+				startedAt: new Date().toISOString(),
+				errorMessage: "boom",
+			},
+		};
+		const badRender = renderTaskLines(bad, createStreamState(), 40, 2, false);
+		expect(badRender.lines[1]).toBe("boom");
+	});
+
+	it("renderTaskLines: empty stream shows placeholder", () => {
+		const task = {
+			taskId: "task-1",
+			agent: "a",
+			model: "m",
+			cwd: "",
+			statusPath: "",
+			outputPath: "",
+			stderrPath: "",
+			status: { state: "starting", startedAt: new Date().toISOString() },
+		};
+		const { lines } = renderTaskLines(task, createStreamState(), 40, 2, false);
+		expect(lines[1]).toBe("(no output yet)");
 	});
 });

@@ -372,6 +372,52 @@ export function formatStatus(task) {
 	return `${task.taskId} · ${task.agent} · ${state.toUpperCase()} · ${elapsed}${tokens}`;
 }
 
+// ---------- grid and pane rendering ----------
+
+export function computeGrid(n) {
+	const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
+	const rows = Math.max(1, Math.ceil(n / cols));
+	return { cols, rows };
+}
+
+export function truncateLine(s, width) {
+	if (width <= 0) return "";
+	const chars = Array.from(s);
+	return chars.length > width
+		? chars.slice(0, width - 1).join("") + "…"
+		: s;
+}
+
+/** Render one task pane: title line + body; terminal tasks show result/error. */
+export function renderTaskLines(task, stream, width, height, selected) {
+	const title = truncateLine(formatStatus(task), width);
+	let bodyLines;
+	const status = task.status;
+	if (status && TERMINAL_STATES.has(status.state)) {
+		const text =
+			status.state === "succeeded"
+				? status.result || "(no output)"
+				: [
+						status.errorMessage,
+						status.result && `Partial output:\n${status.result}`,
+					]
+						.filter(Boolean)
+						.join("\n\n") || "(no output)";
+		bodyLines = text.split("\n");
+	} else if (stream.lines.length > 0) {
+		bodyLines = stream.lines;
+	} else {
+		bodyLines = ["(no output yet)"];
+	}
+	const lines = [title];
+	for (const line of bodyLines.slice(-Math.max(0, height - 1))) {
+		if (lines.length >= height) break;
+		lines.push(truncateLine(line, width));
+	}
+	while (lines.length < height) lines.push("");
+	return { lines, title: { text: title, selected } };
+}
+
 // ---------- entry guard (TUI main lands in Task 8) ----------
 
 const isMainModule =

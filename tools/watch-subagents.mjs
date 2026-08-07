@@ -116,6 +116,46 @@ export function listRunsText(runs) {
 		})
 		.join("\n");
 }
+// ---------- stream tailing ----------
+
+export function createTailState() {
+	return { offset: 0, partial: "" };
+}
+
+/** Read new JSONL lines from `outputPath` since `state.offset`. */
+export function nextEvents(outputPath, state) {
+	let size = 0;
+	let text = "";
+	try {
+		const fd = fs.openSync(outputPath, "r");
+		size = fs.fstatSync(fd).size;
+		if (size < state.offset) state.offset = 0; // file rewritten
+		if (size > state.offset) {
+			const buf = Buffer.alloc(size - state.offset);
+			fs.readSync(fd, buf, 0, buf.length, state.offset);
+			text = buf.toString("utf8");
+			state.offset = size;
+		}
+		fs.closeSync(fd);
+	} catch {
+		return { events: [], state }; // file not present yet
+	}
+	const events = [];
+	if (text) {
+		const lines = (state.partial + text).split("\n");
+		state.partial = lines.pop() || "";
+		for (const line of lines) {
+			if (!line.trim()) continue;
+			try {
+				events.push(JSON.parse(line));
+			} catch {
+				// malformed line — skip, keep parsing
+			}
+		}
+	}
+	return { events, state };
+}
+
 // ---------- run loading ----------
 
 /** Load a run's task metadata from its request files (paths, labels). */

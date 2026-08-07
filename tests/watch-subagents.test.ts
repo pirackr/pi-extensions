@@ -10,6 +10,8 @@ import {
 	resolveRunArg,
 	LIVE_STATES,
 	loadRun,
+	createTailState,
+	nextEvents,
 } from "../tools/watch-subagents.mjs";
 
 let base: string;
@@ -199,5 +201,62 @@ describe("loading", () => {
 		expect(run.tasks[0].agent).toBe("task-1");
 		expect(run.tasks[0].cwd).toBe("");
 		expect(run.tasks[0].outputPath.endsWith("output/task-1.jsonl")).toBe(true);
+	});
+});
+describe("tailing", () => {
+	it("parses complete JSONL lines and advances the offset", () => {
+		const file = path.join(base, "out.jsonl");
+		fs.writeFileSync(
+			file,
+			'{"type":"message_update"}\n{"type":"tool_execution_start"}\n',
+		);
+		const state = createTailState();
+		const first = nextEvents(file, state);
+		expect(first.events.map((e) => e.type)).toEqual([
+			"message_update",
+			"tool_execution_start",
+		]);
+		expect(state.offset).toBe(fs.statSync(file).size);
+		expect(nextEvents(file, state).events).toEqual([]);
+	});
+
+	it("holds a partial line until it completes across reads", () => {
+		const file = path.join(base, "out.jsonl");
+		fs.writeFileSync(file, '{"type":"message_update","delta":"he');
+		const state = createTailState();
+		expect(nextEvents(file, state).events).toEqual([]);
+		fs.appendFileSync(file, 'llo"}\n');
+		const second = nextEvents(file, state);
+		expect(second.events).toHaveLength(1);
+		expect(second.events[0].delta).toBe("hello");
+	});
+
+	it("skips malformed lines but keeps parsing the rest", () => {
+		const file = path.join(base, "out.jsonl");
+		fs.writeFileSync(file, "{broken\n{\"type\":\"message_end\"}\n");
+		const { events } = nextEvents(file, createTailState());
+		expect(events.map((e) => e.type)).toEqual(["message_end"]);
+	});
+
+	it("returns empty for a missing file and recovers when it appears", () => {
+		const file = path.join(base, "later.jsonl");
+		const state = createTailState();
+		expect(nextEvents(file, state).events).toEqual([]);
+		fs.writeFileSync(file, '{"type":"message_update"}\n');
+		expect(nextEvents(file, state).events).toHaveLength(1);
+	});
+
+	it("resets the offset when the file is truncated", () => {
+		const file = path.join(base, "out.jsonl");
+		fs.writeFileSync(
+			file,
+			'{"type":"message_update"}\n{"type":"message_end"}\n',
+		);
+		const state = createTailState();
+		nextEvents(file, state);
+		fs.writeFileSync(file, '{"type":"message_update","delta":"rewritten"}\n');
+		const { events } = nextEvents(file, state);
+		expect(events).toHaveLength(1);
+		expect(events[0].delta).toBe("rewritten");
 	});
 });

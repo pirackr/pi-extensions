@@ -15,23 +15,23 @@ const DEFAULT_NO_PROGRESS_TURNS = 3;
 
 const PROFILE_MAX_ROUNDS = {
 	quick: 10,
-	standard: 6,
-	intermediate: 8,
-	deep: 10,
+	standard: 8,
+	intermediate: 10,
+	deep: 20,
 };
 
 const RESEARCH_THRESHOLDS = {
 	quick: { minRounds: 10, minSources: 15, maxRounds: 10 },
-	standard: { minRounds: 6, minSources: 20, maxRounds: 6 },
-	intermediate: { minRounds: 8, minSources: 30, maxRounds: 8 },
-	deep: { minRounds: 10, minSources: 40, maxRounds: 10 },
+	standard: { minRounds: 8, minSources: 30, maxRounds: 8 },
+	intermediate: { minRounds: 10, minSources: 40, maxRounds: 10 },
+	deep: { minRounds: 20, minSources: 250, maxRounds: 20 },
 };
 
 // Bundled deep-research program — the default program for /research. Resolved
 // from this module's location so it works regardless of cwd.
 const RESEARCH_PROGRAM_PATH = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
-	"../../examples/deep-research/program.md",
+	"../../skills/deep-research/program.v2.md",
 );
 
 type LoopStatus =
@@ -760,7 +760,7 @@ export default function piLoop(pi: ExtensionAPI) {
 	registerLoopCommand(pi, {
 		command: "research",
 		description:
-			"Deep research: run the bundled research program (program.md) as an autonomous loop — searches, fetches sources, and compiles report.org (claim-level citations) into a per-run scratch directory under /tmp.",
+			"Deep research: run the bundled research program (program.v2.md) as an autonomous loop — searches, fetches sources, and compiles report.org (claim-level citations) into a per-run scratch directory under /tmp.",
 		defaultProgram: RESEARCH_PROGRAM_PATH,
 		defaultMaxRounds: PROFILE_MAX_ROUNDS.standard,
 		isResearch: true,

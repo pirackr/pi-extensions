@@ -230,9 +230,9 @@ Write `report.org` — a structured org-mode report with claim-level citations �
 
 ## Depth Profiles
 quick:    min_rounds=10, min_sources=15, max_rounds=10
-standard: min_rounds=6,  min_sources=20, max_rounds=6
-intermediate: min_rounds=8, min_sources=30, max_rounds=8
-deep:     min_rounds=10, min_sources=40, max_rounds=10
+standard: min_rounds=8,  min_sources=30, max_rounds=8
+intermediate: min_rounds=10, min_sources=40, max_rounds=10
+deep:     min_rounds=20, min_sources=250, max_rounds=20
 
 ## Profile
 standard  ← the default (overridable via --profile)
@@ -318,7 +318,7 @@ All three, then write the report and call `complete_loop`:
 ```
 
 The authoritative copy of the program lives at
-`examples/deep-research/program.md` (v2, 2026-08-05 — adds plan revision,
+`skills/deep-research/program.v2.md` (program v2 — adds plan revision,
 selective query refinement, skim→gist→expand, robustness/UGC discipline,
 context management with an evolving draft, agentic judge, and honest source
 counting). The template above is illustrative only.
@@ -355,14 +355,14 @@ Type.Object({
 
 ```markdown
 quick:    min_rounds=10, min_sources=15, max_rounds=10
-standard: min_rounds=6,  min_sources=20, max_rounds=6
-intermediate: min_rounds=8, min_sources=30, max_rounds=8
-deep:     min_rounds=10, min_sources=40, max_rounds=10
+standard: min_rounds=8,  min_sources=30, max_rounds=8
+intermediate: min_rounds=10, min_sources=40, max_rounds=10
+deep:     min_rounds=20, min_sources=250, max_rounds=20
 ```
 
 > **Reality (2026-08-05, program v2):** thresholds are hardcoded in
 > `extensions/loop/index.ts` (`RESEARCH_THRESHOLDS`) and are the source of
-> truth; program.md mirrors them for the agent's reference. If they diverge,
+> truth; program.v2.md mirrors them for the agent's reference. If they diverge,
 > the extension wins. `research_checkpoint` also cross-checks the reported
 > source count against unique URLs recorded in the run's `notes.md` and uses
 > the minimum, appending a mismatch hint when the model over-reports.
@@ -423,11 +423,11 @@ deep:     min_rounds=10, min_sources=40, max_rounds=10
 
 | Responsibility | Location | Why |
 | --------------- | ---------- | ----- |
-| Methodology (sub-questions, report template, credibility tiers) | program.md | The 90% — user-authored, editable mid-run |
-| Subagent roles and dispatch rules | program.md | User can customize when/what to dispatch |
-| Profile thresholds (min_rounds, min_sources) | program.md | Tunable without code changes |
-| Verification rubric | program.md | Customizable per user needs |
-| Report format (org-mode) | program.md | User preference |
+| Methodology (sub-questions, report template, credibility tiers) | program.v2.md | The 90% — user-authored, editable mid-run |
+| Subagent roles and dispatch rules | program.v2.md | User can customize when/what to dispatch |
+| Profile thresholds (min_rounds, min_sources) | program.v2.md | Tunable without code changes |
+| Verification rubric | program.v2.md | Customizable per user needs |
+| Report format (org-mode) | program.v2.md | User preference |
 | Loop mechanics (continuation, accounting, caps) | /loop extension | Generic engine, not task-specific |
 | research_checkpoint tool | Extension | Code-enforced — can't be gamed by prompts |
 | Plan approval gate | Extension | Needs ctx.ui.confirm() |

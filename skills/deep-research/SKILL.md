@@ -6,8 +6,8 @@ disable-model-invocation: true
 
 # Deep Research
 
-The `/research` command runs the bundled research program (program.md) as an
-autonomous loop. See the full spec:
+The `/research` command runs the bundled research program
+(`program.v2.md`, in this folder) as an autonomous loop. See the full spec:
 `docs/006-deep-research-spec.md`
 
 ## Quick Start
@@ -18,7 +18,7 @@ autonomous loop. See the full spec:
 
 ```
 
-Profiles: `quick` (10 rounds, 15 sources, self-judge) | `standard` (6 rounds, 20 sources, self-judge) | `intermediate` (8 rounds, 30 sources, judge subagent) | `deep` (10 rounds, 40 sources, full subagent verification)
+Profiles: `quick` (10 rounds, 15 sources, self-judge) | `standard` (8 rounds, 30 sources, judge subagent) | `intermediate` (10 rounds, 40 sources, full subagent verification) | `deep` (20 rounds, 250 sources, full subagent verification + rounds 19–20 verification sweep)
 
 ## Available Subagent Profiles
 

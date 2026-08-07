@@ -22,9 +22,9 @@ Each profile defines a different research depth. Pick one with `--profile`:
 | Profile | Min Rounds | Min Sources | Max Rounds | Subagents | Verification |
 | --------- | ----------- | ------------- | ------------ | ----------- | ------------- |
 | quick | 10 | 15 | 10 | scout ×3, fetch ×1, synth ×1 | Self-judge |
-| standard | 6 | 20 | 6 | scout ×5, fetch ×2, synth ×1 | Self-judge |
-| intermediate | 8 | 30 | 8 | scout ×8, fetch ×4, synth ×1 | Judge subagent |
-| deep | 10 | 40 | 10 | scout ×12, fetch ×6, synth ×1 | Judge + CitationAgent + SourceAuditor + ContradictionResolver |
+| standard | 8 | 30 | 8 | scout ×8, fetch ×4, synth ×1 | Judge subagent |
+| intermediate | 10 | 40 | 10 | scout ×12, fetch ×6, synth ×1 | Judge + CitationAgent + SourceAuditor + ContradictionResolver |
+| deep | 20 | 250 | 20 | scout ×32, fetch ×16, synth ×1 | Judge + CitationAgent + SourceAuditor + ContradictionResolver + verification sweep (rounds 19–20) |
 
 Default: `standard`. Override max rounds with `--max-rounds N`.
 
@@ -222,9 +222,9 @@ run_subagents({
 - **Consolidation gate:** the consolidator merges each scout batch before the
   next dispatch; add scouts only for genuinely missing coverage — per-agent
   marginal value decays. Profile scout counts are caps, not targets.
-- **Quick:** ~3 scouts + 1 fetcher total. **Standard:** ~5 scouts + 2
-  fetchers. **Intermediate:** ~8 scouts + 4 fetchers. **Deep:** ~12 scouts +
-  6 fetchers. Dispatch in batches of ≤4 (`run_subagents` max 4 per call).
+- **Quick:** ~3 scouts + 1 fetcher total. **Standard:** ~8 scouts + 4
+  fetchers. **Intermediate:** ~12 scouts + 6 fetchers. **Deep:** ~32 scouts +
+  16 fetchers. Dispatch in batches of ≤4 (`run_subagents` max 4 per call).
 - **Order matters:** scouts → echo → fetchers → echo → consolidator. Never
   run the consolidator in parallel with scouts/fetchers.
 
@@ -238,7 +238,7 @@ run_subagents({
     scope: ["<research-dir>/notes.md", "<research-dir>/score.md", "<research-dir>/scout-outputs/"],
     inputs: ["<research-dir>/notes.md", "<research-dir>/score.md", "<research-dir>/scout-outputs/"],
     expected_output: "One-line summary: scores, unique URL count, contradictions, gaps",
-    constraints: ["Do not run in parallel with other agents.", "Do not delegate.", "Prune notes.md hard each round: delete stale search-result dumps and collapse redundant claims; keep it under ~250 lines. A bloated notes.md slows every later merge and causes timeouts."]
+    constraints: ["Do not run in parallel with other agents.", "Do not delegate.", "Prune notes.md hard each round: delete stale search-result dumps and collapse redundant claims; keep it under ~400 lines. A bloated notes.md slows every later merge and causes timeouts."]
   }],
   timeout_seconds: 1200,
   retain_artifacts: "on_failure"
@@ -354,7 +354,7 @@ After the main research rounds, run a verification pass:
 
 Deep profile adds dedicated verification rounds AFTER the main research:
 
-- **Rounds 9-10 (deep):** Verification sweep — run judge, citation, source
+- **Rounds 19-20 (deep):** Verification sweep — run judge, citation, source
   audit, contradiction resolution in parallel (all read-only — safe to
   parallelize).
 
@@ -393,13 +393,13 @@ Deep profile adds dedicated verification rounds AFTER the main research:
 
 ## Completion condition
 
-All four (three for quick/standard — see #4), then dispatch the synthesizer
+All four (three for quick — see #4), then dispatch the synthesizer
 worker to write `report.org` from `draft-report.org`/`notes.md` in the
 research working directory, verify the file exists, and call `complete_loop`
 (status=complete):
 
 1. Every sub-question scored ≥ 80 in `score.md`
-2. Min sources reached (per profile): quick=15, standard=20, intermediate=30, deep=40
+2. Min sources reached (per profile): quick=15, standard=30, intermediate=40, deep=250
    `totalSources` passed to `research_checkpoint` must equal the unique URL
    count in `notes.md`.
 3. No unresolved contradiction on a scored question (or it is acknowledged

@@ -23,7 +23,7 @@ Fetch the full content of each assigned URL, extract key information, and return
    - Numbers, statistics, dates (with context)
    - Methodology or approach (for papers/reports)
    - Contradictions with other known sources (if mentioned)
-4. Rate source credibility (1-5 scale — see scout_research.md for scale).
+4. Rate source credibility (1-5 scale — see scout.md for scale).
 
 ## Return Format
 

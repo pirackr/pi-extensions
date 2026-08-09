@@ -40,6 +40,7 @@ import {
 	requiredAccess,
 	loadProfilesFromDir,
 	loadSubagentConfiguration,
+	loadResearchProfiles,
 	type AgentAccess,
 	type SubagentConfiguration,
 } from "../config.ts";
@@ -797,5 +798,209 @@ describe("loadSubagentConfiguration", () => {
 
 		const result = loadSubagentConfiguration("/ext/tmux-subagent");
 		expect(result.config.maxTasks).toBe(8);
+	});
+});
+
+describe("loadResearchProfiles", () => {
+	it("registers all seven research agents with correct tmux profile names", () => {
+		mockExistsSync.mockReturnValue(true);
+		const result = loadResearchProfiles(
+			{
+				defaultProfile: "standard",
+				defaults: {
+					maxSearchesPerAgent: 20,
+					maxFetchesPerAgent: 20,
+					scoreThreshold: 80,
+					retryCount: 1,
+				},
+				profiles: {
+					quick: {
+						minRounds: 10,
+						maxRounds: 10,
+						minSources: 15,
+						maxScouts: 3,
+						maxFetchers: 1,
+						verification: ["judge"],
+					},
+				},
+				agents: {
+					planner: {
+						description: "Plan research",
+						model: "strong",
+						thinking: "high",
+						tools: ["read", "grep"],
+						access: "read",
+						timeoutSeconds: 300,
+						promptPath: "/mock/agents/planner.md",
+						resultFormat: "markdown",
+					},
+					scout_research: {
+						description: "Research scout",
+						model: "strong",
+						thinking: "high",
+						tools: ["read", "web_lookup"],
+						access: "read",
+						timeoutSeconds: 1800,
+						promptPath: "/mock/agents/scout.md",
+						resultFormat: "markdown",
+					},
+					fetcher: {
+						description: "Deep fetch",
+						model: "strong",
+						thinking: "minimal",
+						tools: ["read", "fetch_web"],
+						access: "read",
+						timeoutSeconds: 720,
+						promptPath: "/mock/agents/fetcher.md",
+						resultFormat: "markdown",
+					},
+					judge: {
+						description: "Judge report",
+						model: "eval",
+						thinking: "medium",
+						tools: ["read"],
+						access: "read",
+						timeoutSeconds: 1200,
+						promptPath: "/mock/agents/judge.md",
+						resultFormat: "markdown",
+					},
+					citation_agent: {
+						description: "Citation mapping",
+						model: "strong",
+						thinking: "low",
+						tools: ["read"],
+						access: "read",
+						timeoutSeconds: 720,
+						promptPath: "/mock/agents/citation-agent.md",
+						resultFormat: "markdown",
+					},
+					source_auditor: {
+						description: "Source audit",
+						model: "strong",
+						thinking: "low",
+						tools: ["read"],
+						access: "read",
+						timeoutSeconds: 720,
+						promptPath: "/mock/agents/source-auditor.md",
+						resultFormat: "markdown",
+					},
+					contradiction_resolver: {
+						description: "Resolve contradictions",
+						model: "light",
+						thinking: "medium",
+						tools: ["read"],
+						access: "read",
+						timeoutSeconds: 960,
+						promptPath: "/mock/agents/contradiction-resolver.md",
+						resultFormat: "markdown",
+					},
+				},
+			},
+			{ strong: "Qwen3.6-35B-A3B-MTP-GGUF", eval: "Gemma-4-31B-it-MTP-GGUF", light: "gpt-oss-20b-GGUF-Q4_K_M" },
+			{ read: "read", grep: "read", web_lookup: "read", fetch_web: "read" },
+		);
+
+		const names = result.map((p) => p.name);
+		expect(names).toContain("planner");
+		expect(names).toContain("scout_research");
+		expect(names).toContain("fetcher");
+		expect(names).toContain("judge");
+		expect(names).toContain("citation_agent");
+		expect(names).toContain("source_auditor");
+		expect(names).toContain("contradiction_resolver");
+		expect(result).toHaveLength(7);
+	});
+
+	it("resolves model aliases to concrete model identifiers", () => {
+		mockExistsSync.mockReturnValue(true);
+		const result = loadResearchProfiles(
+			{
+				defaultProfile: "standard",
+				defaults: {
+					maxSearchesPerAgent: 20,
+					maxFetchesPerAgent: 20,
+					scoreThreshold: 80,
+					retryCount: 1,
+				},
+				profiles: {},
+				agents: {
+					test_agent: {
+						description: "Test",
+						model: "strong",
+						thinking: "high",
+						tools: ["read"],
+						access: "read",
+						timeoutSeconds: 300,
+						promptPath: "/mock/agents/test.md",
+						resultFormat: "markdown",
+					},
+				},
+			},
+			{ strong: "Qwen3.6-35B-A3B-MTP-GGUF" },
+			{ read: "read" },
+		);
+		expect(result[0].model).toBe("Qwen3.6-35B-A3B-MTP-GGUF");
+	});
+
+	it("returns profiles with source marked as research", () => {
+		mockExistsSync.mockReturnValue(true);
+		const result = loadResearchProfiles(
+			{
+				defaultProfile: "standard",
+				defaults: {
+					maxSearchesPerAgent: 20,
+					maxFetchesPerAgent: 20,
+					scoreThreshold: 80,
+					retryCount: 1,
+				},
+				profiles: {},
+				agents: {
+					test_agent: {
+						description: "Test",
+						model: "strong",
+						thinking: "high",
+						tools: ["read"],
+						access: "read",
+						timeoutSeconds: 300,
+						promptPath: "/mock/agents/test.md",
+						resultFormat: "markdown",
+					},
+				},
+			},
+			{ strong: "Qwen3.6-35B-A3B-MTP-GGUF" },
+			{ read: "read" },
+		);
+		expect(result[0].source).toBe("research");
+	});
+
+	it("rejects profiles that would collide with generic profile names", () => {
+		expect(() =>
+			loadResearchProfiles(
+				{
+					defaultProfile: "standard",
+					defaults: {
+						maxSearchesPerAgent: 20,
+						maxFetchesPerAgent: 20,
+						scoreThreshold: 80,
+						retryCount: 1,
+					},
+					profiles: {},
+					agents: {
+						worker: {
+							description: "Should collide",
+							model: "strong",
+							thinking: "high",
+							tools: ["read"],
+							access: "read",
+							timeoutSeconds: 300,
+							promptPath: "/mock/agents/worker.md",
+							resultFormat: "markdown",
+						},
+					},
+				},
+				{ strong: "Qwen3.6-35B-A3B-MTP-GGUF" },
+				{ read: "read" },
+			),
+		).toThrow("collides");
 	});
 });

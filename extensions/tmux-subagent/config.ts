@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { loadDeepResearchConfiguration } from "../deep-research/config.ts";
 
 export type AgentAccess = "read" | "shell" | "write";
 
@@ -15,7 +16,7 @@ export interface AgentProfile {
 	timeoutSeconds?: number;
 	systemPrompt: string;
 	filePath: string;
-	source: "bundled" | "user" | "custom";
+	source: "bundled" | "user" | "custom" | "research";
 }
 
 export interface SubagentConfiguration {
@@ -430,8 +431,130 @@ export function loadSubagentConfiguration(extensionDir: string): {
 			profileMap.set(profile.name, profile);
 		}
 	}
+
+	// Register research agents from the deep-research config
+	try {
+		const packageRoot = path.resolve(extensionDir, "../..");
+		const agentDir = getAgentDir();
+		const deepConfig = loadDeepResearchConfiguration(packageRoot, agentDir);
+		const researchProfiles = loadResearchProfiles(
+			deepConfig,
+			config.models,
+			config.toolAccess,
+		);
+		for (const profile of researchProfiles) {
+			profileMap.set(profile.name, profile);
+		}
+	} catch {
+		// Deep-research config is optional; silently skip if unavailable.
+	}
+
 	if (profileMap.size === 0)
 		throw new Error("No tmux-subagent profiles were discovered.");
 
 	return { config, profiles: [...profileMap.values()], userConfigPath };
+}
+
+/**
+ * Register research agents from the deep-research config as tmux-subagent
+ * profiles. The profile names match the research registry names
+ * (scout_research, fetcher, judge, citation_agent, source_auditor,
+ * contradiction_resolver, planner) and do NOT collide with generic profiles
+ * (worker, reviewer, tester, scout).
+ *
+ * @param config - The resolved deep-research configuration
+ * @param models - Model alias registry (from tmux-subagent config)
+ * @param toolAccess - Tool access registry (from tmux-subagent config)
+ * @returns AgentProfile entries for each research agent
+ */
+export function loadResearchProfiles(
+	config: import("../deep-research/config.ts").ResolvedDeepResearchConfig,
+	models: Record<string, string>,
+	toolAccess: Record<string, AgentAccess>,
+): AgentProfile[] {
+	const ACCESS_RANK: Record<AgentAccess, number> = {
+		read: 0,
+		shell: 1,
+		write: 2,
+	};
+
+	const VALID_ACCESS = new Set<AgentAccess>(["read", "shell", "write"]);
+
+	// Generic profile names that must not be collided with
+	const GENERIC_PROFILE_NAMES = new Set(["worker", "reviewer", "tester", "scout"]);
+
+	const profiles: AgentProfile[] = [];
+	for (const [name, agent] of Object.entries(config.agents)) {
+		if (GENERIC_PROFILE_NAMES.has(name)) {
+			throw new Error(
+				`Research agent '${name}' collides with a generic profile name and cannot be registered.`,
+			);
+		}
+
+		// Validate model alias
+		const concreteModel = models[agent.model];
+		if (concreteModel === undefined) {
+			throw new Error(
+				`Agent '${name}' has an invalid model: '${agent.model}' — not found in models registry.`,
+			);
+		}
+
+		// Validate tools
+		const unknownTools = agent.tools.filter(
+			(tool) => !Object.hasOwn(toolAccess, tool),
+		);
+		if (unknownTools.length > 0) {
+			throw new Error(
+				`Agent '${name}' uses unavailable tools: ${unknownTools.join(", ")}.`,
+			);
+		}
+
+		// Validate access
+		if (!VALID_ACCESS.has(agent.access)) {
+			throw new Error(
+				`Agent '${name}' has an invalid access level: '${agent.access}'.`,
+			);
+		}
+
+		// Compute minimum required access from tools
+		const minimumAccess = agent.tools.reduce<AgentAccess>(
+			(required, tool) =>
+				ACCESS_RANK[toolAccess[tool]] > ACCESS_RANK[required]
+					? (toolAccess[tool] as AgentAccess)
+					: required,
+			"read",
+		);
+		if (ACCESS_RANK[agent.access] < ACCESS_RANK[minimumAccess]) {
+			throw new Error(
+				`Agent '${name}' declares access ${agent.access}, but tools require at least ${minimumAccess}.`,
+			);
+		}
+
+		// Validate prompt path exists
+		if (!fs.existsSync(agent.promptPath)) {
+			throw new Error(
+				`Agent '${name}' has an unresolvable prompt path: '${agent.promptPath}'.`,
+			);
+		}
+		const promptBody = fs.readFileSync(agent.promptPath, "utf8");
+		if (!promptBody.trim()) {
+			throw new Error(
+				`Agent '${name}' prompt file is empty: '${agent.promptPath}'.`,
+			);
+		}
+
+		profiles.push({
+			name,
+			description: agent.description,
+			model: concreteModel,
+			thinking: agent.thinking,
+			tools: [...new Set(agent.tools)],
+			access: agent.access,
+			timeoutSeconds: agent.timeoutSeconds,
+			systemPrompt: promptBody.trim(),
+			filePath: agent.promptPath,
+			source: "research" as const,
+		});
+	}
+	return profiles;
 }

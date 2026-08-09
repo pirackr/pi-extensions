@@ -45,3 +45,9 @@ Unreliable (1): [N] — MUST REPLACE
 [Low-quality source] must be replaced with [suggested replacement]
 
 ```
+
+## Constraints
+
+- Do not modify files. Do not spawn or delegate to another agent.
+- Be fair: distinguish between genuinely unreliable sources and merely obscure ones.
+- Suggested replacements should be plausible and verifiable.

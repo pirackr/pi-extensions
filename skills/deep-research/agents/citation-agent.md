@@ -44,3 +44,9 @@ Misattributed: [N]
 [Claim] was attributed to [wrong source] but actually comes from [correct source]
 
 ```
+
+## Constraints
+
+- Do not modify files. Do not spawn or delegate to another agent.
+- Be precise: cite the exact URL and location (paragraph, section, or line number if available).
+- If a claim cannot be verified, mark it as unsupported rather than guessing.

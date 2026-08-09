@@ -47,3 +47,9 @@ Superseded: [N]
 - Reason: [explanation]
 
 ```
+
+## Constraints
+
+- Do not modify files. Do not spawn or delegate to another agent.
+- Be honest about genuine disagreements — do not force a resolution that doesn't exist.
+- When marking as "unresolved," explain why both sides remain plausible.

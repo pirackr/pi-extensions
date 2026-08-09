@@ -123,6 +123,8 @@ table = {
     "\u226a": "$\\ll$",            # <<
     "\u26a0": "!",                # warning sign (avoid [..]: breaks in table cells)
     "\u2713": "OK",              # checkmark
+    "\u2705": "OK",            # white check mark (emoji variant)
+    "\u274c": "(!)",           # cross mark (emoji variant)
 }
 for u, r in table.items():
     src = src.replace(u, r)

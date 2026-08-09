@@ -38,6 +38,10 @@ export interface RunnerRequest {
 	pi: PiInvocation;
 	childExtensions: string[];
 	loadContextFiles: boolean;
+	/** Hard cap on web_lookup calls for this subagent process (0 = unlimited). */
+	webSearchMaxLookups?: number;
+	/** Hard cap on fetch_web calls for this subagent process (0 = unlimited). */
+	webSearchMaxFetches?: number;
 }
 
 export interface TaskItem {
@@ -50,6 +54,10 @@ export interface TaskItem {
 	inputs?: string[];
 	expected_output?: string;
 	cwd?: string;
+	/** Hard cap on web_lookup calls for this task (overrides config default). 0/unset = use config. */
+	webSearchMaxLookups?: number;
+	/** Hard cap on fetch_web calls for this task (overrides config default). 0/unset = use config. */
+	webSearchMaxFetches?: number;
 }
 
 export interface RunSubagentsParams {
@@ -363,6 +371,18 @@ export default function (pi: ExtensionAPI) {
 					"Working directory; defaults to the parent Pi working directory",
 			}),
 		),
+		webSearchMaxLookups: Type.Optional(
+			Type.Number({
+				description:
+					"Hard cap on web_lookup calls for this task (overrides config default). 0 = unlimited.",
+			}),
+		),
+		webSearchMaxFetches: Type.Optional(
+			Type.Number({
+				description:
+					"Hard cap on fetch_web calls for this task (overrides config default). 0 = unlimited.",
+			}),
+		),
 	});
 	const Params = Type.Object({
 		tasks: Type.Array(TaskItem, {
@@ -589,6 +609,10 @@ export default function (pi: ExtensionAPI) {
 						pi: piInvocation,
 						childExtensions: config.childExtensions,
 						loadContextFiles: config.loadContextFiles,
+						webSearchMaxLookups:
+							item.task.webSearchMaxLookups ?? config.webSearchMaxLookups,
+						webSearchMaxFetches:
+							item.task.webSearchMaxFetches ?? config.webSearchMaxFetches,
 					};
 					requests.push(request);
 					const requestPath = path.join(

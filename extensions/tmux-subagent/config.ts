@@ -27,6 +27,10 @@ export interface SubagentConfiguration {
 	maxTasks: number;
 	defaultTimeoutSeconds: number;
 	retainArtifacts: "never" | "on_failure" | "always";
+	/** Default hard cap on web_lookup calls per subagent process (overridable per-task). 0/unset = unlimited. */
+	webSearchMaxLookups: number;
+	/** Default hard cap on fetch_web calls per subagent process (overridable per-task). 0/unset = unlimited. */
+	webSearchMaxFetches: number;
 }
 
 interface RawConfiguration {
@@ -38,6 +42,8 @@ interface RawConfiguration {
 	maxTasks?: unknown;
 	defaultTimeoutSeconds?: unknown;
 	retainArtifacts?: unknown;
+	webSearchMaxLookups?: unknown;
+	webSearchMaxFetches?: unknown;
 }
 
 const BUILTIN_TOOL_ACCESS: Record<string, AgentAccess> = {
@@ -129,6 +135,21 @@ export function normalizeModels(
 		models[alias] = model;
 	}
 	return models;
+}
+
+/**
+ * Normalize a web-search budget: undefined/null → 0 (unlimited); must be a
+ * non-negative integer otherwise.
+ */
+export function normalizeWebSearchBudget(
+	value: unknown,
+	field: string,
+): number {
+	if (value === undefined || value === null) return 0;
+	if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+		throw new Error(`${field} must be a non-negative integer (0 = unlimited).`);
+	}
+	return value;
 }
 
 export function normalizeToolAccess(
@@ -382,6 +403,14 @@ export function loadSubagentConfiguration(extensionDir: string): {
 		retainArtifacts: (user?.retainArtifacts ??
 			bundled.retainArtifacts ??
 			"on_failure") as SubagentConfiguration["retainArtifacts"],
+		webSearchMaxLookups: normalizeWebSearchBudget(
+			user?.webSearchMaxLookups ?? bundled.webSearchMaxLookups,
+			"webSearchMaxLookups",
+		),
+		webSearchMaxFetches: normalizeWebSearchBudget(
+			user?.webSearchMaxFetches ?? bundled.webSearchMaxFetches,
+			"webSearchMaxFetches",
+		),
 	};
 	validateConfiguration(config);
 

@@ -1,7 +1,7 @@
 ---
 name: scout_research
 description: Broad research search with source evaluation — finds URLs, assesses credibility, returns findings + source list
-model: XYZAILab_XYZ-Aquila-mini-GGUF-Q4_K_M
+model: Qwen3.6-35B-A3B-MTP-GGUF
 thinking: high
 tools: read,grep,find,ls,web_lookup,fetch_web
 access: read
@@ -60,7 +60,8 @@ Query: <original query>
 ## Constraints
 
 - Stay within the task scope. Do not broaden searches beyond what's needed.
-- **Search budget: HARD MAXIMUM 10 web_lookup calls total** (prefer 5-8). After each call, check: do I already have 5+ credible sources covering the question? If yes, STOP searching and write the report immediately.
+- **Search budget: HARD MAXIMUM 50 web_lookup calls total** (prefer 8-15). After each call, check: do I already have 5+ credible sources covering the question? If yes, STOP searching and write the report immediately.
+- **Fetch budget: HARD MAXIMUM 50 fetch_web calls total.** Prefer fetching primary/official sources; skip redundant listicles and SEO pages.
 - Never re-run the same query. Never re-issue a query whose results you already saw.
 - After you have enough sources, do NOT search again — write the Scout Report now. The report is the deliverable.
 - Do not modify files. Do not spawn or delegate to another agent.

@@ -207,6 +207,56 @@ describe("runTaskMode", () => {
 		);
 	});
 
+	it("passes web-search budget flags to child when set", () => {
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			if (typeof path === "string" && path.includes("request")) {
+				return JSON.stringify({
+					taskId: "task-1",
+					agent: "scout",
+					model: "gpt-4o",
+					tools: ["web_lookup", "fetch_web"],
+					cwd: "/workspace",
+					timeoutMs: 300_000,
+					promptPath: "/tmp/prompt.md",
+					taskPath: "/tmp/task.md",
+					outputPath: "/tmp/output.jsonl",
+					stderrPath: "/tmp/stderr.log",
+					statusPath: "/tmp/status.json",
+					pi: { command: "pi", args: [] },
+					childExtensions: [],
+					loadContextFiles: true,
+					webSearchMaxLookups: 10,
+					webSearchMaxFetches: 6,
+				});
+			}
+			if (typeof path === "string" && path.includes("task.md")) {
+				return "Do the task";
+			}
+			return "";
+		});
+		runTaskMode("/tmp/request.json");
+		const [command, args] = mockSpawn.mock.calls[0] as unknown as [
+			string,
+			string[],
+		];
+		expect(command).toBe("pi");
+		expect(args).toContain("--web-search-max-lookups");
+		expect(args).toContain("10");
+		expect(args).toContain("--web-search-max-fetches");
+		expect(args).toContain("6");
+	});
+
+	it("omits web-search budget flags when unset", () => {
+		runTaskMode("/tmp/request.json");
+		const [command, args] = mockSpawn.mock.calls[0] as unknown as [
+			string,
+			string[],
+		];
+		expect(command).toBe("pi");
+		expect(args).not.toContain("--web-search-max-lookups");
+		expect(args).not.toContain("--web-search-max-fetches");
+	});
+
 	it("writes running status after spawning", () => {
 		runTaskMode("/tmp/request.json");
 		const calls = mockWriteFileSync.mock.calls;

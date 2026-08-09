@@ -204,6 +204,7 @@ run_subagents({
       agent: "scout_research",
       objective: "Research: [one specific sub-question]",
       scope: ["<research-dir>/score.md"],
+      // web budgets omitted — no cap configured; unlimited by default
       constraints: [
         "Cover only this sub-question — do not broaden scope.",
         "Start wide: broad queries first, narrow after.",
@@ -216,7 +217,7 @@ run_subagents({
     },
     // ... more scouts, same agent, different objective
   ],
-  timeout_seconds: 960,
+  timeout_seconds: 1800,
   retain_artifacts: "on_failure"
 })
 ```
@@ -267,7 +268,7 @@ run_subagents({
     }
     // ... one task per fragment
   ],
-  timeout_seconds: 960,
+  timeout_seconds: 1800,
   retain_artifacts: "on_failure"
 })
 ```

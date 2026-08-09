@@ -7,6 +7,22 @@ import { ReadabilityStrategy } from "./strategies/readability.ts";
 
 export const fetchStrategies: FetchStrategy[] = [new ReadabilityStrategy()];
 
+/**
+ * Parse a positive-integer budget from a CLI flag value. 0/absent/NaN = unlimited.
+ * The tmux-subagent runner passes --web-search-max-lookups/--web-search-max-fetches
+ * to the child pi process so each subagent that receives this extension gets a
+ * hard cap on search calls, passed directly (no env vars).
+ */
+function parseBudgetFlag(value: boolean | string | undefined): number {
+	if (typeof value !== "string" || !value.trim()) return 0;
+	const n = Number.parseInt(value, 10);
+	return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function budgetLine(used: number, max: number): string {
+	return `[Search budget: ${used}/${max} calls used — ${max - used} remaining]`;
+}
+
 async function fetchWeb(
 	url: string,
 	signal?: AbortSignal,
@@ -37,6 +53,25 @@ async function fetchWeb(
 }
 
 export default function (pi: ExtensionAPI) {
+	pi.registerFlag?.("web-search-max-lookups", {
+		description:
+			"Hard cap on web_lookup calls per process. Passed by the tmux-subagent runner; 0/unset = unlimited.",
+		type: "string",
+	});
+	pi.registerFlag?.("web-search-max-fetches", {
+		description:
+			"Hard cap on fetch_web calls per process. Passed by the tmux-subagent runner; 0/unset = unlimited.",
+		type: "string",
+	});
+	// Per-process counters: each subagent runs in its own pi process, so this
+	// closure state is naturally a per-subagent budget.
+	let lookupCalls = 0;
+	let fetchCalls = 0;
+	const maxLookups = () =>
+		parseBudgetFlag(pi.getFlag?.("web-search-max-lookups"));
+	const maxFetches = () =>
+		parseBudgetFlag(pi.getFlag?.("web-search-max-fetches"));
+
 	pi.registerTool({
 		name: "web_lookup",
 		label: "Web Search",
@@ -70,6 +105,14 @@ export default function (pi: ExtensionAPI) {
 			),
 		}),
 		async execute(_id: string, params: any, signal?: AbortSignal) {
+			const max = maxLookups();
+			if (max > 0 && lookupCalls >= max) {
+				throw new Error(
+					`web_lookup budget exhausted: ${lookupCalls}/${max} searches used. ` +
+						"Stop searching and write your report from the results already collected.",
+				);
+			}
+			lookupCalls += 1;
 			const limit = Math.min(Math.max(params.limit ?? 20, 1), 50);
 			const result = await webLookup(
 				params.query,
@@ -92,6 +135,7 @@ export default function (pi: ExtensionAPI) {
 					text += `  - ${pf.engine}: ${pf.error}\n`;
 				}
 			}
+			if (max > 0) text += `\n${budgetLine(lookupCalls, max)}\n`;
 
 			return {
 				content: [{ type: "text", text }],
@@ -115,6 +159,14 @@ export default function (pi: ExtensionAPI) {
 			),
 		}),
 		async execute(_id: string, params: any, signal?: AbortSignal) {
+			const max = maxFetches();
+			if (max > 0 && fetchCalls >= max) {
+				throw new Error(
+					`fetch_web budget exhausted: ${fetchCalls}/${max} fetches used. ` +
+						"Stop fetching and write your report from the content already collected.",
+				);
+			}
+			fetchCalls += 1;
 			const result = await fetchWeb(params.url, signal);
 
 			let content = result.content;
@@ -124,9 +176,11 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const text = `Title: ${result.title || "(none)"}\nURL: ${result.url}\nStrategy: ${result.strategy}\n\n${content}`;
+			const output =
+				max > 0 ? `${text}\n\n${budgetLine(fetchCalls, max)}\n` : text;
 
 			return {
-				content: [{ type: "text", text }],
+				content: [{ type: "text", text: output }],
 				details: result,
 			};
 		},

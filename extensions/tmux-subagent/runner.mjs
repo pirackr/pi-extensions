@@ -80,17 +80,20 @@ export function runTaskMode(requestPath) {
 	};
 
 	const truncate = (s, n = 120) =>
-		typeof s === "string" && s.length > n ? s.slice(0, n) + "…" : s ?? "";
+		typeof s === "string" && s.length > n ? s.slice(0, n) + "…" : (s ?? "");
 
 	const summarizeArgs = (args) => {
 		if (!args || typeof args !== "object") return "";
 		const parts = [];
-		if (typeof args.query === "string") parts.push(`query="${truncate(args.query)}"`);
+		if (typeof args.query === "string")
+			parts.push(`query="${truncate(args.query)}"`);
 		if (typeof args.url === "string") parts.push(`url=${truncate(args.url)}`);
-		if (typeof args.path === "string") parts.push(`path=${truncate(args.path)}`);
+		if (typeof args.path === "string")
+			parts.push(`path=${truncate(args.path)}`);
 		if (args.limit) parts.push(`limit=${args.limit}`);
 		if (args.engine) parts.push(`engine=${args.engine}`);
-		if (typeof args.command === "string") parts.push(`cmd=${truncate(args.command)}`);
+		if (typeof args.command === "string")
+			parts.push(`cmd=${truncate(args.command)}`);
 		return parts.join(" ");
 	};
 
@@ -100,7 +103,9 @@ export function runTaskMode(requestPath) {
 		if (event.isError) return `ERROR: ${result?.error ?? "tool failed"}`;
 		if (toolName === "web_lookup") {
 			const results = Array.isArray(details?.results) ? details.results : [];
-			const engines = details?.engines?.length ? details.engines.join(",") : "none";
+			const engines = details?.engines?.length
+				? details.engines.join(",")
+				: "none";
 			const head = results
 				.slice(0, 2)
 				.map((r) => `${r.title} — ${r.url}`)
@@ -204,6 +209,16 @@ export function runTaskMode(requestPath) {
 		...(request.thinking ? ["--thinking", request.thinking] : []),
 		"--tools",
 		request.tools.join(","),
+		// Pass web-search budgets directly as CLI flags (no env vars).
+		// The web-search extension registers these and reads them via getFlag().
+		...(Number.isInteger(request.webSearchMaxLookups) &&
+		request.webSearchMaxLookups > 0
+			? ["--web-search-max-lookups", String(request.webSearchMaxLookups)]
+			: []),
+		...(Number.isInteger(request.webSearchMaxFetches) &&
+		request.webSearchMaxFetches > 0
+			? ["--web-search-max-fetches", String(request.webSearchMaxFetches)]
+			: []),
 		"--append-system-prompt",
 		request.promptPath,
 	];

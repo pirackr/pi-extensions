@@ -1,7 +1,6 @@
 {
   "models": {
-    "fast": "provider/fast-model-id",
-    "strong": "provider/strong-model-id"
+    "strong": "Qwen3.6-35B-A3B-MTP-GGUF"
   },
   "childExtensions": [
     "../extensions/web-search/index.ts"
@@ -14,5 +13,7 @@
   "loadContextFiles": true,
   "maxTasks": 1,
   "defaultTimeoutSeconds": 300,
+  "webSearchMaxLookups": 0,
+  "webSearchMaxFetches": 0,
   "retainArtifacts": "on_failure"
 }

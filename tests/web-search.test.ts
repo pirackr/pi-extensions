@@ -332,9 +332,7 @@ describe("search composition", () => {
 			expect(resolveChain("duckduckgo").map((e) => e.name)).toEqual([
 				"duckduckgo",
 			]);
-			expect(resolveChain("tavily").map((e) => e.name)).toEqual([
-				"tavily",
-			]);
+			expect(resolveChain("tavily").map((e) => e.name)).toEqual(["tavily"]);
 		});
 
 		it("degrades unknown choices to the default chain", () => {
@@ -345,10 +343,7 @@ describe("search composition", () => {
 		});
 
 		it("auto chain never includes opt-in engines", () => {
-			expect(resolveChain().map((e) => e.name)).toEqual([
-				"exa",
-				"duckduckgo",
-			]);
+			expect(resolveChain().map((e) => e.name)).toEqual(["exa", "duckduckgo"]);
 			expect(resolveChain("auto").map((e) => e.name)).toEqual([
 				"exa",
 				"duckduckgo",
@@ -415,9 +410,9 @@ describe("search composition", () => {
 			);
 			expect(result.results).toEqual([]);
 			expect(result.engines).toEqual([]);
-			expect(
-				result.partialFailures.some((pf) => pf.engine === "tavily"),
-			).toBe(true);
+			expect(result.partialFailures.some((pf) => pf.engine === "tavily")).toBe(
+				true,
+			);
 		});
 	});
 
@@ -527,5 +522,69 @@ describe("extension tools", () => {
 		expect(res.details).toHaveProperty("content");
 		expect(res.details).toHaveProperty("strategy");
 		expect(res.details).toHaveProperty("error");
+	});
+
+	it("web_lookup throws when budget flag is exhausted", async () => {
+		const results: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => results.push(tool),
+			getFlag: (name: string) =>
+				name === "web-search-max-lookups" ? "2" : undefined,
+		};
+		createExtension(mockPi as any);
+		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+
+		await expect(lookupTool.execute("1", { query: "a" })).resolves.toBeTruthy();
+		await expect(lookupTool.execute("2", { query: "b" })).resolves.toBeTruthy();
+		await expect(lookupTool.execute("3", { query: "c" })).rejects.toThrow(
+			"web_lookup budget exhausted",
+		);
+	});
+
+	it("web_lookup includes remaining budget in results when capped", async () => {
+		const results: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => results.push(tool),
+			getFlag: (name: string) =>
+				name === "web-search-max-lookups" ? "2" : undefined,
+		};
+		createExtension(mockPi as any);
+		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+
+		const res = await lookupTool.execute("1", { query: "a" });
+		const text = res.content[0].text as string;
+		expect(text).toContain("[Search budget: 1/2 calls used");
+	});
+
+	it("fetch_web throws when budget flag is exhausted", async () => {
+		const results: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => results.push(tool),
+			getFlag: (name: string) =>
+				name === "web-search-max-fetches" ? "1" : undefined,
+		};
+		createExtension(mockPi as any);
+		const fetchTool = results.find((t: any) => t.name === "fetch_web");
+
+		await expect(
+			fetchTool.execute("1", { url: "https://example.com/a" }),
+		).resolves.toBeTruthy();
+		await expect(
+			fetchTool.execute("2", { url: "https://example.com/b" }),
+		).rejects.toThrow("fetch_web budget exhausted");
+	});
+
+	it("web_lookup is unlimited when budget flag is absent", async () => {
+		const results: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => results.push(tool),
+		};
+		createExtension(mockPi as any);
+		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+
+		await expect(lookupTool.execute("1", { query: "a" })).resolves.toBeTruthy();
+		const res = await lookupTool.execute("2", { query: "b" });
+		const text = res.content[0].text as string;
+		expect(text).not.toContain("[Search budget:");
 	});
 });

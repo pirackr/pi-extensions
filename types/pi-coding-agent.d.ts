@@ -77,6 +77,15 @@ declare module "@earendil-works/pi-coding-agent" {
 			}>;
 		}): void;
 		registerCommand(name: string, options: RegisteredCommand): void;
+		registerFlag(
+			name: string,
+			options: {
+				description?: string;
+				type: "boolean" | "string";
+				default?: boolean | string;
+			},
+		): void;
+		getFlag(name: string): boolean | string | undefined;
 		sendMessage(
 			message: {
 				customType: string;

@@ -33,6 +33,7 @@ import {
 	readConfiguration,
 	normalizePaths,
 	normalizeModels,
+	normalizeWebSearchBudget,
 	normalizeToolAccess,
 	mergeToolAccess,
 	validateConfiguration,
@@ -277,6 +278,8 @@ describe("validateConfiguration", () => {
 		maxTasks: 4,
 		defaultTimeoutSeconds: 300,
 		retainArtifacts: "on_failure",
+		webSearchMaxLookups: 0,
+		webSearchMaxFetches: 0,
 	};
 
 	it("passes for valid configuration", () => {
@@ -329,6 +332,25 @@ describe("validateConfiguration", () => {
 				loadContextFiles: "yes" as never,
 			}),
 		).toThrow("loadContextFiles must be a boolean");
+	});
+
+	it("normalizes webSearchMaxLookups from config", () => {
+		expect(normalizeWebSearchBudget(10, "webSearchMaxLookups")).toBe(10);
+		expect(normalizeWebSearchBudget(undefined, "webSearchMaxLookups")).toBe(0);
+		expect(normalizeWebSearchBudget(null, "webSearchMaxLookups")).toBe(0);
+		expect(normalizeWebSearchBudget(0, "webSearchMaxLookups")).toBe(0);
+	});
+
+	it("rejects negative or fractional webSearchMaxLookups", () => {
+		expect(() => normalizeWebSearchBudget(-1, "webSearchMaxLookups")).toThrow(
+			"webSearchMaxLookups must be a non-negative integer",
+		);
+		expect(() => normalizeWebSearchBudget(1.5, "webSearchMaxLookups")).toThrow(
+			"webSearchMaxLookups must be a non-negative integer",
+		);
+		expect(() => normalizeWebSearchBudget("10", "webSearchMaxLookups")).toThrow(
+			"webSearchMaxLookups must be a non-negative integer",
+		);
 	});
 });
 

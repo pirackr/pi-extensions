@@ -108,7 +108,9 @@ import {
 	renderProgress,
 	renderResults,
 	delay,
+	validateAndExportSummaryResults,
 	type TaskStatus,
+	type PreparedTask,
 } from "../index.ts";
 
 const mockExecFile = vi.mocked(execFile);
@@ -283,7 +285,7 @@ describe("buildTaskPrompt", () => {
 			expected_output: "Fixed code",
 		};
 
-		const result = buildTaskPrompt(task);
+		const result = buildTaskPrompt(task, "full");
 		expect(result).toContain("# Objective\nFix the bug");
 		expect(result).toContain("# Scope\n- src/bug.ts");
 		expect(result).toContain("# Non-Goals\n- Don't refactor");
@@ -296,7 +298,7 @@ describe("buildTaskPrompt", () => {
 
 	it("uses defaults for missing fields", () => {
 		const task = { objective: "Do something" };
-		const result = buildTaskPrompt(task);
+		const result = buildTaskPrompt(task, "full");
 		expect(result).toContain("# Objective\nDo something");
 		expect(result).toContain(
 			"# Scope\n- Use only the scope needed for the objective.",
@@ -325,7 +327,7 @@ describe("buildTaskPrompt", () => {
 			acceptance_criteria: [],
 			inputs: [],
 		};
-		const result = buildTaskPrompt(task);
+		const result = buildTaskPrompt(task, "full");
 		expect(result).toContain(
 			"# Scope\n- Use only the scope needed for the objective.",
 		);
@@ -750,5 +752,268 @@ describe("delay", () => {
 
 	it("resolves normally without signal", async () => {
 		await expect(delay(10)).resolves.toBeUndefined();
+	});
+});
+
+describe("validateAndExportSummaryResults", () => {
+	const mockRenameSync = vi.fn();
+	const mockWriteFile = vi.mocked(fs.promises.writeFile);
+	const mockMkdir = vi.mocked(fs.promises.mkdir);
+	const mockRm = vi.mocked(fs.promises.rm);
+
+	beforeEach(() => {
+		vi.spyOn(fs, "renameSync").mockImplementation(mockRenameSync);
+		mockWriteFile.mockReset();
+		mockMkdir.mockReset();
+		mockRm.mockReset();
+		mockRenameSync.mockReset();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	function makeStatus(
+		overrides: Partial<TaskStatus> = {},
+	): TaskStatus {
+		return {
+			taskId: "task-1",
+			agent: "scout",
+			state: "succeeded",
+			startedAt: "2024-01-01T00:00:00Z",
+			model: "test-model",
+			result: `<coordinator-summary>
+Status: succeeded
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>`,
+			...overrides,
+		};
+	}
+
+	function makePrepared(
+		overrides: Partial<PreparedTask> = {},
+	): PreparedTask {
+		return {
+			task: { agent: "scout", objective: "test" },
+			profile: {
+				name: "scout",
+				description: "scout",
+				model: "test",
+				tools: [],
+				access: "read",
+				systemPrompt: "prompt",
+				filePath: "/p",
+				source: "bundled",
+			},
+			cwd: "/tmp",
+			timeoutSeconds: 300,
+			taskId: "task-1",
+			...overrides,
+		};
+	}
+
+	it("succeeds when coordinator-summary is present and valid", async () => {
+		const statuses = [makeStatus()];
+		const prepared = [makePrepared()];
+		await validateAndExportSummaryResults(statuses, prepared);
+		expect(statuses[0].state).toBe("succeeded");
+		expect((statuses[0] as any).parsedResult).toBeDefined();
+		expect((statuses[0] as any).parsedResult.summary.status).toBe("succeeded");
+	});
+
+	it("fails when coordinator-summary block is missing", async () => {
+		const statuses = [makeStatus({ result: "no summary here" })];
+		const prepared = [makePrepared()];
+		await validateAndExportSummaryResults(statuses, prepared);
+		expect(statuses[0].state).toBe("failed");
+		expect(statuses[0].errorMessage).toContain(
+			"Structured result validation failed",
+		);
+		expect(statuses[0].errorMessage).toContain(
+			"Missing <coordinator-summary> block",
+		);
+	});
+
+	it("fails when coordinator-summary is malformed (invalid status)", async () => {
+		const result = `<coordinator-summary>
+Status: unknown
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [makePrepared()];
+		await validateAndExportSummaryResults(statuses, prepared);
+		expect(statuses[0].state).toBe("failed");
+		expect(statuses[0].errorMessage).toContain(
+			"invalid Status value",
+		);
+	});
+
+	it("skips non-succeeded tasks", async () => {
+		const statuses = [
+			makeStatus({ state: "failed", errorMessage: "err" }),
+		];
+		const prepared = [makePrepared()];
+		await validateAndExportSummaryResults(statuses, prepared);
+		expect(statuses[0].state).toBe("failed");
+		expect(statuses[0].errorMessage).toBe("err");
+	});
+
+	it("exports artifact atomically when result_path is supplied", async () => {
+		const result = `<coordinator-summary>
+Status: succeeded
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>
+<artifact>artifact payload</artifact>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [
+			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+		];
+		mockWriteFile.mockResolvedValue(undefined as any);
+		mockMkdir.mockResolvedValue(undefined as any);
+		mockRenameSync.mockReturnValue(undefined as any);
+
+		await validateAndExportSummaryResults(statuses, prepared);
+
+		expect(statuses[0].state).toBe("succeeded");
+		expect(mockMkdir).toHaveBeenCalledWith(
+			"/data",
+			{ recursive: true },
+		);
+		expect(mockWriteFile).toHaveBeenCalled();
+		expect(mockRenameSync).toHaveBeenCalledWith(
+			expect.stringContaining(".tmp"),
+			"/data/out.org",
+		);
+	});
+
+	it("does not require artifact when result_path is not supplied", async () => {
+		const result = `<coordinator-summary>
+Status: succeeded
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [makePrepared()];
+		await validateAndExportSummaryResults(statuses, prepared);
+		expect(statuses[0].state).toBe("succeeded");
+		expect(mockWriteFile).not.toHaveBeenCalled();
+	});
+
+	it("fails when artifact is required but missing", async () => {
+		const result = `<coordinator-summary>
+Status: succeeded
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [
+			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+		];
+		await validateAndExportSummaryResults(statuses, prepared);
+		expect(statuses[0].state).toBe("failed");
+		expect(statuses[0].errorMessage).toContain(
+			"Missing <artifact> block",
+		);
+	});
+
+	it("fails the task when export rename fails and cleans up temp", async () => {
+		const result = `<coordinator-summary>
+Status: succeeded
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>
+<artifact>artifact payload</artifact>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [
+			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+		];
+		mockWriteFile.mockResolvedValue(undefined as any);
+		mockMkdir.mockResolvedValue(undefined as any);
+		mockRenameSync.mockImplementation(() => {
+			throw new Error("Permission denied");
+		});
+		mockRm.mockResolvedValue(undefined as any);
+
+		await validateAndExportSummaryResults(statuses, prepared);
+
+		expect(statuses[0].state).toBe("failed");
+		expect(statuses[0].errorMessage).toContain("Result export failed");
+		expect(mockRm).toHaveBeenCalled();
+	});
+
+	it("preserves the target path when export rename fails", async () => {
+		// If the target path already exists, rename failure should not remove it.
+		const result = `<coordinator-summary>
+Status: succeeded
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>
+<artifact>artifact payload</artifact>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [
+			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+		];
+		mockWriteFile.mockResolvedValue(undefined as any);
+		mockMkdir.mockResolvedValue(undefined as any);
+		mockRenameSync.mockImplementation(() => {
+			throw new Error("EEXIST");
+		});
+		mockRm.mockResolvedValue(undefined as any);
+
+		await validateAndExportSummaryResults(statuses, prepared);
+
+		expect(statuses[0].state).toBe("failed");
+		// Target path should not have been touched by the cleanup.
+		expect(mockRm).toHaveBeenCalledWith(
+			expect.stringContaining(".tmp"),
+			{ force: true },
+		);
+	});
+
+	it("includes parsed result and result_path on statuses", async () => {
+		const result = `<coordinator-summary>
+Status: partial
+Outcome: partial work
+Evidence added: 2
+Key changes: item1
+Contradictions/blockers: blocker1
+Recommended next action: retry
+</coordinator-summary>
+<artifact>org fragment content</artifact>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [
+			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+		];
+		await validateAndExportSummaryResults(statuses, prepared);
+		const s = statuses[0] as any;
+		expect(s.parsedResult.summary.status).toBe("partial");
+		expect(s.parsedResult.summary.outcome).toBe("partial work");
+		expect(s.parsedResult.summary.keyChanges).toEqual(["item1"]);
+		expect(s.parsedResult.summary.contradictions).toEqual(["blocker1"]);
+		expect(s.result_path).toBe("/data/out.org");
 	});
 });

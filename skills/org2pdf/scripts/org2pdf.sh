@@ -125,6 +125,7 @@ table = {
     "\u2713": "OK",              # checkmark
     "\u2705": "OK",            # white check mark (emoji variant)
     "\u274c": "(!)",           # cross mark (emoji variant)
+    "\ufe0f": "",              # emoji variation selector-16 (strips ⚠️/✅️ to ⚠/✅)
 }
 for u, r in table.items():
     src = src.replace(u, r)

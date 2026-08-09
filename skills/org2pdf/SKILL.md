@@ -44,6 +44,7 @@ These bite on minimal texlive (`texlive-combined-basic`) and manifest as
 | em/en dashes `— –` in some contexts | TS1 fallback attempts | convert to `---` / `--` |
 | `\textsubscript`/`\textsuperscript` inside a *heading* | tcrm error via PDF-bookmark processing | `\pdfstringdefDisableCommands{...}` neutralizes them for bookmarks |
 | `#+BEGIN_EXAMPLE` sources with long URLs | overfull hbox warnings (harmless) | accept; or `#+ATTR_LATEX: :font \footnotesize` on the block |
+| *any other unicode* (emoji 🚀, CJK 「」, circled ①, TS1-mapped ½ € © …) | `Unicode character U+XXXX not set up` **or** mktexpk/tcrm1095 font errors | the compile step self-heals: chars pdflatex rejects are transliterated (NFKD, else `?`) and recompiled in a loop until 3 clean passes; accented Latin (é ü) is untouched; add curated table entries for glyphs you want mapped better |
 
 ## Common Mistakes
 

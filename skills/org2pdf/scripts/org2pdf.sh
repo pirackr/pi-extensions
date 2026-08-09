@@ -126,6 +126,20 @@ table = {
     "\u2705": "OK",            # white check mark (emoji variant)
     "\u274c": "(!)",           # cross mark (emoji variant)
     "\ufe0f": "",              # emoji variation selector-16 (strips ⚠️/✅️ to ⚠/✅)
+    # textcomp-mapped chars: inputenc maps these to \text... glyphs that need the
+    # missing tcrm font (same failure as bullets/§/$) — ASCII-ize them here:
+    "\u20ac": "EUR",            # euro sign (\\texteuro -> tcrm1095 on minimal texlive)
+    "\u00a9": "(c)",           # copyright (\\textcopyright -> tcrm)
+    "\u00ae": "(R)",           # registered (\\textregistered -> tcrm)
+    "\u2122": "(TM)",          # trademark (\\texttrademark -> tcrm)
+    # fractions/symbols inputenc maps to TS1 glyphs (tcrm) as well:
+    "\u00bd": "1/2",           # one half (\\textonehalf)
+    "\u00bc": "1/4",           # one quarter (\\textonequarter)
+    "\u00be": "3/4",           # three quarters (\\textthreequarters)
+    "\u00b9": "\\textsuperscript{1}",  # superscript one (\\textonesuperior)
+    "\u00b3": "\\textsuperscript{3}",  # superscript three (\\textthreesuperior)
+    "\u00b5": "u",             # micro sign (\\textmu)
+    "\u00f7": "$\\div$",      # division sign (\\textdiv)
 }
 for u, r in table.items():
     src = src.replace(u, r)
@@ -133,11 +147,57 @@ for u, r in table.items():
 open(path, "w", encoding="utf-8").write(src)
 PYEOF
 
-# 3) compile (3 passes: first pass populates TOC/bookmarks, later passes stabilize)
+# 3) compile — self-healing loop. Minimal texlive rejects two unicode classes:
+heal_tex() {
+python3 - "$TEX" "$@" <<'PYEOF'
+import sys
+import unicodedata as _ud
+src = open(sys.argv[1], encoding="utf-8").read()
+codes = sys.argv[2:]
+if codes and codes != ["ALL"]:
+    chars = [chr(int(h, 16)) for h in codes]
+else:
+    chars = sorted({c for c in src if ord(c) > 0x7F})
+for c in chars:
+    if c not in src:
+        continue
+    try:
+        rep = _ud.normalize("NFKD", c).encode("ascii", "ignore").decode("ascii").replace("\u2044", "/")
+    except Exception:
+        rep = ""
+    if not rep:
+        rep = "?"
+    src = src.replace(c, rep)
+    print("org2pdf: healed U+%04X %s -> %s" % (ord(c), _ud.name(c, "?"), "?" if rep == "?" else rep), file=sys.stderr)
+open(sys.argv[1], "w", encoding="utf-8").write(src)
+PYEOF
+}
+# 3) compile — self-healing loop. Minimal texlive rejects two unicode classes:
+#   (a) "Unicode character U+XXXX not set up for use with LaTeX" -> transliterate
+#       exactly those chars (NFKD, else '?'); (b) chars inputenc maps to TS1/
+#       textcomp glyphs (€ © ½ -> \texteuro \textonehalf...) which need the missing
+#       tcrm font and fail as mktexpk/font errors — not attributable to one char in
+#       the log, so blanket-transliterate every remaining non-ASCII char then.
+#   Accented Latin (é ü...) is OT1-safe under utf8 inputenc and is never touched.
+#   Loop until 3 consecutive clean passes (TOC/bookmarks stabilization).
 cd "$DIR"
-for _ in 1 2 3; do
-	pdflatex -interaction nonstopmode -halt-on-error "$BASE.tex" >/dev/null
+clean=0
+for _ in 1 2 3 4 5 6 7 8; do
+	pdflatex -interaction nonstopmode "$BASE.tex" >/dev/null 2>&1 || true
+	CODES=$(grep -oP '\(U\+[0-9A-Fa-f]+\)' "$BASE.log" 2>/dev/null | grep -oP '[0-9A-Fa-f]+' | sort -u | tr '\n' ' ' || true)
+	FONT=$(grep -icE 'mktexpk|tcrm[0-9]+\.|missfont' "$BASE.log" 2>/dev/null || true)
+	if [[ -n "$CODES" ]]; then
+		heal_tex $CODES
+		clean=0
+	elif (( FONT > 0 )); then
+		heal_tex ALL
+		clean=0
+	else
+		clean=$((clean + 1))
+	fi
+	if (( clean >= 3 )); then break; fi
 done
+[[ -f "$BASE.pdf" ]] || { echo "error: pdflatex failed repeatedly; log kept at $BASE.log" >&2; exit 1; }
 
 rm -f "$BASE.aux" "$BASE.toc" "$BASE.out" "$BASE.log" missfont.log
 if [[ "$(readlink -f "$OUTPUT" 2>/dev/null)" != "$(readlink -f "$DIR/$BASE.pdf" 2>/dev/null)" ]]; then

@@ -47,9 +47,16 @@ export class TinyFishFetchStrategy implements FetchStrategyAdapter {
 				params.include_etag_and_last_modified = opts.include_etag_and_last_modified;
 			}
 
-			const response = await this.client.fetch.getContents(params, {
-				signal,
-			} as any);
+			// @tiny-fish/sdk does not accept AbortSignal — the SDK's own
+			// timeout/retry logic runs independently. We check here only to
+			// avoid invoking the SDK after the caller has already cancelled.
+			if (signal?.aborted) {
+				const e = new Error("request aborted by caller");
+				e.name = "AbortError";
+				throw e;
+			}
+
+			const response = await this.client.fetch.getContents(params as any);
 			const result = response.results[0];
 
 			if (!result) {

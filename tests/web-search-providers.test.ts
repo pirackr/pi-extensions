@@ -237,28 +237,18 @@ describe("TinyFishEngine", () => {
 
   it("aborts on AbortSignal", async () => {
     const controller = new AbortController();
-    mockTinyFishSearchQuery.mockImplementation((_params, options) => {
-      if (options?.signal?.aborted) {
-        const err = new Error("aborted");
-        (err as any).name = "AbortError";
-        throw err;
-      }
-      return new Promise((_resolve, reject) => {
-        options?.signal?.addEventListener("abort", () => {
-          const err = new Error("aborted");
-          (err as any).name = "AbortError";
-          reject(err);
-        });
-      });
-    });
+    // SDK mock — signal is no longer passed to @tiny-fish/sdk, so the mock
+    // does not need to handle it. The pre-abort guard in the adapter throws
+    // before the SDK is ever invoked.
+    mockTinyFishSearchQuery.mockResolvedValue({ results: [] });
 
+    controller.abort();
     const promise = engine.search(
       { query: "test", limit: 5 },
       controller.signal,
     );
-    controller.abort();
 
-    await expect(promise).rejects.toThrow("aborted");
+    await expect(promise).rejects.toThrow("request aborted by caller");
   });
 
   it("maps SDK errors to categorized failures", async () => {
@@ -1193,28 +1183,18 @@ describe("TinyFishFetchStrategy", () => {
 
   it("throws AbortError on cancellation", async () => {
     const controller = new AbortController();
-    mockTinyFishFetchGetContents.mockImplementation((_params: any, options: any) => {
-      if (options?.signal?.aborted) {
-        const err = new Error("aborted");
-        (err as any).name = "AbortError";
-        throw err;
-      }
-      return new Promise((_resolve, reject) => {
-        options?.signal?.addEventListener("abort", () => {
-          const err = new Error("aborted");
-          (err as any).name = "AbortError";
-          reject(err);
-        });
-      });
-    });
+    // SDK mock — signal is no longer passed to @tiny-fish/sdk, so the mock
+    // does not need to handle it. The pre-abort guard in the adapter throws
+    // before the SDK is ever invoked.
+    mockTinyFishFetchGetContents.mockResolvedValue({ results: [], errors: [] });
 
+    controller.abort();
     const promise = strategy.fetch(
       { url: "https://example.com/page" },
       controller.signal,
     );
-    controller.abort();
 
-    await expect(promise).rejects.toThrow("aborted");
+    await expect(promise).rejects.toThrow("request aborted by caller");
   });
 
   it("propagates SDK errors with status code", async () => {

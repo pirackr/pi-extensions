@@ -115,7 +115,7 @@ function validateConfig(
 	const routing = config.routing;
 	if (routing && typeof routing === "object") {
 		for (const op of ["searchAuto", "fetch"] as const) {
-			const arr = routing[op];
+			const arr = (routing as Record<string, unknown>)[op];
 			if (Array.isArray(arr)) {
 				for (const engine of arr) {
 					if (typeof engine === "string" && !KNOWN_ROUTING_ENGINES.has(engine)) {
@@ -315,7 +315,7 @@ export async function loadWebSearchConfig(): Promise<LoadConfigResult> {
 	}
 
 	return {
-		config: config as WebSearchConfig,
+		config: config as unknown as WebSearchConfig,
 		warnings,
 	};
 }

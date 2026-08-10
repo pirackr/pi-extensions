@@ -241,6 +241,7 @@ export type FetchFormat = "markdown" | "html" | "json" | "text" | "unknown";
 
 /** Request-object-based search engine interface for future adapters. */
 export interface SearchEngineAdapter {
+	name: string;
 	search(request: WebLookupRequest, signal?: AbortSignal): Promise<SearchResult[]>;
 }
 

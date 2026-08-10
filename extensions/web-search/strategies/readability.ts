@@ -48,8 +48,8 @@ export class ReadabilityStrategy implements FetchStrategy {
 
       return {
         url,
-        title: article.title || '',
-        content: article.content,
+        title: article.title ?? '',
+        content: article.content ?? '',
         error: null,
       };
     } catch (err) {

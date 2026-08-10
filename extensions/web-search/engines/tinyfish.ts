@@ -30,24 +30,30 @@ export class TinyFishEngine implements SearchEngineAdapter {
 		const opts = request.advancedOptions?.tinyfish;
 
 		try {
-			const response = await this.client.search.query(
-				{
-					query: request.query,
-					...(opts?.purpose ? { purpose: opts.purpose } : {}),
-					...(opts?.location ? { location: opts.location } : {}),
-					...(opts?.language ? { language: opts.language } : {}),
-					...(opts?.include_domains ? { include_domains: opts.include_domains } : {}),
-					...(opts?.exclude_domains ? { exclude_domains: opts.exclude_domains } : {}),
-					...(opts?.after_date ? { after_date: opts.after_date } : {}),
-					...(opts?.before_date ? { before_date: opts.before_date } : {}),
-					...(opts?.recency_minutes != null ? { recency_minutes: opts.recency_minutes } : {}),
-					...(opts?.domain_type ? { domain_type: opts.domain_type } : {}),
-					...(opts?.pub_year_min != null ? { pub_year_min: opts.pub_year_min } : {}),
-					...(opts?.pub_year_max != null ? { pub_year_max: opts.pub_year_max } : {}),
-					...(opts?.page != null ? { page: opts.page } : {}),
-				},
-				{ signal },
-			);
+			// @tiny-fish/sdk does not accept AbortSignal — the SDK's own
+			// timeout/retry logic runs independently. We check here only to
+			// avoid invoking the SDK after the caller has already cancelled.
+			if (signal?.aborted) {
+				const e = new Error("request aborted by caller");
+				e.name = "AbortError";
+				throw e;
+			}
+
+			const response = await this.client.search.query({
+				query: request.query,
+				...(opts?.purpose ? { purpose: opts.purpose } : {}),
+				...(opts?.location ? { location: opts.location } : {}),
+				...(opts?.language ? { language: opts.language } : {}),
+				...(opts?.include_domains ? { include_domains: opts.include_domains } : {}),
+				...(opts?.exclude_domains ? { exclude_domains: opts.exclude_domains } : {}),
+				...(opts?.after_date ? { after_date: opts.after_date } : {}),
+				...(opts?.before_date ? { before_date: opts.before_date } : {}),
+				...(opts?.recency_minutes != null ? { recency_minutes: opts.recency_minutes } : {}),
+				...(opts?.domain_type ? { domain_type: opts.domain_type } : {}),
+				...(opts?.pub_year_min != null ? { pub_year_min: opts.pub_year_min } : {}),
+				...(opts?.pub_year_max != null ? { pub_year_max: opts.pub_year_max } : {}),
+				...(opts?.page != null ? { page: opts.page } : {}),
+			});
 
 			const results: SearchResult[] = [];
 			for (const item of response.results.slice(0, limit)) {

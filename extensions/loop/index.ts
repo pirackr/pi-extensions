@@ -9,7 +9,7 @@ import type {
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { loadDeepResearchConfiguration } from "../deep-research/config.ts";
-import { parseScoreTable } from "../deep-research/verification.ts";
+import { parseScoreTable, resolveVerificationFile, loadAndValidateVerificationArtifact, validateJudgeArtifact, validateCitationsArtifact, validateSourcesArtifact, validateContradictionsArtifact, judgePasses, citationsPasses, sourcesPasses, contradictionsPasses, VERIFICATION_AGENT_TO_FILE } from "../deep-research/verification.ts";
 import {
 	setActiveResearchBudgets,
 	getActiveResearchBudgets,
@@ -793,6 +793,108 @@ export default function piLoop(pi: ExtensionAPI) {
 					isError: true,
 				};
 			}
+
+			// Research-specific completion gates — only enforced for /research.
+			// Generic /loop is unaffected.
+			if (loop.commandName === "research") {
+				const gates: string[] = [];
+
+				// Gate 1: valid checkpoint evidence belonging to this run.
+				const ce = loop.checkpointEvidence;
+				if (!ce) {
+					gates.push("checkpoint: missing (no evidence recorded)");
+				} else if (ce.runId !== loop.id) {
+					gates.push(`checkpoint: stale (run ${ce.runId}, expected ${loop.id})`);
+				} else if (ce.round < 1) {
+					gates.push(`checkpoint: invalid round ${ce.round} (must be >= 1)`);
+				} else if (ce.verdict !== "PROCEED" && ce.verdict !== "PROCEED_WITH_GAPS") {
+					gates.push(`checkpoint: verdict is '${ce.verdict}' (need PROCEED or PROCEED_WITH_GAPS)`);
+				}
+
+				// Gate 2: report.org exists and is non-empty.
+				if (loop.workingDir) {
+					const reportPath = path.join(loop.workingDir, "report.org");
+					let reportExists = false;
+					let reportEmpty = false;
+					try {
+						const stat = fs.statSync(reportPath);
+						reportExists = stat.isFile();
+						if (reportExists) {
+							const content = fs.readFileSync(reportPath, "utf8");
+							reportEmpty = content.trim().length === 0;
+						}
+					} catch {
+						// file missing or unreadable
+					}
+					if (!reportExists) {
+						gates.push("report: report.org missing");
+					} else if (reportEmpty) {
+						gates.push("report: report.org is empty");
+					}
+				} else {
+					gates.push("report: no workingDir (report.org cannot be found)");
+				}
+
+				// Gate 3: every profile-required verification artifact exists, parses, passes, and runId matches.
+				const profile = loop.profile ?? "standard";
+				const profileCfg = researchConfig?.profiles[profile];
+				const requiredAgents = profileCfg?.verification ?? [];
+				for (const agentName of requiredAgents) {
+					const fileName = resolveVerificationFile(agentName);
+					if (!loop.workingDir) {
+						gates.push(`verification: ${fileName} missing (no workingDir)`);
+						continue;
+					}
+					const filePath = path.join(loop.workingDir, "verification", fileName);
+					try {
+						let artifactRunId: string | undefined;
+						let artifactPass = false;
+						let failureDetail = "";
+						if (agentName === "judge") {
+							const a = validateJudgeArtifact(JSON.parse(fs.readFileSync(filePath, "utf8")));
+							artifactRunId = a.runId;
+							artifactPass = judgePasses(a);
+							failureDetail = `pass=${a.pass}, verdict=${a.verdict}`;
+						} else if (agentName === "citation_agent") {
+							const a = validateCitationsArtifact(JSON.parse(fs.readFileSync(filePath, "utf8")));
+							artifactRunId = a.runId;
+							artifactPass = citationsPasses(a);
+							failureDetail = `${a.unsupportedClaims.length} unsupported, ${a.misattributedClaims.length} misattributed claims`;
+						} else if (agentName === "source_auditor") {
+							const a = validateSourcesArtifact(JSON.parse(fs.readFileSync(filePath, "utf8")));
+							artifactRunId = a.runId;
+							artifactPass = sourcesPasses(a);
+							failureDetail = `${a.unresolvedReplacements.length} unresolved replacements`;
+						} else {
+							const a = validateContradictionsArtifact(JSON.parse(fs.readFileSync(filePath, "utf8")));
+							artifactRunId = a.runId;
+							artifactPass = contradictionsPasses(a);
+							failureDetail = `${a.unhandled.length} unhandled contradictions`;
+						}
+						if (artifactRunId !== loop.id) {
+							gates.push(`verification: ${fileName} runId mismatch (artifact says ${artifactRunId}, expected ${loop.id})`);
+						} else if (!artifactPass) {
+							gates.push(`verification: ${fileName} failed (${failureDetail})`);
+						}
+					} catch (err) {
+						const msg = err instanceof Error ? err.message : String(err);
+						gates.push(`verification: ${fileName} malformed — ${msg}`);
+					}
+				}
+
+				if (gates.length > 0) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: "Research completion gates not met:\n" + gates.map((g) => `  • ${g}`).join("\n"),
+							},
+						],
+						isError: true,
+					};
+				}
+			}
+
 			loop = { ...loop, status: "complete", updatedAt: Date.now() };
 			persist(pi, ctx);
 			emit(pi, "complete", loop);

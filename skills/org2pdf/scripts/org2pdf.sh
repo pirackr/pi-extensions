@@ -149,7 +149,7 @@ PYEOF
 
 # 3) compile — self-healing loop. Minimal texlive rejects two unicode classes:
 heal_tex() {
-python3 - "$TEX" "$@" <<'PYEOF'
+	python3 - "$TEX" "$@" <<'PYEOF'
 import sys
 import unicodedata as _ud
 src = open(sys.argv[1], encoding="utf-8").read()
@@ -189,15 +189,18 @@ for _ in 1 2 3 4 5 6 7 8; do
 	if [[ -n "$CODES" ]]; then
 		heal_tex $CODES
 		clean=0
-	elif (( FONT > 0 )); then
+	elif ((FONT > 0)); then
 		heal_tex ALL
 		clean=0
 	else
 		clean=$((clean + 1))
 	fi
-	if (( clean >= 3 )); then break; fi
+	if ((clean >= 3)); then break; fi
 done
-[[ -f "$BASE.pdf" ]] || { echo "error: pdflatex failed repeatedly; log kept at $BASE.log" >&2; exit 1; }
+[[ -f "$BASE.pdf" ]] || {
+	echo "error: pdflatex failed repeatedly; log kept at $BASE.log" >&2
+	exit 1
+}
 
 rm -f "$BASE.aux" "$BASE.toc" "$BASE.out" "$BASE.log" missfont.log
 if [[ "$(readlink -f "$OUTPUT" 2>/dev/null)" != "$(readlink -f "$DIR/$BASE.pdf" 2>/dev/null)" ]]; then

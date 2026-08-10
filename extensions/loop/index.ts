@@ -9,7 +9,7 @@ import type {
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { loadDeepResearchConfiguration } from "../deep-research/config.ts";
-import { parseScoreTable, resolveVerificationFile, loadAndValidateVerificationArtifact, validateJudgeArtifact, validateCitationsArtifact, validateSourcesArtifact, validateContradictionsArtifact, judgePasses, citationsPasses, sourcesPasses, contradictionsPasses, VERIFICATION_AGENT_TO_FILE } from "../deep-research/verification.ts";
+import { parseScoreTable, resolveVerificationFile, validateJudgeArtifact, validateCitationsArtifact, validateSourcesArtifact, validateContradictionsArtifact, judgePasses, citationsPasses, sourcesPasses, contradictionsPasses, VERIFICATION_AGENT_TO_FILE } from "../deep-research/verification.ts";
 import {
 	setActiveResearchBudgets,
 	getActiveResearchBudgets,

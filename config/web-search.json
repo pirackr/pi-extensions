@@ -1,0 +1,26 @@
+{
+  "routing": {
+    "searchAuto": ["tinyfish", "exa", "duckduckgo"],
+    "fetch": ["tinyfish", "readability"]
+  },
+  "providers": {
+    "tinyfish": {
+      "search": { "capacity": 30, "windowMs": 60000, "maxRetries": 1 },
+      "fetch": { "capacity": 150, "windowMs": 60000, "maxRetries": 1 }
+    },
+    "exa": {
+      "search": { "capacity": 10, "windowMs": 1000, "maxRetries": 1 }
+    },
+    "tavily": {
+      "search": { "capacity": 100, "windowMs": 60000, "maxRetries": 1 }
+    },
+    "duckduckgo": {
+      "search": {
+        "capacity": null,
+        "windowMs": 60000,
+        "maxRetries": 1,
+        "fallbackCooldownMs": 60000
+      }
+    }
+  }
+}

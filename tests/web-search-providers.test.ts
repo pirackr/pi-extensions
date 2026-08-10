@@ -1408,6 +1408,19 @@ describe("fetchWeb orchestrator", () => {
     expect(result.attempts).toEqual([]);
   });
 
+  it("rejects invalid URL before any reservation or fallback", async () => {
+    const result = await fetchWeb(
+      makeRequest({ url: "not-a-url" }),
+      makeContext(),
+    );
+
+    expect(result.strategy).toBe("none");
+    expect(result.error).toContain("Invalid URL");
+    expect(result.attempts).toEqual([]);
+    expect(mockReserve).not.toHaveBeenCalled();
+    expect(mockTinyFishFetchGetContents).not.toHaveBeenCalled();
+  });
+
   // -----------------------------------------------------------------------
   // Missing credentials → fallback to Readability
   // -----------------------------------------------------------------------

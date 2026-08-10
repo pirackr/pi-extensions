@@ -110,6 +110,21 @@ export async function fetchWeb(
 		}
 	}
 
+	// 1b. Validate URL — terminal, never consumes quota.
+	try {
+		new URL(request.url);
+	} catch {
+		return {
+			url: request.url,
+			title: "",
+			content: "",
+			strategy: "none",
+			format: "unknown",
+			error: `Invalid URL: ${request.url}`,
+			attempts: [],
+		};
+	}
+
 	// 2. Check for cancellation before any quota reservation.
 	const signal = (request as any)["__signal"];
 	if (signal?.aborted) {

@@ -86,27 +86,26 @@ let thisTurnIsContinuation = false;
 
 // Resolved deep-research configuration — loaded once at extension init time.
 // Used by /research for profile thresholds and default per-agent budgets.
-let researchConfig:
-	| {
-			defaults: {
-				maxSearchesPerAgent: number;
-				maxFetchesPerAgent: number;
-				scoreThreshold: number;
-				retryCount: number;
-			};
-			profiles: Record<
-				string,
-				{
-					minRounds: number;
-					maxRounds: number;
-					minSources: number;
-					maxScouts: number;
-					maxFetchers: number;
-					verification: string[];
-				}
-			>;
-	  }
-	| null = null;
+interface ResearchConfigShape {
+	defaults: {
+		maxSearchesPerAgent: number;
+		maxFetchesPerAgent: number;
+		scoreThreshold: number;
+		retryCount: number;
+	};
+	profiles: Record<
+		string,
+		{
+			minRounds: number;
+			maxRounds: number;
+			minSources: number;
+			maxScouts: number;
+			maxFetchers: number;
+			verification: string[];
+		}
+	>;
+}
+let researchConfig: ResearchConfigShape | null = null;
 
 // --- helpers ---------------------------------------------------------------
 
@@ -484,7 +483,7 @@ interface LoopCommandOptions {
 	defaultMaxRounds: number;
 	isResearch?: boolean;
 	/** Resolved deep-research config (only used when isResearch is true). */
-	config?: NonNullable<typeof researchConfig>;
+	config?: ResearchConfigShape;
 }
 
 function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
@@ -978,7 +977,7 @@ export default function piLoop(pi: ExtensionAPI) {
 			const { sources, hint } = effectiveSourceCount(reported, counted);
 
 			// Parse score.md if we have a working directory.
-			let scoreState = { satisfied: true as const, belowThreshold: [] as string[] };
+			let scoreState = { satisfied: true, belowThreshold: [] as string[] };
 			const scoreThreshold = researchConfig?.defaults.scoreThreshold ?? 80;
 			if (loop?.workingDir) {
 				const scorePath = path.join(loop.workingDir, "score.md");

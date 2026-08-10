@@ -331,7 +331,7 @@ function validateRawConfig(raw: unknown, sourceLabel: string): RawDeepResearchCo
 		}
 	}
 
-	return raw as RawDeepResearchConfig;
+	return raw as unknown as RawDeepResearchConfig;
 }
 
 function deepMergeConfig(

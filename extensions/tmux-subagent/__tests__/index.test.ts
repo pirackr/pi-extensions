@@ -1011,11 +1011,16 @@ Recommended next action: retry
 	it("schema exposes result_path in the TypeBox TaskItem", () => {
 		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
 			config: {
+				models: {},
+				toolAccess: {},
+				agentDirs: [],
 				maxTasks: 4,
 				defaultTimeoutSeconds: 300,
 				retainArtifacts: "on_failure",
 				childExtensions: [],
 				loadContextFiles: true,
+				webSearchMaxLookups: 0,
+				webSearchMaxFetches: 0,
 			},
 			profiles: [
 				{
@@ -1053,11 +1058,16 @@ Recommended next action: retry
 	it("rejects a relative result_path upfront", async () => {
 		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
 			config: {
+				models: {},
+				toolAccess: {},
+				agentDirs: [],
 				maxTasks: 4,
 				defaultTimeoutSeconds: 300,
 				retainArtifacts: "on_failure",
 				childExtensions: [],
 				loadContextFiles: true,
+				webSearchMaxLookups: 0,
+				webSearchMaxFetches: 0,
 			},
 			profiles: [
 				{
@@ -1085,7 +1095,7 @@ Recommended next action: retry
 
 		const mockExecFile = vi.mocked(execFile);
 		mockExecFile.mockImplementation((_cmd, _args, _opts, cb) => {
-			if (_cmd === "tmux" && _args[0] === "-V") {
+			if (_cmd === "tmux" && _args?.[0] === "-V") {
 				cb!(null, "3.4.0", "");
 			} else {
 				cb!(new Error("unexpected command"), "", "");
@@ -1119,11 +1129,16 @@ Recommended next action: retry
 	it("accepts an absolute result_path", async () => {
 		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
 			config: {
+				models: {},
+				toolAccess: {},
+				agentDirs: [],
 				maxTasks: 4,
 				defaultTimeoutSeconds: 300,
 				retainArtifacts: "on_failure",
 				childExtensions: [],
 				loadContextFiles: true,
+				webSearchMaxLookups: 0,
+				webSearchMaxFetches: 0,
 			},
 			profiles: [
 				{
@@ -1151,7 +1166,7 @@ Recommended next action: retry
 
 		const mockExecFile = vi.mocked(execFile);
 		mockExecFile.mockImplementation((_cmd, _args, _opts, cb) => {
-			if (_cmd === "tmux" && _args[0] === "-V") {
+			if (_cmd === "tmux" && _args?.[0] === "-V") {
 				cb!(null, "3.4.0", "");
 			} else {
 				cb!(new Error("unexpected command"), "", "");
@@ -1162,8 +1177,8 @@ Recommended next action: retry
 		mockAccess.mockResolvedValue(undefined as any);
 		const mockStat = vi.mocked(fs.promises.stat);
 		mockStat.mockResolvedValue({ isDirectory: () => true } as any);
-		fs.promises.realpath.mockImplementation(async () => "/tmp");
-		fs.promises.mkdtemp.mockImplementation(async () => "/tmp/pi-subagent-test");
+		vi.mocked(fs.promises.realpath).mockImplementation(async () => "/tmp");
+		vi.mocked(fs.promises.mkdtemp).mockImplementation(async () => "/tmp/pi-subagent-test");
 		// vi.restoreAllMocks() in this describe's afterEach wipes module-mock
 		// implementations (os.tmpdir etc.) — re-establish what execute() needs.
 		vi.mocked(os.tmpdir).mockReturnValue("/tmp");
@@ -1193,6 +1208,9 @@ describe("active research session budget enforcement", () => {
 	function buildTool() {
 		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
 			config: {
+				models: {},
+				toolAccess: {},
+				agentDirs: [],
 				maxTasks: 4,
 				defaultTimeoutSeconds: 300,
 				retainArtifacts: "on_failure",
@@ -1231,7 +1249,7 @@ describe("active research session budget enforcement", () => {
 			// -V and new-session must succeed so execute() reaches the requests loop
 			// (request.json gets written there); new-window then rejects, which lets
 			// the test capture the request file and observe the rejection.
-			if (_cmd === "tmux" && (_args[0] === "-V" || _args[0] === "new-session")) {
+			if (_cmd === "tmux" && (_args?.[0] === "-V" || _args?.[0] === "new-session")) {
 				cb!(null, "3.4.0", "");
 			} else {
 				cb!(new Error("unexpected command"), "", "");
@@ -1240,8 +1258,8 @@ describe("active research session budget enforcement", () => {
 		});
 		vi.mocked(fs.promises.access).mockResolvedValue(undefined as any);
 		vi.mocked(fs.promises.stat).mockResolvedValue({ isDirectory: () => true } as any);
-		fs.promises.realpath.mockImplementation(async () => "/tmp");
-		fs.promises.mkdtemp.mockImplementation(async () => "/tmp/pi-subagent-test");
+		vi.mocked(fs.promises.realpath).mockImplementation(async () => "/tmp");
+		vi.mocked(fs.promises.mkdtemp).mockImplementation(async () => "/tmp/pi-subagent-test");
 		vi.mocked(os.tmpdir).mockReturnValue("/tmp");
 		// Terminal status so the finally-block shutdown poll exits immediately
 		// instead of burning its 6s deadline (which exceeds the 5s test timeout).
@@ -1259,7 +1277,8 @@ describe("active research session budget enforcement", () => {
 	function captureRequest(): { webSearchMaxLookups: number; webSearchMaxFetches: number } | null {
 		const writtenFiles = vi.mocked(fs.promises.writeFile).mock.calls;
 		const requestFile = writtenFiles.find(
-			([p]: [string, unknown]) => p.includes("request") && p.endsWith(".json"),
+			(call: unknown[]) =>
+				String(call[0]).includes("request") && String(call[0]).endsWith(".json"),
 		);
 		if (!requestFile) return null;
 		return JSON.parse(requestFile[1] as string) as { webSearchMaxLookups: number; webSearchMaxFetches: number };

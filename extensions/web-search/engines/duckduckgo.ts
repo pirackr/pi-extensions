@@ -1,5 +1,9 @@
 // extensions/web-search/engines/duckduckgo.ts
-import type { SearchEngineAdapter, SearchResult, WebLookupRequest } from "../types.ts";
+import type {
+	SearchEngineAdapter,
+	SearchResult,
+	WebLookupRequest,
+} from "../types.ts";
 import { classifyError, errorText } from "../errors.ts";
 
 const USER_AGENT =
@@ -30,7 +34,7 @@ export function stripHtml(html: string): string {
  */
 export class DuckDuckGoEngine implements SearchEngineAdapter {
 	name = "duckduckgo";
-
+	requiresKey = false;
 	async search(
 		request: WebLookupRequest,
 		signal?: AbortSignal,

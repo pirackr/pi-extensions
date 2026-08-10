@@ -5,7 +5,12 @@
  * - "tavily": opt-in engine for heavy deep research (advanced depth, needs TAVILY_API_KEY).
  * - "tinyfish": force TinyFish search (added for provider routing).
  */
-export type EngineChoice = "auto" | "tinyfish" | "exa" | "duckduckgo" | "tavily";
+export type EngineChoice =
+	| "auto"
+	| "tinyfish"
+	| "exa"
+	| "duckduckgo"
+	| "tavily";
 
 export interface SearchResult {
 	title: string;
@@ -242,7 +247,12 @@ export type FetchFormat = "markdown" | "html" | "json" | "text" | "unknown";
 /** Request-object-based search engine interface for future adapters. */
 export interface SearchEngineAdapter {
 	name: string;
-	search(request: WebLookupRequest, signal?: AbortSignal): Promise<SearchResult[]>;
+	search(
+		request: WebLookupRequest,
+		signal?: AbortSignal,
+	): Promise<SearchResult[]>;
+	/** Engines that need no API key (e.g. DuckDuckGo) set this to false. */
+	requiresKey?: boolean;
 }
 
 export interface Credentials {

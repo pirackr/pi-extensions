@@ -27,8 +27,7 @@ import { resolve, join } from "node:path";
  */
 function defaultStateDir(): string {
 	const agentDir =
-		process.env.PI_AGENT_DIR ||
-		resolve(process.env.HOME || "", ".pi", "agent");
+		process.env.PI_AGENT_DIR || resolve(process.env.HOME || "", ".pi", "agent");
 	return join(agentDir, "cache", "web-search");
 }
 
@@ -36,16 +35,32 @@ function defaultStateDir(): string {
  * Fallback chain walked by engine: "auto" — TinyFish first, then Exa, then
  * DuckDuckGo.
  */
-const chainEngines: (new (key: string) => import("./types.ts").SearchEngineAdapter)[] =
-	[TinyFishEngine, ExaEngine, DuckDuckGoEngine];
+const chainEngines: (new (
+	key: string,
+) => import("./types.ts").SearchEngineAdapter)[] = [
+	TinyFishEngine,
+	ExaEngine,
+	DuckDuckGoEngine,
+];
 
 /**
  * Every available engine. Engines NOT in chainEngines are opt-in only:
  * they run solely when the model passes engine: "<name>" explicitly.
  */
-export const searchEngines: { name: string; Engine: new (key: string) => import("./types.ts").SearchEngineAdapter }[] = [
-	...chainEngines.map((Engine) => ({ name: new Engine("unused").name, Engine })),
-	{ name: "tavily", Engine: TavilyEngine },
+export const searchEngines: {
+	name: string;
+	Engine: new (key: string) => import("./types.ts").SearchEngineAdapter;
+	requiresKey: boolean;
+}[] = [
+	...chainEngines.map((Engine) => {
+		const probe = new Engine("unused");
+		return {
+			name: probe.name,
+			Engine,
+			requiresKey: probe.requiresKey !== false,
+		};
+	}),
+	{ name: "tavily", Engine: TavilyEngine, requiresKey: true },
 ];
 
 function dedupeResults(results: SearchResult[]): SearchResult[] {
@@ -83,10 +98,7 @@ async function resolveContext(
 		loadWebSearchConfig(),
 	]);
 	const stateDir = defaultStateDir();
-	const coordinator = createCoordinator(
-		stateDir,
-		config.providers as any,
-	);
+	const coordinator = createCoordinator(stateDir, config.providers as any);
 	return { credentials, config, coordinator };
 }
 
@@ -206,10 +218,7 @@ export async function webLookup(
 	const context = await resolveContext(overrideContext);
 	const { credentials, config, coordinator } = context;
 
-	const chain = resolveChain(
-		request.engine,
-		config.routing.searchAuto,
-	);
+	const chain = resolveChain(request.engine, config.routing.searchAuto);
 	const isAuto = !request.engine || request.engine === "auto";
 
 	const allResults: SearchResult[] = [];
@@ -219,8 +228,9 @@ export async function webLookup(
 	// Preserve an already-set __signal (e.g. set by index.ts or tests) rather than
 	// overwriting it with request.signal (which is undefined on WebLookupRequest).
 	if (!(request as any).__signal) {
-		(request as any)["__signal"] =
-			(request as any).signal as AbortSignal | undefined;
+		(request as any)["__signal"] = (request as any).signal as
+			| AbortSignal
+			| undefined;
 	}
 
 	for (const provider of chain) {
@@ -230,8 +240,8 @@ export async function webLookup(
 
 		const apiKey = credentials[provider as keyof Credentials] as string | null;
 
-		// 1. Check credentials.
-		if (!apiKey) {
+		// 1. Check credentials — keyless engines (requiresKey false, e.g. DuckDuckGo) are exempt.
+		if (!apiKey && engineDef.requiresKey) {
 			partialFailures.push({
 				engine: provider,
 				error: errorText("unavailable_credentials"),
@@ -239,13 +249,12 @@ export async function webLookup(
 			continue;
 		}
 
-		const opConfig =
-			config.providers[provider]?.search ?? {
-				capacity: null,
-				windowMs: 60000,
-				maxRetries: 1,
-				fallbackCooldownMs: 60000,
-			};
+		const opConfig = config.providers[provider]?.search ?? {
+			capacity: null,
+			windowMs: 60000,
+			maxRetries: 1,
+			fallbackCooldownMs: 60000,
+		};
 		const maxRetries = opConfig.maxRetries ?? 1;
 
 		// 2-5. Invoke with retry (reserves each attempt internally).

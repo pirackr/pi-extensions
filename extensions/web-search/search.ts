@@ -117,14 +117,18 @@ async function invokeWithRetry(
 		);
 		if (
 			reserveResult === "capacity-blocked" ||
-			reserveResult === "cooldown-blocked"
+			reserveResult === "cooldown-blocked" ||
+			reserveResult === "contention"
 		) {
 			const msg =
 				reserveResult === "capacity-blocked"
 					? "provider capacity blocked — skipped"
-					: "provider cooldown active — skipped";
+					: reserveResult === "cooldown-blocked"
+						? "provider cooldown active — skipped"
+						: "rate-limit lock contention — skipped";
 			throw Object.assign(new Error(msg), {
 				__category: "rate_limit" as ErrorCategory,
+				__message: msg,
 			});
 		}
 
@@ -272,6 +276,7 @@ export async function webLookup(
 			const categorized = err as Error & {
 				__category?: ErrorCategory;
 				__retryAfter?: number;
+				__message?: string;
 			};
 			const category =
 				categorized.__category ??
@@ -291,7 +296,7 @@ export async function webLookup(
 			if (category === "rate_limit") {
 				partialFailures.push({
 					engine: provider,
-					error: errorText("rate_limit"),
+					error: categorized.__message ?? errorText("rate_limit"),
 				});
 				if (!isAuto) break;
 				continue;

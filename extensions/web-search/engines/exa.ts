@@ -24,9 +24,15 @@ export class ExaEngine implements SearchEngineAdapter {
 	async search(
 		request: WebLookupRequest,
 		// exa-js does not expose AbortSignal on search(); we accept it for
-		// interface consistency but cannot propagate it.
-		_signal?: AbortSignal,
+		// interface consistency but cannot propagate it. A pre-aborted signal is
+		// checked here to avoid hanging on an indefinite SDK call.
+		signal?: AbortSignal,
 	): Promise<SearchResult[]> {
+		if (signal?.aborted) {
+			const err = new Error("request cancelled by caller");
+			(err as Error).name = "AbortError";
+			throw err;
+		}
 		const limit = Math.min(Math.max(request.limit, 1), 50);
 		const opts = request.advancedOptions?.exa;
 

@@ -391,6 +391,24 @@ describe("ExaEngine", () => {
       engine.search({ query: "test", limit: 5 }),
     ).rejects.toThrow();
   });
+
+  it("rejects immediately when signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      engine.search({ query: "test", limit: 5 }, controller.signal),
+    ).rejects.toThrow();
+    expect(mockExaSearch).not.toHaveBeenCalled();
+  });
+
+  it("accepts signal argument without error", async () => {
+    mockExaSearch.mockResolvedValue({ results: [] });
+    const controller = new AbortController();
+    // Should not throw just for accepting the signal
+    await engine.search({ query: "test", limit: 5 }, controller.signal);
+    expect(mockExaSearch).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -490,6 +508,30 @@ describe("TavilyEngine", () => {
     await expect(
       engine.search({ query: "test", limit: 5 }),
     ).rejects.toThrow();
+  });
+
+  it("rejects immediately when signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      engine.search({ query: "test", limit: 5 }, controller.signal),
+    ).rejects.toThrow();
+    expect(mockTavilySearch).not.toHaveBeenCalled();
+  });
+
+  it("accepts signal argument without error", async () => {
+    mockTavilySearch.mockResolvedValue({
+      query: "test",
+      results: [],
+      responseTime: 0.1,
+      images: [],
+      requestId: "req-1",
+    });
+    const controller = new AbortController();
+    // Should not throw just for accepting the signal
+    await engine.search({ query: "test", limit: 5 }, controller.signal);
+    expect(mockTavilySearch).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -734,6 +776,38 @@ describe("webLookup routing", () => {
     expect(enginesInFailures).toContain("tinyfish");
   });
 
+  it("records contention skip as partialFailure in auto mode and continues", async () => {
+    // TinyFish contention → skip, then Exa succeeds
+    mockReserve
+      .mockResolvedValueOnce("contention")
+      .mockResolvedValue("allowed");
+    mockExaSearch.mockResolvedValue({
+      results: [{ title: "E", url: "https://e.com/1", text: "t" }],
+    });
+
+    const result = await webLookup(makeRequest(), makeContext());
+
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].engine).toBe("exa");
+    expect(result.engines).toEqual(["exa"]);
+    const tfFailures = result.partialFailures.filter((pf) => pf.engine === "tinyfish");
+    expect(tfFailures.length).toBeGreaterThan(0);
+    expect(tfFailures[0].error).toContain("contention");
+    expect(mockExaSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("records contention skip in explicit mode without falling back", async () => {
+    mockReserve.mockResolvedValue("contention");
+
+    const result = await webLookup(makeRequest({ engine: "tinyfish" }), makeContext());
+
+    expect(result.results).toEqual([]);
+    expect(result.engines).toEqual([]);
+    const tfFailures = result.partialFailures.filter((pf) => pf.engine === "tinyfish");
+    expect(tfFailures.length).toBeGreaterThan(0);
+    expect(tfFailures[0].error).toContain("contention");
+  });
+
   it("retries transient failure once then falls back", async () => {
     const timeoutErr = new Error("timeout");
     mockTinyFishSearchQuery
@@ -860,6 +934,59 @@ describe("webLookup routing", () => {
     expect(result.results).toHaveLength(1);
     // 2 reserves for TinyFish (initial + 1 retry) + 1 for Exa = 3
     expect(mockReserve).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops routing immediately on Exa cancellation, no retry, no partialFailure", async () => {
+    mockTinyFishSearchQuery.mockResolvedValue({
+      query: "test query",
+      results: [],
+      total_results: 0,
+      page: 1,
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    mockExaSearch.mockImplementation((_query: string, _opts: any) => {
+      const err = new Error("aborted");
+      (err as any).name = "AbortError";
+      throw err;
+    });
+    mockReserve.mockResolvedValue("allowed");
+
+    const request = makeRequest();
+    (request as any).__signal = controller.signal;
+    const result = await webLookup(request, makeContext());
+
+    expect(result.results).toEqual([]);
+    expect(result.engines).toEqual([]);
+    const cancelFailures = result.partialFailures.filter(
+      (pf) => pf.error.includes("cancelled") || pf.error.includes("aborted"),
+    );
+    expect(cancelFailures).toEqual([]);
+    // DuckDuckGo should not be attempted after Exa abort
+  });
+
+  it("stops routing immediately on Tavily cancellation, no retry, no partialFailure", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    mockTavilySearch.mockImplementation((_query: string, _opts: any) => {
+      const err = new Error("aborted");
+      (err as any).name = "AbortError";
+      throw err;
+    });
+    mockReserve.mockResolvedValue("allowed");
+
+    const request = makeRequest({ engine: "tavily" });
+    (request as any).__signal = controller.signal;
+    const result = await webLookup(request, makeContext());
+
+    expect(result.results).toEqual([]);
+    expect(result.engines).toEqual([]);
+    const cancelFailures = result.partialFailures.filter(
+      (pf) => pf.error.includes("cancelled") || pf.error.includes("aborted"),
+    );
+    expect(cancelFailures).toEqual([]);
   });
 });
 

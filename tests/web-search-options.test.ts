@@ -338,6 +338,30 @@ describe("TinyFishSearch cross-field constraints", () => {
 		expect(errs).toEqual([]);
 	});
 
+	it("rejects after_date after before_date", () => {
+		const errs = validateTinyFishSearchOptions({
+			after_date: "2024-12-31",
+			before_date: "2024-01-01",
+		});
+		expect(errs.some((e) => e.message.includes("after_date"))).toBe(true);
+	});
+
+	it("accepts after_date equal to before_date", () => {
+		const errs = validateTinyFishSearchOptions({
+			after_date: "2024-06-15",
+			before_date: "2024-06-15",
+		});
+		expect(errs).toEqual([]);
+	});
+
+	it("accepts after_date before before_date", () => {
+		const errs = validateTinyFishSearchOptions({
+			after_date: "2024-01-01",
+			before_date: "2024-12-31",
+		});
+		expect(errs).toEqual([]);
+	});
+
 	it("rejects research_paper with after_date", () => {
 		const errs = validateTinyFishSearchOptions({
 			domain_type: "research_paper",
@@ -460,6 +484,71 @@ describe("ExaSearch cross-field constraints", () => {
 			outputSchema: { type: "object", properties: props },
 		});
 		expect(errs.some((e) => e.message.includes("10 properties"))).toBe(true);
+	});
+
+	// Exa category/filter incompatibilities (company/people disable date, text, and domain filters)
+	it("rejects includeText with category=company", () => {
+		const errs = validateExaSearchOptions({
+			category: "company",
+			includeText: ["rust"],
+		});
+		expect(errs.some((e) => e.message.includes("category"))).toBe(true);
+	});
+
+	it("rejects includeText with category=people", () => {
+		const errs = validateExaSearchOptions({
+			category: "people",
+			includeText: ["rust"],
+		});
+		expect(errs.some((e) => e.message.includes("category"))).toBe(true);
+	});
+
+	it("rejects excludeText with category=company", () => {
+		const errs = validateExaSearchOptions({
+			category: "company",
+			excludeText: ["clickbait"],
+		});
+		expect(errs.some((e) => e.message.includes("category"))).toBe(true);
+	});
+
+	it("rejects excludeDomains with category=people", () => {
+		const errs = validateExaSearchOptions({
+			category: "people",
+			excludeDomains: ["spam.com"],
+		});
+		expect(errs.some((e) => e.message.includes("category"))).toBe(true);
+	});
+
+	it("rejects startPublishedDate with category=company", () => {
+		const errs = validateExaSearchOptions({
+			category: "company",
+			startPublishedDate: "2024-01-01",
+		});
+		expect(errs.some((e) => e.message.includes("category"))).toBe(true);
+	});
+
+	it("rejects endPublishedDate with category=people", () => {
+		const errs = validateExaSearchOptions({
+			category: "people",
+			endPublishedDate: "2024-12-31",
+		});
+		expect(errs.some((e) => e.message.includes("category"))).toBe(true);
+	});
+
+	it("accepts includeText with category=news", () => {
+		const errs = validateExaSearchOptions({
+			category: "news",
+			includeText: ["rust"],
+		});
+		expect(errs).toEqual([]);
+	});
+
+	it("accepts excludeDomains with category=publication", () => {
+		const errs = validateExaSearchOptions({
+			category: "publication",
+			excludeDomains: ["spam.com"],
+		});
+		expect(errs).toEqual([]);
 	});
 });
 

@@ -55,6 +55,19 @@ export function validateTinyFishSearchOptions(
 		});
 	}
 
+	// Cross-field: when both after_date and before_date are present,
+	// after_date must be <= before_date (ISO date string comparison).
+	if (
+		opts.after_date != null &&
+		opts.before_date != null &&
+		opts.after_date > opts.before_date
+	) {
+		errors.push({
+			path: "",
+			message: "after_date must be <= before_date",
+		});
+	}
+
 	// Cross-field: research_paper domain_type restricts calendar date usage.
 	// When domain_type is research_paper, after_date/before_date are not
 	// meaningful — pub_year_min/pub_year_max should be used instead.
@@ -185,6 +198,29 @@ export function validateExaSearchOptions(
 				path: "/outputSchema",
 				message: "object outputSchema supports at most 10 properties",
 			});
+		}
+	}
+
+	// Cross-field: category=company or category=people disable date, text,
+	// and domain filters. The Exa API returns a 400 when these are combined.
+	const incompatibleWithCategory = ["company", "people"];
+	if (
+		incompatibleWithCategory.includes(opts.category as string) &&
+		opts.category != null
+	) {
+		for (const field of [
+			"includeText",
+			"excludeText",
+			"excludeDomains",
+			"startPublishedDate",
+			"endPublishedDate",
+		] as const) {
+			if (opts[field] != null) {
+				errors.push({
+					path: `/${field}`,
+					message: `${field} is not supported with category=${opts.category}`,
+				});
+			}
 		}
 	}
 

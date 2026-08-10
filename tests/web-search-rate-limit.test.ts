@@ -432,6 +432,25 @@ describe("rate-limit.ts — in-process", async () => {
 		});
 	});
 
+	describe("contention outcome", () => {
+		it("returns contention when lock cannot be acquired after retries", async () => {
+			const cfg = {
+				tinyfish: {
+					search: { capacity: 10, windowMs: 60000, maxRetries: 1 },
+				},
+			};
+			const c = createCoordinator(stateDir, cfg);
+			const { createHash } = await import("node:crypto");
+			const fp = createHash("sha256").update("key-contention").digest("hex");
+			const lockFile = path.join(stateDir, `tinyfish.search.${fp}.lock`);
+			// Create a non-stale lock file so acquireLock cannot steal it.
+			fs.writeFileSync(lockFile, `${process.pid}:${Date.now()}\n`, "utf-8");
+			fs.chmodSync(lockFile, 0o600);
+			const r = await c.reserve("tinyfish", "search", "key-contention");
+			expect(r).toBe("contention");
+		});
+	});
+
 	describe("no API key written to state", () => {
 		it("state file does not contain the API key", async () => {
 			const cfg = {
@@ -461,7 +480,7 @@ import { resolve } from "node:path";
 
 const spawnAsync = (file: string, args: string[], opts?: { env?: NodeJS.ProcessEnv }) =>
 	new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve, reject) => {
-		const child = spawn("node", [file, ...args], {
+		const child = spawn("node", ["--experimental-strip-types", file, ...args], {
 			env: { ...process.env, ...opts?.env },
 			stdio: ["ignore", "pipe", "pipe"],
 		});
@@ -624,6 +643,21 @@ describe("rate-limit.ts — spawned-process concurrency", async () => {
 				const stat = fs.statSync(path.join(stateDir, file));
 				expect(stat.mode & 0o777).toBe(0o600);
 			}
+		});
+	});
+
+	describe("tight contention — real locking under load", () => {
+		it("capacity 1 with 3 concurrent workers allows exactly 1", async () => {
+			writeTestConfig(stateDir, 1, 60000);
+			const results = await Promise.all(
+				Array.from({ length: 3 }, () => workerReserve(stateDir, "tinyfish", "search", "key-tight")),
+			);
+			const allowed = results.filter((r) => r === "allowed").length;
+			expect(allowed).toBe(1);
+			const blocked = results.filter(
+				(r) => r === "capacity-blocked" || r === "cooldown-blocked" || r === "contention",
+			).length;
+			expect(blocked).toBe(2);
 		});
 	});
 });

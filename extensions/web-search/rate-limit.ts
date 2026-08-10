@@ -59,17 +59,13 @@ const ANONYMOUS_FINGERPRINT = createHash("sha256")
 	.digest("hex");
 
 // ---------------------------------------------------------------------------
-// Fingerprint
+// Helpers
 // ---------------------------------------------------------------------------
 
 function fingerprint(key: string | undefined): string {
 	if (!key) return ANONYMOUS_FINGERPRINT;
 	return createHash("sha256").update(key).digest("hex");
 }
-
-// ---------------------------------------------------------------------------
-// Bucket path
-// ---------------------------------------------------------------------------
 
 function bucketPath(stateDir: string, provider: string, operation: string, apiKey?: string): string {
 	const fp = fingerprint(apiKey);
@@ -79,6 +75,10 @@ function bucketPath(stateDir: string, provider: string, operation: string, apiKe
 function lockPath(stateDir: string, provider: string, operation: string, apiKey?: string): string {
 	const fp = fingerprint(apiKey);
 	return resolve(stateDir, `${provider}.${operation}.${fp}${LOCK_SUFFIX}`);
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((r) => setTimeout(r, ms));
 }
 
 // ---------------------------------------------------------------------------
@@ -114,7 +114,9 @@ function initialState(): RateLimitState {
 function writeState(file: string, state: RateLimitState): void {
 	const dir = resolve(file, "..");
 	mkdirSync(dir, { recursive: true });
-	const tmp = file + ".tmp";
+	// Use a process-unique tmp name to avoid races when multiple processes
+	// write concurrently (they hold the lock, but the tmp path is shared).
+	const tmp = file + ".tmp." + process.pid + "." + Date.now();
 	writeFileSync(tmp, JSON.stringify(state), "utf-8");
 	chmodSync(tmp, 0o600);
 	renameSync(tmp, file);
@@ -129,57 +131,53 @@ function writeState(file: string, state: RateLimitState): void {
  * Stale locks (older than STALE_LOCK_MS) are stolen.
  * Returns the fd on success, -1 on failure after all retries exhausted.
  */
-function acquireLock(lockFile: string): number {
+function acquireLock(lockFile: string): Promise<number> {
 	const start = Date.now();
-	for (let i = 0; i < MAX_LOCK_RETRIES; i++) {
-		try {
-			// Try exclusive create (O_EXCL via fs.open flag).
-			const fd = openSync(lockFile, "wx", 0o600);
-			// Write PID + timestamp for stale-lock detection.
-			const payload = `${process.pid}:${Date.now()}\n`;
-			writeFileSync(lockFile, payload, { flag: "w" });
-			return fd;
-		} catch (err: unknown) {
-			// If the lock file exists but is stale, remove and retry.
-			const isLockError =
-				err &&
-				typeof err === "object" &&
-				"code" in (err as object) &&
-				((err as { code: string }).code === "EEXIST" ||
-					(err as { code: string }).code === "EACCES");
-			if (!isLockError) {
-				// Non-lock error — give up.
-				return -1;
-			}
-			// Check if stale.
+	return (async () => {
+		for (let i = 0; i < MAX_LOCK_RETRIES; i++) {
 			try {
-				const content = readFileSync(lockFile, "utf-8");
-				const parts = content.trim().split(":");
-				const lockTime = parts.length >= 2 ? Number(parts[1]) : 0;
-				if (Date.now() - lockTime > STALE_LOCK_MS) {
-					// Steal the stale lock.
-					unlinkSync(lockFile);
+				// Try exclusive create (O_EXCL via fs.open flag).
+				const fd = openSync(lockFile, "wx", 0o600);
+				// Write PID + timestamp for stale-lock detection.
+				const payload = `${process.pid}:${Date.now()}\n`;
+				writeFileSync(lockFile, payload, { flag: "w" });
+				return fd;
+			} catch (err: unknown) {
+				// If the lock file exists but is stale, remove and retry.
+				const isLockError =
+					err &&
+					typeof err === "object" &&
+					"code" in (err as object) &&
+					((err as { code: string }).code === "EEXIST" ||
+						(err as { code: string }).code === "EACCES");
+				if (!isLockError) {
+					// Non-lock error — give up.
+					return -1;
+				}
+				// Check if stale.
+				try {
+					const content = readFileSync(lockFile, "utf-8");
+					const parts = content.trim().split(":");
+					const lockTime = parts.length >= 2 ? Number(parts[1]) : 0;
+					if (Date.now() - lockTime > STALE_LOCK_MS) {
+						// Steal the stale lock.
+						unlinkSync(lockFile);
+						continue;
+					}
+				} catch {
+					// File vanished — retry.
 					continue;
 				}
-			} catch {
-				// File vanished — retry.
-				continue;
-			}
-			// Not stale — jittered retry.
-			const jitter = Math.random() * LOCK_RETRY_BASE_MS;
-			const wait = LOCK_RETRY_BASE_MS + jitter;
-			// Check total timeout (max 2 seconds).
-			if (Date.now() - start > 2000) return -1;
-			// eslint-disable-next-line no-unused-vars
-			const _ = new Promise((r) => setTimeout(r, wait));
-			// Synchronous sleep not available — spin briefly.
-			const end = Date.now() + wait;
-			while (Date.now() < end) {
-				// busy wait for bounded time
+				// Not stale — jittered sleep between retries.
+				const jitter = Math.random() * LOCK_RETRY_BASE_MS;
+				const wait = LOCK_RETRY_BASE_MS + jitter;
+				// Check total timeout (max 2 seconds).
+				if (Date.now() - start > 2000) return -1;
+				await sleep(wait);
 			}
 		}
-	}
-	return -1;
+		return -1;
+	})();
 }
 
 function releaseLock(lockFile: string, fd: number): void {
@@ -229,16 +227,30 @@ export function createCoordinator(
 }
 
 export class RateLimitCoordinator {
+	private stateDir: string;
+	private config: Record<string, Record<string, RateLimitBucketConfig>>;
+
 	constructor(
-		private stateDir: string,
-		private config: Record<string, Record<string, RateLimitBucketConfig>>,
+		stateDir: string,
+		config: Record<string, Record<string, RateLimitBucketConfig>>,
 	) {
 		mkdirSync(stateDir, { recursive: true });
+		this.stateDir = stateDir;
+		this.config = config;
 	}
 
 	/**
 	 * Reserve capacity for one provider+operation attempt.
-	 * Returns 'allowed', 'capacity-blocked', 'cooldown-blocked', or 'contention'.
+	 *
+	 * Returns:
+	 * - `'allowed'` — capacity was available and the reservation succeeded.
+	 * - `'capacity-blocked'` — the rolling window is full; the caller must not
+	 *   make a request for this provider/operation.
+	 * - `'cooldown-blocked'` — a shared cooldown is active (e.g. from a 429);
+	 *   the caller must not make a request until it expires.
+	 * - `'contention'` — the exclusive lock could not be acquired after bounded
+	 *   retries. This is a temporary condition: the caller should back off and
+	 *   retry the reservation after a short delay rather than making a request.
 	 */
 	async reserve(
 		provider: string,
@@ -253,7 +265,7 @@ export class RateLimitCoordinator {
 		const fallbackCooldownMs =
 			opConfig?.fallbackCooldownMs ?? DEFAULT_FALLBACK_COOLDOWN_MS;
 
-		const fd = acquireLock(lockFile);
+		const fd = await acquireLock(lockFile);
 		if (fd < 0) return "contention";
 
 		try {
@@ -302,7 +314,7 @@ export class RateLimitCoordinator {
 			opConfig?.fallbackCooldownMs ?? DEFAULT_FALLBACK_COOLDOWN_MS;
 		const cooldownMs = retryAfterMs ?? fallbackCooldownMs;
 
-		const fd = acquireLock(lockFile);
+		const fd = await acquireLock(lockFile);
 		if (fd < 0) return; // Best-effort.
 
 		try {

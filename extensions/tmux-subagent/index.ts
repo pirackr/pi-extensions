@@ -459,6 +459,12 @@ export default function (pi: ExtensionAPI) {
 					"Hard cap on fetch_web calls for this task (overrides config default). 0 = unlimited.",
 			}),
 		),
+		result_path: Type.Optional(
+			Type.String({
+				description:
+					"Absolute path where the artifact block payload will be written",
+			}),
+		),
 	});
 	const Params = Type.Object({
 		tasks: Type.Array(TaskItem, {
@@ -569,6 +575,15 @@ export default function (pi: ExtensionAPI) {
 					};
 				}),
 			);
+
+			// I1: absolute-path guard for result_path
+			for (const item of prepared) {
+				if (item.task.result_path && !path.isAbsolute(item.task.result_path)) {
+					throw new Error(
+						`result_path must be an absolute path, got: ${item.task.result_path}`,
+					);
+				}
+			}
 
 			const writerDirectories = new Set<string>();
 			for (const item of prepared) {

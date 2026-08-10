@@ -13,6 +13,8 @@ vi.mock("typebox", () => ({
 		Number: vi.fn((opts: any) => ({ type: "number", ...opts })),
 		Array: vi.fn((item: any, opts: any) => ({ type: "array", item, ...opts })),
 		Optional: vi.fn((item: any) => ({ optional: true, ...item })),
+		Literal: vi.fn((val: any) => ({ literal: val })),
+		Union: vi.fn((items: any, opts: any) => ({ union: items, ...opts })),
 	},
 }));
 
@@ -65,35 +67,13 @@ vi.mock("node:os", () => ({
 	tmpdir: vi.fn().mockReturnValue("/tmp"),
 }));
 
-vi.mock("./config.ts", () => ({
-	loadSubagentConfiguration: vi.fn().mockReturnValue({
-		config: {
-			maxTasks: 4,
-			defaultTimeoutSeconds: 300,
-			retainArtifacts: "on_failure",
-			childExtensions: [],
-			loadContextFiles: true,
-		},
-		profiles: [
-			{
-				name: "worker",
-				description: "A worker agent",
-				model: "gpt-4o",
-				thinking: "medium",
-				tools: ["read", "edit"],
-				access: "write",
-				timeoutSeconds: 600,
-				systemPrompt: "You are a worker.",
-				filePath: "/agents/worker.md",
-				source: "bundled",
-			},
-		],
-		userConfigPath: "/mock/config.json",
-	}),
-}));
 
 import { execFile } from "node:child_process";
+import * as os from "node:os";
+import piTmuxSubagent from "../index.ts";
+
 import * as fs from "node:fs";
+import * as configMod from "../config.ts";
 import {
 	runCommand,
 	shellQuote,
@@ -109,6 +89,7 @@ import {
 	renderResults,
 	delay,
 	validateAndExportSummaryResults,
+
 	type TaskStatus,
 	type PreparedTask,
 } from "../index.ts";
@@ -1015,5 +996,185 @@ Recommended next action: retry
 		expect(s.parsedResult.summary.keyChanges).toEqual(["item1"]);
 		expect(s.parsedResult.summary.contradictions).toEqual(["blocker1"]);
 		expect(s.result_path).toBe("/data/out.org");
+	});
+
+	it("schema exposes result_path in the TypeBox TaskItem", () => {
+		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
+			config: {
+				maxTasks: 4,
+				defaultTimeoutSeconds: 300,
+				retainArtifacts: "on_failure",
+				childExtensions: [],
+				loadContextFiles: true,
+			},
+			profiles: [
+				{
+					name: "worker",
+					description: "A worker agent",
+					model: "gpt-4o",
+					thinking: "medium",
+					tools: ["read", "edit"],
+					access: "write",
+					timeoutSeconds: 600,
+					systemPrompt: "You are a worker.",
+					filePath: "/agents/worker.md",
+					source: "bundled",
+				},
+			],
+			userConfigPath: "/mock/config.json",
+		});
+		const registered: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => registered.push(tool),
+		};
+		piTmuxSubagent(mockPi as any);
+		const tool = registered.find((t: any) => t.name === "run_subagents");
+		expect(tool).toBeDefined();
+		// The mocked Type.Object returns the props object directly.
+		// C1: result_path must be present in the schema definition.
+		const paramsSchema = tool!.parameters;
+		expect(paramsSchema).toHaveProperty("tasks");
+		const taskItemSchema = (paramsSchema as any).tasks;
+		expect(taskItemSchema).toBeDefined();
+		const taskItemProps = (taskItemSchema as any).item;
+		expect(taskItemProps).toHaveProperty("result_path");
+	});
+
+	it("rejects a relative result_path upfront", async () => {
+		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
+			config: {
+				maxTasks: 4,
+				defaultTimeoutSeconds: 300,
+				retainArtifacts: "on_failure",
+				childExtensions: [],
+				loadContextFiles: true,
+			},
+			profiles: [
+				{
+					name: "worker",
+					description: "A worker agent",
+					model: "gpt-4o",
+					thinking: "medium",
+					tools: ["read", "edit"],
+					access: "write",
+					timeoutSeconds: 600,
+					systemPrompt: "You are a worker.",
+					filePath: "/agents/worker.md",
+					source: "bundled",
+				},
+			],
+			userConfigPath: "/mock/config.json",
+		});
+		const registered: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => registered.push(tool),
+		};
+		piTmuxSubagent(mockPi as any);
+		const tool = registered.find((t: any) => t.name === "run_subagents");
+		expect(tool).toBeDefined();
+
+		const mockExecFile = vi.mocked(execFile);
+		mockExecFile.mockImplementation((_cmd, _args, _opts, cb) => {
+			if (_cmd === "tmux" && _args[0] === "-V") {
+				cb!(null, "3.4.0", "");
+			} else {
+				cb!(new Error("unexpected command"), "", "");
+			}
+			return undefined as any;
+		});
+		const mockAccess = vi.mocked(fs.promises.access);
+		mockAccess.mockResolvedValue(undefined as any);
+		const mockStat = vi.mocked(fs.promises.stat);
+		mockStat.mockResolvedValue({ isDirectory: () => true } as any);
+
+		await expect(
+			tool!.execute(
+				"call-id",
+				{
+					tasks: [
+						{
+							agent: "worker",
+							objective: "test",
+							result_path: "relative/path.org", // not absolute
+						},
+					],
+				},
+				new AbortController().signal,
+				undefined,
+				{ cwd: "/tmp" },
+			),
+		).rejects.toThrow("result_path must be an absolute path");
+	});
+
+	it("accepts an absolute result_path", async () => {
+		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
+			config: {
+				maxTasks: 4,
+				defaultTimeoutSeconds: 300,
+				retainArtifacts: "on_failure",
+				childExtensions: [],
+				loadContextFiles: true,
+			},
+			profiles: [
+				{
+					name: "worker",
+					description: "A worker agent",
+					model: "gpt-4o",
+					thinking: "medium",
+					tools: ["read", "edit"],
+					access: "write",
+					timeoutSeconds: 600,
+					systemPrompt: "You are a worker.",
+					filePath: "/agents/worker.md",
+					source: "bundled",
+				},
+			],
+			userConfigPath: "/mock/config.json",
+		});
+		const registered: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => registered.push(tool),
+		};
+		piTmuxSubagent(mockPi as any);
+		const tool = registered.find((t: any) => t.name === "run_subagents");
+		expect(tool).toBeDefined();
+
+		const mockExecFile = vi.mocked(execFile);
+		mockExecFile.mockImplementation((_cmd, _args, _opts, cb) => {
+			if (_cmd === "tmux" && _args[0] === "-V") {
+				cb!(null, "3.4.0", "");
+			} else {
+				cb!(new Error("unexpected command"), "", "");
+			}
+			return undefined as any;
+		});
+		const mockAccess = vi.mocked(fs.promises.access);
+		mockAccess.mockResolvedValue(undefined as any);
+		const mockStat = vi.mocked(fs.promises.stat);
+		mockStat.mockResolvedValue({ isDirectory: () => true } as any);
+		fs.promises.realpath.mockImplementation(async () => "/tmp");
+		fs.promises.mkdtemp.mockImplementation(async () => "/tmp/pi-subagent-test");
+		// vi.restoreAllMocks() in this describe's afterEach wipes module-mock
+		// implementations (os.tmpdir etc.) — re-establish what execute() needs.
+		vi.mocked(os.tmpdir).mockReturnValue("/tmp");
+
+		// Should not throw the absolute-path error; any later error is expected.
+		await expect(
+			tool!.execute(
+				"call-id",
+				{
+					tasks: [
+						{
+							agent: "worker",
+							objective: "test",
+							result_path: "/absolute/path.org",
+						},
+					],
+				},
+				new AbortController().signal,
+				undefined,
+				{ cwd: "/tmp" },
+			),
+		).rejects.toThrow("unexpected command");
 	});
 });

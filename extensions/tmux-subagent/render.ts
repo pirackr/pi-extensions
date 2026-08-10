@@ -168,7 +168,7 @@ export function renderSummaryResults(
 		const heading = `=== ${status.agent} / ${status.taskId} (${status.state}) — model: ${status.model} ===`;
 		const parts: string[] = [heading];
 
-		if (status.parsedResult) {
+		if (status.parsedResult && status.state === "succeeded") {
 			const s = status.parsedResult.summary;
 			parts.push(
 				"<coordinator-summary>",
@@ -194,7 +194,7 @@ export function renderSummaryResults(
 			parts.push("(no coordinator-summary)");
 		}
 
-		if (status.result_path) {
+		if (status.result_path && status.state === "succeeded") {
 			parts.push(`Result: ${status.result_path}`);
 		}
 

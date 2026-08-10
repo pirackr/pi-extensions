@@ -428,3 +428,39 @@ describe("renderSummaryResults", () => {
 		expect(text).toContain("Contradictions/blockers: none");
 	});
 });
+
+	it("renders errorMessage for a failed export even when parsedResult exists", () => {
+		const text = renderSummaryResults(
+			[
+				status({
+					state: "failed",
+					errorMessage: "Result export failed: Permission denied",
+					parsedResult: {
+						summary: makeSummary({ status: "succeeded" }),
+					},
+				}),
+			],
+			null,
+		);
+		// I2: errorMessage must be visible even when parsedResult is present
+		expect(text).toContain("Result export failed: Permission denied");
+		expect(text).not.toContain("<coordinator-summary>");
+	});
+
+	it("does not show Result: line when export failed", () => {
+		const text = renderSummaryResults(
+			[
+				status({
+					state: "failed",
+					errorMessage: "Result export failed: Permission denied",
+					result_path: "/data/out.org",
+					parsedResult: {
+						summary: makeSummary({ status: "succeeded" }),
+					},
+				}),
+			],
+			null,
+		);
+		// I3: Result: path must not appear when state is not succeeded
+		expect(text).not.toContain("Result: /data/out.org");
+	});

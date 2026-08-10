@@ -1,4 +1,4 @@
-import { Errors } from "typebox/schema";
+import { Errors } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
 	TinyFishSearchOptionsSchema,
@@ -23,10 +23,9 @@ import {
 
 /** Collect TypeBox Errors output into an errors array. Returns [] when valid. */
 function schemaErrors(schema: any, value: unknown): string[] {
-	const iter = Errors(schema, value);
-	const result = [...iter];
-	if (result[0] === true) return []; // valid
-	return (result[1] as Array<{ keyword: string; instancePath: string; message: string }>).map(
+	const result = Errors(schema, value);
+	if (result.length === 0) return [];
+	return (result as Array<{ keyword: string; instancePath: string; message: string }>).map(
 		(e) => `${e.keyword} ${e.instancePath || "/"} ${e.message}`,
 	);
 }

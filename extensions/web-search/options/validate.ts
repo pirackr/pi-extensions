@@ -1,4 +1,4 @@
-import { Errors } from "typebox/schema";
+import { Errors } from "typebox/value";
 import { TinyFishSearchOptionsSchema } from "./tinyfish.ts";
 import { TinyFishFetchOptionsSchema } from "./tinyfish.ts";
 import { ExaSearchOptionsSchema } from "./exa.ts";
@@ -18,10 +18,9 @@ export function validateTinyFishSearchOptions(
 ): ValidationError[] {
 	const errors: ValidationError[] = [];
 
-	const schemaIter = Errors(TinyFishSearchOptionsSchema, opts);
-	const schemaResult = [...schemaIter];
-	if (schemaResult[0] === false) {
-		for (const err of schemaResult[1] as Array<{
+	const schemaResult = Errors(TinyFishSearchOptionsSchema, opts);
+	if (schemaResult.length > 0) {
+		for (const err of schemaResult as Array<{
 			keyword: string;
 			instancePath: string;
 			message: string;
@@ -93,10 +92,9 @@ export function validateTinyFishFetchOptions(
 ): ValidationError[] {
 	const errors: ValidationError[] = [];
 
-	const schemaIter = Errors(TinyFishFetchOptionsSchema, opts);
-	const schemaResult = [...schemaIter];
-	if (schemaResult[0] === false) {
-		for (const err of schemaResult[1] as Array<{
+	const schemaResult = Errors(TinyFishFetchOptionsSchema, opts);
+	if (schemaResult.length > 0) {
+		for (const err of schemaResult as Array<{
 			keyword: string;
 			instancePath: string;
 			message: string;
@@ -129,10 +127,9 @@ export function validateExaSearchOptions(
 ): ValidationError[] {
 	const errors: ValidationError[] = [];
 
-	const schemaIter = Errors(ExaSearchOptionsSchema, opts);
-	const schemaResult = [...schemaIter];
-	if (schemaResult[0] === false) {
-		for (const err of schemaResult[1] as Array<{
+	const schemaResult = Errors(ExaSearchOptionsSchema, opts);
+	if (schemaResult.length > 0) {
+		for (const err of schemaResult as Array<{
 			keyword: string;
 			instancePath: string;
 			message: string;
@@ -236,10 +233,9 @@ export function validateTavilySearchOptions(
 ): ValidationError[] {
 	const errors: ValidationError[] = [];
 
-	const schemaIter = Errors(TavilySearchOptionsSchema, opts);
-	const schemaResult = [...schemaIter];
-	if (schemaResult[0] === false) {
-		for (const err of schemaResult[1] as Array<{
+	const schemaResult = Errors(TavilySearchOptionsSchema, opts);
+	if (schemaResult.length > 0) {
+		for (const err of schemaResult as Array<{
 			keyword: string;
 			instancePath: string;
 			message: string;

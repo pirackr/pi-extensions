@@ -30,6 +30,7 @@ function makeMockPi() {
 	const tools: Record<string, MockTool> = {};
 	const commands: Record<string, MockCommand> = {};
 	const entries: Array<{ type: string; data: unknown }> = [];
+	const handlers: Record<string, Array<(...args: unknown[]) => void>> = {};
 	const pi = {
 		registerTool: (def: MockTool) => {
 			tools[def.name] = def;
@@ -37,7 +38,11 @@ function makeMockPi() {
 		registerCommand: (cmd: string, def: MockCommand) => {
 			commands[cmd] = def;
 		},
-		on: () => {},
+		on: (event: string, handler: (...args: unknown[]) => void) => {
+			if (!handlers[event]) handlers[event] = [];
+			handlers[event].push(handler);
+		},
+		getHandler: (event: string) => handlers[event]?.[0] ?? null,
 		sendMessage: () => {},
 		appendEntry: (type: string, data: unknown) => {
 			entries.push({ type, data });
@@ -45,7 +50,7 @@ function makeMockPi() {
 		getActiveTools: () => [] as string[],
 		setActiveTools: () => {},
 	};
-	return { pi, tools, commands, entries };
+	return { pi, tools, commands, entries, handlers };
 }
 
 function mockCtx(cwd: string) {
@@ -360,9 +365,12 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 		expect((entry as { loop: null }).loop).toBeNull();
 	});
 
-	it("uses loop.maxRounds (CLI override) not profileCfg.maxRounds", async () => {
-		// Override --max-rounds 2 on a quick profile (profile maxRounds=10)
-		const dir = await startResearchWithMaxRounds("override-max test", 2);
+	it("CONTINUEs at round 12 with CLI override above profile max (effective cap distinguishes from profileCfg)", async () => {
+		// quick profile has maxRounds=10, but CLI override sets it to 15.
+		// At round 12 with unmet floors, effectiveMax=15 permits CONTINUE.
+		// Old buggy behavior (using profileCfg.maxRounds=10) would have
+		// returned PROCEED_WITH_GAPS at round 12 since 12 >= 10.
+		const dir = await startResearchWithMaxRounds("override-above-profile test", 15);
 		writeScoreTable(dir, [
 			{ id: "q1", score: 90 },
 			{ id: "q2", score: 90 },
@@ -370,8 +378,53 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 			{ id: "q4", score: 90 },
 			{ id: "q5", score: 90 },
 		]);
-		// With maxRounds=2, round 2 should be the effective cap
-		const result = await checkpoint({ profile: "quick", round: 2, totalSources: 5 });
-		expect(result.text).toContain("PROCEED_WITH_GAPS");
+		const result = await checkpoint({ profile: "quick", round: 12, totalSources: 5 });
+		expect(result.text).toContain("CONTINUE");
+		expect(result.text).toContain("min sources");
+
+		// At the actual cap (round 15) with floors still unmet → PROCEED_WITH_GAPS
+		const resultAtCap = await checkpoint({ profile: "quick", round: 15, totalSources: 5 });
+		expect(resultAtCap.text).toContain("PROCEED_WITH_GAPS");
+		expect(resultAtCap.text).toContain("gap(s)");
+	});
+
+	it("invalidates checkpointEvidence via queueContinuation on agent_end", async () => {
+		// Directly exercises the queueContinuation path (loop/index.ts:465)
+		// where checkpointEvidence is cleared when a research round transitions.
+		const dir = await startResearch("invalidate-queue test");
+		writeScoreTable(dir, [
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
+		]);
+		// Checkpoint at round 10 with enough sources → records evidence
+		const result = await checkpoint({ profile: "quick", round: 10, totalSources: 20 });
+		expect(result.text).toContain("PROCEED");
+
+		// Verify checkpointEvidence was recorded
+		let entry = latestLoopEntry();
+		let loopState = (entry as { loop?: { checkpointEvidence?: unknown } }).loop;
+		expect(loopState?.checkpointEvidence).toBeDefined();
+		expect((loopState.checkpointEvidence as { verdict?: string }).verdict).toBe("PROCEED");
+
+		// Capture and invoke the agent_end handler to trigger queueContinuation
+		const agentEndHandler = mock.pi.getHandler("agent_end");
+		expect(agentEndHandler).not.toBeNull();
+		agentEndHandler!(
+			{ type: "agent_end" as const, messages: [] },
+			{ hasPendingMessages: () => false, ui: { setStatus: () => {} } } as never,
+		);
+
+		// queueContinuation uses queueMicrotask — flush it
+		await new Promise((r) => setImmediate(r));
+
+		// After queueContinuation, checkpointEvidence should be undefined
+		entry = latestLoopEntry();
+		loopState = (entry as { loop?: { checkpointEvidence?: unknown } }).loop;
+		expect(loopState?.checkpointEvidence).toBeUndefined();
+		// Round should have incremented from 0 to 1
+		expect((loopState as { rounds?: number }).rounds).toBe(1);
 	});
 });

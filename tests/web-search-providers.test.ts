@@ -24,12 +24,15 @@ vi.mock("node:fs", async () => {
 // Mock SDKs (hoisted by vitest — factories must not reference later vars)
 // ---------------------------------------------------------------------------
 vi.mock("@tiny-fish/sdk", () => {
-  const mockFn = vi.fn();
+  const mockSearchQuery = vi.fn();
+  const mockFetchGetContents = vi.fn();
   return {
     TinyFish: vi.fn().mockImplementation(() => ({
-      search: { query: mockFn },
+      search: { query: mockSearchQuery },
+      fetch: { getContents: mockFetchGetContents },
     })),
-    __mockTinyFishSearchQuery: mockFn,
+    __mockTinyFishSearchQuery: mockSearchQuery,
+    __mockTinyFishFetchGetContents: mockFetchGetContents,
   };
 });
 
@@ -61,7 +64,7 @@ vi.mock("@tavily/core", () => {
 
 vi.mock("../extensions/web-search/rate-limit.ts", () => {
   const mockReserve = vi.fn();
-  const mockPublishCooldown = vi.fn();
+  const mockPublishCooldown = vi.fn().mockResolvedValue(undefined);
   return {
     createCoordinator: vi.fn().mockReturnValue({
       reserve: mockReserve,
@@ -119,6 +122,8 @@ vi.mock("../extensions/web-search/config.ts", () => ({
 // Access mock instances after module evaluation
 // ---------------------------------------------------------------------------
 const { __mockTinyFishSearchQuery: mockTinyFishSearchQuery } =
+  await import("@tiny-fish/sdk");
+const { __mockTinyFishFetchGetContents: mockTinyFishFetchGetContents } =
   await import("@tiny-fish/sdk");
 const { __mockExaSearch: mockExaSearch } = await import("exa-js");
 const { __mockTavilySearch: mockTavilySearch } = await import("@tavily/core");
@@ -656,7 +661,6 @@ describe("webLookup routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockReserve.mockReset();
-    mockPublishCooldown.mockReset();
     mockTinyFishSearchQuery.mockReset();
     mockExaSearch.mockReset();
     mockTavilySearch.mockReset();
@@ -1016,5 +1020,768 @@ describe("resolveChain and searchEngines", () => {
     expect(names).toContain("exa");
     expect(names).toContain("duckduckgo");
     expect(names).toContain("tavily");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fetch — TinyFish strategy + orchestrator tests
+// ---------------------------------------------------------------------------
+import { TinyFishFetchStrategy } from "../extensions/web-search/strategies/tinyfish.ts";
+import { fetchWeb } from "../extensions/web-search/fetch.ts";
+import type { FetchWebRequest } from "../extensions/web-search/types.ts";
+import { ReadabilityStrategy } from "../extensions/web-search/strategies/readability.ts";
+
+describe("TinyFishFetchStrategy", () => {
+  let strategy: TinyFishFetchStrategy;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTinyFishFetchGetContents.mockReset();
+    strategy = new TinyFishFetchStrategy("tf-test-key");
+  });
+
+  it("requests Markdown by default", async () => {
+    mockTinyFishFetchGetContents.mockResolvedValue({
+      results: [
+        {
+          url: "https://example.com/page",
+          final_url: null,
+          title: "Example Page",
+          description: null,
+          language: null,
+          author: null,
+          published_date: null,
+          format: "markdown",
+          text: "# Example\n\nContent here.",
+        },
+      ],
+      errors: [],
+    });
+
+    const result = await strategy.fetch({ url: "https://example.com/page" });
+
+    expect(mockTinyFishFetchGetContents).toHaveBeenCalledTimes(1);
+    const call = mockTinyFishFetchGetContents.mock.calls[0][0];
+    expect(call.urls).toEqual(["https://example.com/page"]);
+    expect(call.format).toBeUndefined();
+    expect(result.format).toBe("markdown");
+    expect(result.content).toBe("# Example\n\nContent here.");
+    expect(result.title).toBe("Example Page");
+    expect(result.strategy).toBe("tinyfish");
+    expect(result.attempts).toEqual([
+      { strategy: "tinyfish", outcome: "success" },
+    ]);
+  });
+
+  it("honors explicit HTML format", async () => {
+    mockTinyFishFetchGetContents.mockResolvedValue({
+      results: [
+        {
+          url: "https://example.com/page",
+          final_url: null,
+          title: "Example Page",
+          format: "html",
+          text: "<article><p>Hello</p></article>",
+        },
+      ],
+      errors: [],
+    });
+
+    const result = await strategy.fetch({
+      url: "https://example.com/page",
+      advancedOptions: { tinyfish: { format: "html" } },
+    });
+
+    const call = mockTinyFishFetchGetContents.mock.calls[0][0];
+    expect(call.format).toBe("html");
+    expect(result.format).toBe("html");
+    expect(result.content).toBe("<article><p>Hello</p></article>");
+  });
+
+  it("honors explicit JSON format and serializes", async () => {
+    mockTinyFishFetchGetContents.mockResolvedValue({
+      results: [
+        {
+          url: "https://example.com/page",
+          final_url: null,
+          title: "Example Page",
+          format: "json",
+          text: { heading: "Title", body: "Body text" },
+        },
+      ],
+      errors: [],
+    });
+
+    const result = await strategy.fetch({
+      url: "https://example.com/page",
+      advancedOptions: { tinyfish: { format: "json" } },
+    });
+
+    const call = mockTinyFishFetchGetContents.mock.calls[0][0];
+    expect(call.format).toBe("json");
+    expect(result.format).toBe("json");
+    expect(result.content).toBe('{"heading":"Title","body":"Body text"}');
+  });
+
+  it("forwards conditional options to SDK", async () => {
+    mockTinyFishFetchGetContents.mockResolvedValue({
+      results: [
+        {
+          url: "https://example.com/page",
+          final_url: null,
+          title: "ETag Page",
+          format: "markdown",
+          text: "fresh content",
+        },
+      ],
+      errors: [],
+    });
+
+    await strategy.fetch({
+      url: "https://example.com/page",
+      advancedOptions: {
+        tinyfish: {
+          if_none_match: "abc123",
+          purpose: "check updates",
+        },
+      },
+    });
+
+    const call = mockTinyFishFetchGetContents.mock.calls[0][0];
+    expect(call.if_none_match).toBe("abc123");
+    expect(call.purpose).toBe("check updates");
+  });
+
+  it("maps title and content from SDK response", async () => {
+    mockTinyFishFetchGetContents.mockResolvedValue({
+      results: [
+        {
+          url: "https://example.com/page",
+          final_url: "https://example.com/page?q=1",
+          title: "Redirected Title",
+          format: "markdown",
+          text: "Extracted text",
+        },
+      ],
+      errors: [],
+    });
+
+    const result = await strategy.fetch({ url: "https://example.com/page" });
+    expect(result.title).toBe("Redirected Title");
+    expect(result.content).toBe("Extracted text");
+    expect(result.url).toBe("https://example.com/page");
+  });
+
+  it("returns empty content when SDK text is null", async () => {
+    mockTinyFishFetchGetContents.mockResolvedValue({
+      results: [
+        {
+          url: "https://example.com/page",
+          final_url: null,
+          title: "Empty Page",
+          format: "markdown",
+          text: null,
+        },
+      ],
+      errors: [],
+    });
+
+    const result = await strategy.fetch({ url: "https://example.com/page" });
+    expect(result.content).toBe("");
+    expect(result.format).toBe("markdown");
+  });
+
+  it("throws AbortError on cancellation", async () => {
+    const controller = new AbortController();
+    mockTinyFishFetchGetContents.mockImplementation((_params: any, options: any) => {
+      if (options?.signal?.aborted) {
+        const err = new Error("aborted");
+        (err as any).name = "AbortError";
+        throw err;
+      }
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => {
+          const err = new Error("aborted");
+          (err as any).name = "AbortError";
+          reject(err);
+        });
+      });
+    });
+
+    const promise = strategy.fetch(
+      { url: "https://example.com/page" },
+      controller.signal,
+    );
+    controller.abort();
+
+    await expect(promise).rejects.toThrow("aborted");
+  });
+
+  it("propagates SDK errors with status code", async () => {
+    const err = new Error("bad request");
+    (err as any).statusCode = 400;
+    mockTinyFishFetchGetContents.mockRejectedValue(err);
+
+    await expect(
+      strategy.fetch({ url: "https://example.com/page" }),
+    ).rejects.toThrow("bad request");
+    expect((await expect(
+      strategy.fetch({ url: "https://example.com/page" }),
+    ).rejects.toThrow()).toBeDefined());
+  });
+});
+
+describe("fetchWeb orchestrator", () => {
+  const makeRequest = (overrides: Partial<FetchWebRequest> = {}): FetchWebRequest => ({
+    url: "https://example.com/page",
+    ...overrides,
+  });
+
+  const makeContext = (overrides: {
+    tinyfishKey?: string | null;
+  } = {}) => ({
+    credentials: {
+      tinyfish:
+        overrides.tinyfishKey !== undefined
+          ? overrides.tinyfishKey
+          : "tf-key",
+      exa: "exa-key",
+      tavily: "tavily-key",
+    },
+    config: {
+      routing: {
+        searchAuto: ["tinyfish", "exa", "duckduckgo"],
+        fetch: ["tinyfish", "readability"],
+      },
+      providers: {
+        tinyfish: {
+          search: { capacity: 30, windowMs: 60000, maxRetries: 1 },
+          fetch: { capacity: 150, windowMs: 60000, maxRetries: 1 },
+        },
+        exa: {
+          search: { capacity: 10, windowMs: 1000, maxRetries: 1 },
+        },
+        tavily: {
+          search: { capacity: 100, windowMs: 60000, maxRetries: 1 },
+        },
+        duckduckgo: {
+          search: {
+            capacity: null,
+            windowMs: 60000,
+            maxRetries: 1,
+            fallbackCooldownMs: 60000,
+          },
+        },
+      },
+    },
+    coordinator: createCoordinator("/tmp/web-search-fetch-test", {
+      tinyfish: { fetch: { capacity: 150, windowMs: 60000, maxRetries: 1 } },
+    }),
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReserve.mockReset();
+    mockTinyFishFetchGetContents.mockReset();
+  });
+
+  // -----------------------------------------------------------------------
+  // Happy path
+  // -----------------------------------------------------------------------
+  it("returns TinyFish Markdown on success", async () => {
+    mockTinyFishFetchGetContents.mockResolvedValue({
+      results: [
+        {
+          url: "https://example.com/page",
+          final_url: null,
+          title: "TF Page",
+          format: "markdown",
+          text: "# Title\n\nContent",
+        },
+      ],
+      errors: [],
+    });
+    mockReserve.mockResolvedValue("allowed");
+
+    const result = await fetchWeb(makeRequest(), makeContext());
+
+    expect(result.strategy).toBe("tinyfish");
+    expect(result.format).toBe("markdown");
+    expect(result.title).toBe("TF Page");
+    expect(result.content).toBe("# Title\n\nContent");
+    expect(result.error).toBeNull();
+    expect(result.attempts).toEqual([
+      { strategy: "tinyfish", outcome: "success" },
+    ]);
+    expect(result.url).toBe("https://example.com/page");
+  });
+
+  it("returns TinyFish HTML when requested", async () => {
+    mockTinyFishFetchGetContents.mockResolvedValue({
+      results: [
+        {
+          url: "https://example.com/page",
+          final_url: null,
+          title: "TF HTML",
+          format: "html",
+          text: "<p>HTML content</p>",
+        },
+      ],
+      errors: [],
+    });
+    mockReserve.mockResolvedValue("allowed");
+
+    const result = await fetchWeb(
+      makeRequest({
+        advancedOptions: { tinyfish: { format: "html" } },
+      }),
+      makeContext(),
+    );
+
+    expect(result.format).toBe("html");
+    expect(result.content).toBe("<p>HTML content</p>");
+  });
+
+  it("returns TinyFish JSON serialized as text", async () => {
+    mockTinyFishFetchGetContents.mockResolvedValue({
+      results: [
+        {
+          url: "https://example.com/page",
+          final_url: null,
+          title: "TF JSON",
+          format: "json",
+          text: { key: "value" },
+        },
+      ],
+      errors: [],
+    });
+    mockReserve.mockResolvedValue("allowed");
+
+    const result = await fetchWeb(
+      makeRequest({
+        advancedOptions: { tinyfish: { format: "json" } },
+      }),
+      makeContext(),
+    );
+
+    expect(result.format).toBe("json");
+    expect(result.content).toBe('{"key":"value"}');
+  });
+
+  // -----------------------------------------------------------------------
+  // Validation — terminal, never triggers fallback
+  // -----------------------------------------------------------------------
+  it("rejects mutually exclusive conditional options without reserving quota", async () => {
+    mockReserve.mockResolvedValue("allowed");
+
+    const result = await fetchWeb(
+      makeRequest({
+        advancedOptions: {
+          tinyfish: {
+            if_none_match: "abc",
+            if_modified_since: "2024-01-01",
+          },
+        },
+      }),
+      makeContext(),
+    );
+
+    expect(result.strategy).toBe("none");
+    expect(result.error).toContain("mutually exclusive");
+    expect(result.attempts).toEqual([]);
+    expect(mockReserve).not.toHaveBeenCalled();
+    expect(mockTinyFishFetchGetContents).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown fields in TinyFish options", async () => {
+    const result = await fetchWeb(
+      makeRequest({
+        advancedOptions: {
+          tinyfish: { bogus_field: true },
+        },
+      }),
+      makeContext(),
+    );
+
+    expect(result.strategy).toBe("none");
+    expect(result.error).toContain("Invalid value");
+    expect(result.attempts).toEqual([]);
+  });
+
+  // -----------------------------------------------------------------------
+  // Missing credentials → fallback to Readability
+  // -----------------------------------------------------------------------
+  it("falls back to Readability when TinyFish credentials are missing", async () => {
+    const ctx = makeContext({ tinyfishKey: null });
+    // Mock Readability to succeed
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+        text: async () => `
+          <html><head><title>Test Page</title></head>
+          <body>
+            <h1>Test Page Title</h1>
+            <div id="main">
+              <p>Readability content paragraph one with enough text to be meaningful for the extractor to pick up as article content.</p>
+              <p>A second paragraph of substantial length so that Mozilla Readability considers this page an article worth extracting.</p>
+            </div>
+          </body></html>
+        `,
+      } as Response);
+    try {
+      const result = await fetchWeb(makeRequest(), ctx);
+      expect(result.strategy).toBe("readability");
+      expect(result.format).toBe("html");
+      expect(result.content).toContain("Readability content");
+      expect(result.attempts).toEqual([
+        { strategy: "tinyfish", outcome: "skipped", reason: expect.stringContaining("credentials") },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Infrastructure fallbacks
+  // -----------------------------------------------------------------------
+  it("falls back to Readability on capacity-blocked", async () => {
+    mockReserve.mockResolvedValue("capacity-blocked");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+        text: async () => `<html><head><title>Test Page</title></head>
+          <body>
+            <h1>Test Page Title</h1>
+            <div id="main">
+              <p>Readability content paragraph one with enough text to be meaningful for the extractor to pick up as article content.</p>
+              <p>A second paragraph of substantial length so that Mozilla Readability considers this page an article worth extracting.</p>
+            </div>
+          </body></html>`,
+      } as Response);
+    try {
+      const result = await fetchWeb(makeRequest(), makeContext());
+      expect(result.strategy).toBe("readability");
+      expect(result.format).toBe("html");
+      expect(result.attempts).toEqual([
+        { strategy: "tinyfish", outcome: "skipped", reason: expect.stringContaining("capacity") },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("falls back to Readability on cooldown-blocked", async () => {
+    mockReserve.mockResolvedValue("cooldown-blocked");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+        text: async () => `<html><head><title>Test Page</title></head>
+          <body>
+            <h1>Test Page Title</h1>
+            <div id="main">
+              <p>Readability content paragraph one with enough text to be meaningful for the extractor to pick up as article content.</p>
+              <p>A second paragraph of substantial length so that Mozilla Readability considers this page an article worth extracting.</p>
+            </div>
+          </body></html>`,
+      } as Response);
+    try {
+      const result = await fetchWeb(makeRequest(), makeContext());
+      expect(result.strategy).toBe("readability");
+      expect(result.attempts).toEqual([
+        { strategy: "tinyfish", outcome: "skipped", reason: expect.stringContaining("cooldown") },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("publishes 429 cooldown and falls back to Readability", async () => {
+    const rateLimitErr = new Error("rate limited");
+    (rateLimitErr as any).statusCode = 429;
+    (rateLimitErr as any).retryAfter = 60000;
+    mockTinyFishFetchGetContents.mockRejectedValue(rateLimitErr);
+    mockReserve.mockResolvedValue("allowed");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+        text: async () => `<html><head><title>Test Page</title></head>
+          <body>
+            <h1>Test Page Title</h1>
+            <div id="main">
+              <p>Readability content paragraph one with enough text to be meaningful for the extractor to pick up as article content.</p>
+              <p>A second paragraph of substantial length so that Mozilla Readability considers this page an article worth extracting.</p>
+            </div>
+          </body></html>`,
+      } as Response);
+    try {
+      const result = await fetchWeb(makeRequest(), makeContext());
+      expect(result.strategy).toBe("readability");
+      expect(mockPublishCooldown).toHaveBeenCalledWith(
+        "tinyfish",
+        "fetch",
+        60000,
+        "tf-key",
+      );
+      expect(result.attempts).toEqual([
+        { strategy: "tinyfish", outcome: "rate_limited", reason: "provider rate-limited the request" },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("falls back to Readability on timeout", async () => {
+    const timeoutErr = new Error("timeout");
+    mockTinyFishFetchGetContents.mockRejectedValue(timeoutErr);
+    mockReserve.mockResolvedValue("allowed");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+        text: async () => `<html><head><title>Test Page</title></head>
+          <body>
+            <h1>Test Page Title</h1>
+            <div id="main">
+              <p>Readability content paragraph one with enough text to be meaningful for the extractor to pick up as article content.</p>
+              <p>A second paragraph of substantial length so that Mozilla Readability considers this page an article worth extracting.</p>
+            </div>
+          </body></html>`,
+      } as Response);
+    try {
+      const result = await fetchWeb(makeRequest(), makeContext());
+      expect(result.strategy).toBe("readability");
+      expect(result.attempts).toEqual([
+        { strategy: "tinyfish", outcome: "failed", reason: "provider request timed out" },
+        { strategy: "tinyfish", outcome: "failed", reason: "provider request timed out" },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("falls back to Readability on empty extracted content", async () => {
+    mockTinyFishFetchGetContents.mockResolvedValue({
+      results: [
+        {
+          url: "https://example.com/page",
+          final_url: null,
+          title: "Empty",
+          format: "markdown",
+          text: null,
+        },
+      ],
+      errors: [],
+    });
+    mockReserve.mockResolvedValue("allowed");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+        text: async () => `<html><head><title>Test Page</title></head>
+          <body>
+            <h1>Test Page Title</h1>
+            <div id="main">
+              <p>Readability content paragraph one with enough text to be meaningful for the extractor to pick up as article content.</p>
+              <p>A second paragraph of substantial length so that Mozilla Readability considers this page an article worth extracting.</p>
+            </div>
+          </body></html>`,
+      } as Response);
+    try {
+      const result = await fetchWeb(makeRequest(), makeContext());
+      expect(result.strategy).toBe("readability");
+      expect(result.format).toBe("html");
+      expect(result.attempts).toEqual([
+        { strategy: "tinyfish", outcome: "skipped", reason: "empty extracted content" },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Terminal errors — no Readability fallback
+  // -----------------------------------------------------------------------
+  it("returns validation error without falling back to Readability", async () => {
+    const validationErr = new Error("invalid selector");
+    (validationErr as any).statusCode = 400;
+    mockTinyFishFetchGetContents.mockRejectedValue(validationErr);
+    mockReserve.mockResolvedValue("allowed");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+        text: async () => `<html><body><article><p>RB content</p></article></body></html>`,
+      } as Response);
+    try {
+      const result = await fetchWeb(makeRequest(), makeContext());
+      expect(result.strategy).toBe("none");
+      expect(result.error).toBe("provider rejected the request (validation error)");
+      expect(result.format).toBe("unknown");
+      expect(result.attempts).toEqual([
+        { strategy: "tinyfish", outcome: "failed", reason: "provider rejected the request (validation error)" },
+      ]);
+      // Readability should NOT have been called
+      expect(mockTinyFishFetchGetContents).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("returns conditional-misuse validation error without fallback", async () => {
+    // Validation is caught at the options layer, not the SDK layer
+    const result = await fetchWeb(
+      makeRequest({
+        advancedOptions: {
+          tinyfish: {
+            if_none_match: "abc",
+            if_modified_since: "2024-01-01",
+          },
+        },
+      }),
+      makeContext(),
+    );
+    expect(result.strategy).toBe("none");
+    expect(result.error).toContain("mutually exclusive");
+    expect(mockTinyFishFetchGetContents).not.toHaveBeenCalled();
+  });
+
+  // -----------------------------------------------------------------------
+  // Retry accounting
+  // -----------------------------------------------------------------------
+  it("retries transient failure once then returns on success", async () => {
+    const timeoutErr = new Error("timeout");
+    mockTinyFishFetchGetContents
+      .mockRejectedValueOnce(timeoutErr)
+      .mockResolvedValue({
+        results: [
+          {
+            url: "https://example.com/page",
+            final_url: null,
+            title: "Retried",
+            format: "markdown",
+            text: "After retry",
+          },
+        ],
+        errors: [],
+      });
+    mockReserve
+      .mockResolvedValueOnce("allowed")
+      .mockResolvedValueOnce("allowed");
+
+    const result = await fetchWeb(makeRequest(), makeContext());
+
+    expect(result.strategy).toBe("tinyfish");
+    expect(result.content).toBe("After retry");
+    expect(mockReserve).toHaveBeenCalledTimes(2);
+    expect(mockTinyFishFetchGetContents).toHaveBeenCalledTimes(2);
+  });
+
+  it("exhausts retries and falls back to Readability", async () => {
+    const timeoutErr = new Error("timeout");
+    mockTinyFishFetchGetContents.mockRejectedValue(timeoutErr);
+    mockReserve.mockResolvedValue("allowed");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+        text: async () => `<html><head><title>Test Page</title></head>
+          <body>
+            <h1>Test Page Title</h1>
+            <div id="main">
+              <p>Readability content paragraph one with enough text to be meaningful for the extractor to pick up as article content.</p>
+              <p>A second paragraph of substantial length so that Mozilla Readability considers this page an article worth extracting.</p>
+            </div>
+          </body></html>`,
+      } as Response);
+    try {
+      const result = await fetchWeb(makeRequest(), makeContext());
+      expect(result.strategy).toBe("readability");
+      // 2 reserves: initial + 1 retry
+      expect(mockReserve).toHaveBeenCalledTimes(2);
+      expect(result.attempts).toEqual([
+        { strategy: "tinyfish", outcome: "failed", reason: "provider request timed out" },
+        { strategy: "tinyfish", outcome: "failed", reason: "provider request timed out" },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Cancellation
+  // -----------------------------------------------------------------------
+  it("stops immediately on cancellation, no retry, no fallback", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    mockTinyFishFetchGetContents.mockImplementation((_params: any, options: any) => {
+      if (options?.signal?.aborted) {
+        const err = new Error("aborted");
+        (err as any).name = "AbortError";
+        throw err;
+      }
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => {
+          const err = new Error("aborted");
+          (err as any).name = "AbortError";
+          reject(err);
+        });
+      });
+    });
+    mockReserve.mockResolvedValue("allowed");
+
+    const request = makeRequest();
+    (request as any).__signal = controller.signal;
+
+    await expect(fetchWeb(request, makeContext())).rejects.toThrow("cancelled");
+    // No attempts should be recorded
+    expect(mockTinyFishFetchGetContents).not.toHaveBeenCalled();
+  });
+
+  // -----------------------------------------------------------------------
+  // No strategy success
+  // -----------------------------------------------------------------------
+  it("returns 'none' strategy when all strategies fail", async () => {
+    mockTinyFishFetchGetContents.mockRejectedValue(new Error("all bad"));
+    mockReserve.mockResolvedValue("allowed");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Promise.resolve({
+        ok: false,
+        status: 404,
+      } as Response);
+    try {
+      const result = await fetchWeb(makeRequest(), makeContext());
+      expect(result.strategy).toBe("none");
+      expect(result.error).toContain("No strategy could fetch");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

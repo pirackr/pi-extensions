@@ -33,7 +33,9 @@ export interface FetchResponse {
 	title: string;
 	content: string;
 	strategy: string;
+	format: FetchFormat;
 	error: string | null;
+	attempts: FetchAttempt[];
 }
 
 export interface SearchEngine {
@@ -256,5 +258,5 @@ export interface WebLookupContext {
 
 /** Request-object-based fetch strategy interface for future adapters. */
 export interface FetchStrategyAdapter {
-	fetch(request: FetchWebRequest): Promise<FetchResponse>;
+	fetch(request: FetchWebRequest, signal?: AbortSignal): Promise<FetchResponse>;
 }

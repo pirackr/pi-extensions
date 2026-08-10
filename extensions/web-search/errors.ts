@@ -37,8 +37,16 @@ export function classifyError(
 		return "cancellation";
 	}
 
-	// Network / transport errors.
+	// Network / transport errors — also check for timeout clues in message.
 	if (status === null && raw instanceof Error) {
+		const msg = raw.message.toLowerCase();
+		if (
+			msg.includes("timeout") ||
+			msg.includes("timed out") ||
+			msg.includes("abort")
+		) {
+			return "timeout";
+		}
 		return "transport";
 	}
 

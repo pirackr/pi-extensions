@@ -168,9 +168,13 @@ describe("types", () => {
 			title: "t",
 			content: "c",
 			strategy: "s",
+			format: "markdown",
 			error: null,
+			attempts: [{ strategy: "s", outcome: "success" }],
 		};
 		expect(r.strategy).toBe("s");
+		expect(r.format).toBe("markdown");
+		expect(r.attempts).toHaveLength(1);
 	});
 });
 
@@ -854,7 +858,9 @@ describe("extension tools", () => {
 		expect(res.details).toHaveProperty("title");
 		expect(res.details).toHaveProperty("content");
 		expect(res.details).toHaveProperty("strategy");
+		expect(res.details).toHaveProperty("format");
 		expect(res.details).toHaveProperty("error");
+		expect(res.details).toHaveProperty("attempts");
 	});
 
 	it("web_lookup throws when budget flag is exhausted", async () => {

@@ -2,10 +2,9 @@
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { webLookup } from "./search.ts";
-import type { FetchStrategy, FetchResponse } from "./types.ts";
-import { ReadabilityStrategy } from "./strategies/readability.ts";
+import { fetchWeb } from "./fetch.ts";
 
-export const fetchStrategies: FetchStrategy[] = [new ReadabilityStrategy()];
+export const fetchStrategies: import("./types.ts").FetchStrategy[] = [];
 
 /**
  * Parse a positive-integer budget from a CLI flag value. 0/absent/NaN = unlimited.
@@ -19,37 +18,10 @@ function parseBudgetFlag(value: boolean | string | undefined): number {
 	return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+const PI_TOOL_OUTPUT_SAFETY_LIMIT = 100_000;
+
 function budgetLine(used: number, max: number): string {
 	return `[Search budget: ${used}/${max} calls used — ${max - used} remaining]`;
-}
-
-async function fetchWeb(
-	url: string,
-	signal?: AbortSignal,
-): Promise<FetchResponse> {
-	for (const strategy of fetchStrategies) {
-		try {
-			const result = await strategy.fetch(url, signal);
-			if (result !== null) {
-				return {
-					url: result.url,
-					title: result.title,
-					content: result.content,
-					strategy: strategy.name,
-					error: result.error,
-				};
-			}
-		} catch (err) {
-			// Strategy failed — try the next one.
-		}
-	}
-	return {
-		url,
-		title: "",
-		content: "",
-		strategy: "none",
-		error: "No strategy could fetch this URL",
-	};
 }
 
 export default function (pi: ExtensionAPI) {
@@ -161,14 +133,24 @@ export default function (pi: ExtensionAPI) {
 		name: "fetch_web",
 		label: "Fetch Web Content",
 		description:
-			"Fetch and extract readable content from a public URL. Uses Mozilla Readability for clean extraction. " +
-			"Returns the page title and HTML content. Use for reading documentation, articles, or any public web page.",
+			"Fetch and extract readable content from a public URL. Uses TinyFish by default (Markdown), " +
+			"falling back to Mozilla Readability (HTML). " +
+			"Returns the page title and content in the strategy's native format. " +
+			"Use for reading documentation, articles, or any public web page.",
 		parameters: Type.Object({
 			url: Type.String({ description: "Public HTTP(S) URL to fetch" }),
 			max_chars: Type.Optional(
 				Type.Number({
 					description: "Max characters to return. Defaults to no truncation.",
 				}),
+			),
+			advancedOptions: Type.Optional(
+				Type.Object(
+					{
+						tinyfish: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+					},
+					{ additionalProperties: false },
+				),
 			),
 		}),
 		async execute(_id: string, params: any, signal?: AbortSignal) {
@@ -180,15 +162,26 @@ export default function (pi: ExtensionAPI) {
 				);
 			}
 			fetchCalls += 1;
-			const result = await fetchWeb(params.url, signal);
+			const request = {
+				url: params.url,
+				max_chars: params.max_chars,
+				advancedOptions: params.advancedOptions,
+			};
+			if (signal) (request as any).__signal = signal;
+			const result = await fetchWeb(request);
 
 			let content = result.content;
 			if (params.max_chars && content.length > params.max_chars) {
 				content =
 					content.slice(0, params.max_chars) + "\n\n[Content truncated]";
 			}
+			if (content.length > PI_TOOL_OUTPUT_SAFETY_LIMIT) {
+				content =
+					content.slice(0, PI_TOOL_OUTPUT_SAFETY_LIMIT) +
+					"\n\n[Content truncated due to output safety limit]";
+			}
 
-			const text = `Title: ${result.title || "(none)"}\nURL: ${result.url}\nStrategy: ${result.strategy}\n\n${content}`;
+			const text = `Title: ${result.title || "(none)"}\nURL: ${result.url}\nStrategy: ${result.strategy}\nFormat: ${result.format}\n\n${content}`;
 			const output =
 				max > 0 ? `${text}\n\n${budgetLine(fetchCalls, max)}\n` : text;
 

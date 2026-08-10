@@ -109,20 +109,42 @@ describe("deep-research prompt contract", () => {
 			expect(content).toMatch(/<artifact>/);
 		});
 
-		it("uses logical role names in run_subagents examples", () => {
-			const logicalRoles = ["planner", "scout", "fetcher", "consolidator", "judge", "citation-agent", "source-auditor", "contradiction-resolver"];
+		it("every agent: \"...\" literal in run_subagents examples is a registered profile", () => {
+			const resolvable = new Set([
+				"planner", "scout_research", "fetcher", "worker",
+				"judge", "citation_agent", "source_auditor", "contradiction_resolver",
+			]);
+			const agentLiteralPattern = /agent:\s*["']([^"']+)["']/gi;
 			const found = new Set<string>();
-			for (const role of logicalRoles) {
-				if (content.match(new RegExp(`agent:\\s*["']${role}["']`, "i"))) found.add(role);
+			let match: RegExpExecArray | null;
+			while ((match = agentLiteralPattern.exec(content)) !== null) {
+				found.add(match[1]);
 			}
-			expect(found.size).toBeGreaterThan(0);
+			for (const name of found) {
+				expect(
+					resolvable.has(name),
+					`agent literal "${name}" is not a registered profile`,
+				).toBe(true);
+			}
 		});
 
-		it("does not contain banned agent-profile literals as run_subagents agents", () => {
-			const banned = ["scout_research", "citation_agent", "source_auditor", "contradiction_resolver"];
-			for (const name of banned) {
-				const pat = new RegExp(`agent:\\s*["']${name}["']`, "i");
-				expect(content, `must not contain agent literal: ${name}`).not.toMatch(pat);
+		it("contains the role→profile mapping note", () => {
+			expect(content).toContain("scout_research");
+			expect(content).toContain("worker");
+			expect(content).toContain("citation_agent");
+		});
+
+		it("does not embed per-agent runtime config (model/tools/access/timeout) adjacent to dispatches", () => {
+			const blockPattern = /```js\s*([\s\S]*?)```/g;
+			let block: RegExpExecArray | null;
+			while ((block = blockPattern.exec(content)) !== null) {
+				const code = block[1];
+				if (code.includes("run_subagents")) {
+					expect(code, "run_subagents block must not contain model:").not.toMatch(/\bmodel:\s*/i);
+					expect(code, "run_subagents block must not contain tools:").not.toMatch(/\btools:\s*/i);
+					expect(code, "run_subagents block must not contain access:").not.toMatch(/\baccess:\s*/i);
+					expect(code, "run_subagents block must not contain timeoutSeconds").not.toMatch(/\btimeoutSeconds\b/);
+				}
 			}
 		});
 

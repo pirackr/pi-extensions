@@ -24,13 +24,18 @@ function readAgent(name: string): string {
 	return fs.readFileSync(path.join(AGENTS_DIR, name), "utf8");
 }
 
-// Hardcoded agent-profile names that must NOT appear as run_subagents agent literals
-const BANNED_AGENT_LITERALS = [
+// Every agent: "..." literal in run_subagents examples must resolve to a
+// registered profile. These are the only names the engine will accept.
+const RESOLVABLE_AGENT_NAMES = new Set([
+	"planner",
 	"scout_research",
+	"fetcher",
+	"worker",
+	"judge",
 	"citation_agent",
 	"source_auditor",
 	"contradiction_resolver",
-];
+]);
 
 describe("deep-research-program contract", () => {
 	describe("program.v2.md — no embedded runtime configuration", () => {
@@ -76,29 +81,48 @@ describe("deep-research-program contract", () => {
 			const hasConfigRef = program.includes("config/deep-research.json") || program.includes("active profile's config");
 			expect(hasConfigRef).toBe(true);
 		});
+
+		it("does not embed per-agent runtime config (model/tools/access/timeout) adjacent to dispatches", () => {
+			// Within run_subagents code blocks, no per-agent runtime config fields
+			// are allowed — those belong in config/deep-research.json
+			const blockPattern = /```js\s*([\s\S]*?)```/g;
+			let block: RegExpExecArray | null;
+			while ((block = blockPattern.exec(program)) !== null) {
+				const code = block[1];
+				if (code.includes("run_subagents")) {
+					expect(code, "run_subagents block must not contain model:").not.toMatch(/\bmodel:\s*/i);
+					expect(code, "run_subagents block must not contain tools:").not.toMatch(/\btools:\s*/i);
+					expect(code, "run_subagents block must not contain access:").not.toMatch(/\baccess:\s*/i);
+					expect(code, "run_subagents block must not contain timeoutSeconds").not.toMatch(/\btimeoutSeconds\b/);
+				}
+			}
+		});
 	});
 
-	describe("program.v2.md — logical roles only (no hardcoded agent literals)", () => {
+	describe("program.v2.md — dispatch names resolve to registered profiles", () => {
 		const program = readMd("program.v2.md");
 
-		it("does not use banned agent-profile names as run_subagents agent literals", () => {
-			for (const name of BANNED_AGENT_LITERALS) {
-				// Match agent: "name" or agent: 'name' patterns (the JS run_subagents examples)
-				const literalPattern = new RegExp(`agent:\\s*["']${name}["']`, "i");
-				expect(program, `program must not contain agent literal: ${name}`).not.toMatch(literalPattern);
+		it("every agent: \"...\" literal in run_subagents examples is a registered profile", () => {
+			// Parse every agent: "..." literal in JS run_subagents examples
+			const agentLiteralPattern = /agent:\s*["']([^"']+)["']/gi;
+			const found = new Set<string>();
+			let match: RegExpExecArray | null;
+			while ((match = agentLiteralPattern.exec(program)) !== null) {
+				found.add(match[1]);
+			}
+			for (const name of found) {
+				expect(
+					RESOLVABLE_AGENT_NAMES.has(name),
+					`agent literal "${name}" is not a registered profile (allowed: ${[...RESOLVABLE_AGENT_NAMES].join(", ")})`,
+				).toBe(true);
 			}
 		});
 
-		it("uses logical role names in run_subagents examples", () => {
-			// Logical roles that should appear instead
-			const logicalRoles = ["planner", "scout", "fetcher", "consolidator", "judge", "citation-agent", "source-auditor", "contradiction-resolver"];
-			const foundRoles = new Set<string>();
-			for (const role of logicalRoles) {
-				const pattern = new RegExp(`agent:\\s*["']${role}["']`, "i");
-				if (program.match(pattern)) foundRoles.add(role);
-			}
-			// At least some logical roles should be present in examples
-			expect(foundRoles.size).toBeGreaterThan(0);
+		it("contains the role→profile mapping note", () => {
+			// The mapping note must exist and reference at least the key profile names
+			expect(program).toContain("scout_research");
+			expect(program).toContain("worker");
+			expect(program).toContain("citation_agent");
 		});
 	});
 

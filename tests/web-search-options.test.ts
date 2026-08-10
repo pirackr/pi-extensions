@@ -648,3 +648,115 @@ describe("TavilySearch cross-field constraints", () => {
 		expect(errs).toEqual([]);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Schema-to-reference coverage assertion
+// ---------------------------------------------------------------------------
+
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+describe("schema-to-reference coverage", () => {
+	it("every accepted TinyFishSearchOptionsSchema property appears in the provider-options doc", () => {
+		const docPath = resolve(import.meta.dirname, "../docs/web-search-provider-options.md");
+		const doc = readFileSync(docPath, "utf-8");
+		const props = [
+			"advancedOptions.tinyfish.purpose",
+			"advancedOptions.tinyfish.location",
+			"advancedOptions.tinyfish.language",
+			"advancedOptions.tinyfish.include_domains",
+			"advancedOptions.tinyfish.exclude_domains",
+			"advancedOptions.tinyfish.after_date",
+			"advancedOptions.tinyfish.before_date",
+			"advancedOptions.tinyfish.recency_minutes",
+			"advancedOptions.tinyfish.domain_type",
+			"advancedOptions.tinyfish.pub_year_min",
+			"advancedOptions.tinyfish.pub_year_max",
+			"advancedOptions.tinyfish.page",
+		];
+		const missing = props.filter((p) => !doc.includes(p));
+		if (missing.length > 0) throw new Error(`Missing from doc: ${missing.join(", ")}`);
+	});
+
+	it("every accepted TinyFishFetchOptionsSchema property appears in the provider-options doc", () => {
+		const docPath = resolve(import.meta.dirname, "../docs/web-search-provider-options.md");
+		const doc = readFileSync(docPath, "utf-8");
+		const props = [
+			"advancedOptions.tinyfish.purpose",
+			"advancedOptions.tinyfish.format",
+			"advancedOptions.tinyfish.include_html_head",
+			"advancedOptions.tinyfish.links",
+			"advancedOptions.tinyfish.image_links",
+			"advancedOptions.tinyfish.ttl",
+			"advancedOptions.tinyfish.per_url_timeout_ms",
+			"advancedOptions.tinyfish.if_none_match",
+			"advancedOptions.tinyfish.if_modified_since",
+			"advancedOptions.tinyfish.include_etag_and_last_modified",
+		];
+		const missing = props.filter((p) => !doc.includes(p));
+		if (missing.length > 0) throw new Error(`Missing from doc: ${missing.join(", ")}`);
+	});
+
+	it("every accepted ExaSearchOptionsSchema property appears in the provider-options doc", () => {
+		const docPath = resolve(import.meta.dirname, "../docs/web-search-provider-options.md");
+		const doc = readFileSync(docPath, "utf-8");
+		const props = [
+			"advancedOptions.exa.contents",
+			"advancedOptions.exa.contents.text",
+			"advancedOptions.exa.contents.highlights",
+			"advancedOptions.exa.contents.summary",
+			"advancedOptions.exa.contents.livecrawl",
+			"advancedOptions.exa.contents.maxAgeHours",
+			"advancedOptions.exa.contents.filterEmptyResults",
+			"advancedOptions.exa.contents.subpages",
+			"advancedOptions.exa.contents.subpageTarget",
+			"advancedOptions.exa.contents.extras",
+			"advancedOptions.exa.includeDomains",
+			"advancedOptions.exa.excludeDomains",
+			"advancedOptions.exa.startCrawlDate",
+			"advancedOptions.exa.endCrawlDate",
+			"advancedOptions.exa.startPublishedDate",
+			"advancedOptions.exa.endPublishedDate",
+			"advancedOptions.exa.category",
+			"advancedOptions.exa.includeText",
+			"advancedOptions.exa.excludeText",
+			"advancedOptions.exa.flags",
+			"advancedOptions.exa.userLocation",
+			"advancedOptions.exa.modulation",
+			"advancedOptions.exa.useAutoprompt",
+			"advancedOptions.exa.systemPrompt",
+			"advancedOptions.exa.outputSchema",
+			"advancedOptions.exa.type",
+		];
+		const missing = props.filter((p) => !doc.includes(p));
+		if (missing.length > 0) throw new Error(`Missing from doc: ${missing.join(", ")}`);
+	});
+
+	it("every accepted TavilySearchOptionsSchema property appears in the provider-options doc", () => {
+		const docPath = resolve(import.meta.dirname, "../docs/web-search-provider-options.md");
+		const doc = readFileSync(docPath, "utf-8");
+		const props = [
+			"advancedOptions.tavily.searchDepth",
+			"advancedOptions.tavily.topic",
+			"advancedOptions.tavily.days",
+			"advancedOptions.tavily.includeImages",
+			"advancedOptions.tavily.includeImageDescriptions",
+			"advancedOptions.tavily.includeAnswer",
+			"advancedOptions.tavily.includeRawContent",
+			"advancedOptions.tavily.includeDomains",
+			"advancedOptions.tavily.excludeDomains",
+			"advancedOptions.tavily.maxTokens",
+			"advancedOptions.tavily.timeRange",
+			"advancedOptions.tavily.chunksPerSource",
+			"advancedOptions.tavily.country",
+			"advancedOptions.tavily.startDate",
+			"advancedOptions.tavily.endDate",
+			"advancedOptions.tavily.autoParameters",
+			"advancedOptions.tavily.includeFavicon",
+			"advancedOptions.tavily.includeUsage",
+			"advancedOptions.tavily.exactMatch",
+		];
+		const missing = props.filter((p) => !doc.includes(p));
+		if (missing.length > 0) throw new Error(`Missing from doc: ${missing.join(", ")}`);
+	});
+});

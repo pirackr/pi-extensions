@@ -840,6 +840,80 @@ describe("extension tools", () => {
 		expect(JSON.stringify(lookupTool.parameters)).toContain("tavily");
 	});
 
+	it("web_lookup schema advertises the tinyfish engine", async () => {
+		const results: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => results.push(tool),
+		};
+		createExtension(mockPi as any);
+		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+		expect(JSON.stringify(lookupTool.parameters)).toContain("tinyfish");
+	});
+
+	it("web_lookup advancedOptions rejects unknown provider keys", async () => {
+		const results: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => results.push(tool),
+		};
+		createExtension(mockPi as any);
+		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+		// The schema should reject unknown keys like 'unknown_provider'
+		expect(JSON.stringify(lookupTool.parameters)).not.toContain("unknown_provider");
+		// Should accept the three known provider keys
+		expect(JSON.stringify(lookupTool.parameters)).toContain("tinyfish");
+		expect(JSON.stringify(lookupTool.parameters)).toContain("exa");
+		expect(JSON.stringify(lookupTool.parameters)).toContain("tavily");
+	});
+
+	it("fetch_web advancedOptions rejects unknown fields in tinyfish", async () => {
+		const results: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => results.push(tool),
+		};
+		createExtension(mockPi as any);
+		const fetchTool = results.find((t: any) => t.name === "fetch_web");
+		const schemaJson = JSON.stringify(fetchTool.parameters);
+		// Should contain known tinyfish fields
+		expect(schemaJson).toContain("format");
+		expect(schemaJson).toContain("links");
+		expect(schemaJson).toContain("ttl");
+		// Should NOT contain unknown fields
+		expect(schemaJson).not.toContain("bogus_field");
+	});
+
+	it("fetch_web output text includes format and truncation notice", async () => {
+		const results: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => results.push(tool),
+		};
+		createExtension(mockPi as any);
+		const fetchTool = results.find((t: any) => t.name === "fetch_web");
+
+		const res = await fetchTool.execute("test-id", {
+			url: "https://rust-lang.github.io/async-book/08_ecosystem/00_chapter.html",
+			max_chars: 10,
+		});
+		const text = res.content[0].text as string;
+		expect(text).toContain("Format:");
+		expect(text).toContain("[Content truncated]");
+	});
+
+	it("fetch_web details include attempts", async () => {
+		const results: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => results.push(tool),
+		};
+		createExtension(mockPi as any);
+		const fetchTool = results.find((t: any) => t.name === "fetch_web");
+
+		const res = await fetchTool.execute("test-id", {
+			url: "https://rust-lang.github.io/async-book/08_ecosystem/00_chapter.html",
+		});
+		expect(res.details).toHaveProperty("attempts");
+		expect(Array.isArray(res.details.attempts)).toBe(true);
+		expect(res.details.attempts.length).toBeGreaterThan(0);
+	});
+
 	it("fetch_web returns FetchResponse shape", async () => {
 		const results: any[] = [];
 		const mockPi = {

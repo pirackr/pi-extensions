@@ -39,11 +39,42 @@ When adding a feature, decide which half it needs. Guidance-only additions (`cus
 
 Direct API calls — no `open-websearch`, no `npx`, no daemon. Architecture:
 
-- `extensions/web-search/search.ts` — `webLookup()` walks an ordered fallback chain (`resolveChain`): the first engine that returns results wins. `chainEngines` (Exa default, DuckDuckGo backup) is what `engine: "auto"` walks; the exported `searchEngines` registry adds opt-in engines (Tavily) that run only when explicitly selected. Tracks `partialFailures` for unavailable/empty/errored engines so the agent sees why a backup was used.
-- `extensions/web-search/engines/exa.ts` — ExaEngine. `POST https://api.exa.ai/search` with `x-api-key` from env `EXA_API_KEY` or the repo-root `.env` file (resolved via `../../../.env` from `engines/`). Skipped silently (`isAvailable()` false) when no key.
+- `extensions/web-search/search.ts` — `webLookup()` walks an ordered fallback chain (`resolveChain`): the first engine that returns results wins. `chainEngines` (TinyFish default, Exa backup, DuckDuckGo last) is what `engine: "auto"` walks; the exported `searchEngines` registry adds opt-in engines (Tavily) that run only when explicitly selected. Tracks `partialFailures` for unavailable/empty/errored engines so the agent sees why a backup was used.
+- `extensions/web-search/engines/tinyfish.ts` — TinyFishEngine. Uses `@tiny-fish/sdk` (`TinyFish.search.query()`). Skipped silently when no `TINYFISH_API_KEY`.
+- `extensions/web-search/engines/exa.ts` — ExaEngine. Uses `exa-js` (`Exa.search()`). Skipped silently when no `EXA_API_KEY`.
 - `extensions/web-search/engines/duckduckgo.ts` — DuckDuckGoEngine. Scrapes `duckduckgo.com/html/` with a Firefox UA; decodes `uddg=` redirect URLs and strips the `&rut=` suffix; no API key needed.
+- `extensions/web-search/engines/tavily.ts` — TavilyEngine. Uses `@tavily/core` (`tavily.search()`). Skipped silently when no `TAVILY_API_KEY`.
+- `extensions/web-search/strategies/tinyfish.ts` — TinyFishFetchStrategy. Uses `@tiny-fish/sdk` (`TinyFish.fetch.getContents()`); requests Markdown by default.
 - `extensions/web-search/strategies/readability.ts` — ReadabilityStrategy. Native `fetch()` + `linkedom` parse + `@mozilla/readability` extraction; 30s abort timeout; returns `{url, title, content, error}`.
-- `extensions/web-search/index.ts` — registers `web_lookup` (search) and `fetch_web` (fetch + extract) tools with typebox params.
+- `extensions/web-search/options/{tinyfish,exa,tavily}.ts` — strict TypeBox schemas (`TinyFishSearchOptionsSchema`, `TinyFishFetchOptionsSchema`, `ExaSearchOptionsSchema`, `TavilySearchOptionsSchema`) with `additionalProperties: false`. Cross-field validation in `options/validate.ts`.
+- `extensions/web-search/index.ts` — registers `web_lookup` (search) and `fetch_web` (fetch + extract) tools with typebox params. Tool schemas use the strict provider-keyed schemas so unknown fields are rejected at the tool boundary.
+
+### SDK Ownership
+
+| Provider | SDK | Operation |
+|---|---|---|
+| TinyFish | `@tiny-fish/sdk` | Search, Fetch |
+| Exa | `exa-js` | Search |
+| Tavily | `@tavily/core` | Search |
+| DuckDuckGo | (none — direct HTML) | Search |
+| Readability | `@mozilla/readability` + `linkedom` | Fetch |
+
+### Config and Shared State
+
+- Packaged defaults: `config/web-search.json` (not user-editable).
+- User override: `$PI_AGENT_DIR/web-search.json` (deep-merged with packaged defaults; unusual default: `~/.pi/agent/web-search.json`).
+- Shared rate-limit state: `$PI_AGENT_DIR/cache/web-search/` — rolling-window buckets keyed by provider + operation + API-key fingerprint. Cross-process, shared by all Pi and subagent processes.
+- API keys resolve from env vars (`TINYFISH_API_KEY`, `EXA_API_KEY`, `TAVILY_API_KEY`) or repo-root `.env`; never accepted as tool input, never written to config files.
+
+### Routing Boundaries
+
+- `engine: "auto"` → TinyFish → Exa → DuckDuckGo (first with results wins).
+- Explicit engine (`tinyfish`, `exa`, `duckduckgo`, `tavily`) runs that provider alone — no fallback.
+- Tavily is opt-in only; never enters the automatic chain.
+- `advancedOptions` is provider-keyed; unknown provider keys and unknown fields are rejected before any quota reservation.
+- Fetch: TinyFish attempted first (Markdown); Readability fallback for infrastructure failures only (not validation errors).
+- Every physical attempt reserves capacity in the shared coordinator; retries count against quota.
+- Hard per-process budgets (`--web-search-max-lookups`, `--web-search-max-fetches`) are independent of provider rate limits.
 
 Dependencies: `@mozilla/readability` + `linkedom` (DOMParser doesn't exist in Node — that's why linkedom, not the plan's original approach) + `typebox`. Tests in `tests/web-search.test.ts` (run with `npx vitest run`; note the `vi.mock('node:fs')` that neutralizes the real `.env` so tests are deterministic).
 

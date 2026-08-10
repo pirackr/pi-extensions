@@ -3,6 +3,12 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { webLookup } from "./search.ts";
 import { fetchWeb } from "./fetch.ts";
+import {
+	TinyFishSearchOptionsSchema,
+	TinyFishFetchOptionsSchema,
+} from "./options/tinyfish.ts";
+import { ExaSearchOptionsSchema } from "./options/exa.ts";
+import { TavilySearchOptionsSchema } from "./options/tavily.ts";
 
 export const fetchStrategies: import("./types.ts").FetchStrategy[] = [];
 
@@ -50,6 +56,8 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Search the web. Uses TinyFish by default, falling back to Exa then DuckDuckGo. " +
 			"Pass engine to force a specific engine ('tinyfish', 'exa', 'duckduckgo', or 'tavily' for heavy deep research — runs alone, needs TAVILY_API_KEY). " +
+			"Provider-specific advanced options are accepted under advancedOptions.tinyfish, advancedOptions.exa, or advancedOptions.tavily; " +
+			"unknown provider keys are rejected. " +
 			"Returns search results with title, URL, and snippet. " +
 			"Use for finding documentation, facts, code examples, or discovering relevant pages.",
 		parameters: Type.Object({
@@ -79,9 +87,9 @@ export default function (pi: ExtensionAPI) {
 			advancedOptions: Type.Optional(
 				Type.Object(
 					{
-						tinyfish: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-						exa: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-						tavily: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+						tinyfish: Type.Optional(TinyFishSearchOptionsSchema),
+						exa: Type.Optional(ExaSearchOptionsSchema),
+						tavily: Type.Optional(TavilySearchOptionsSchema),
 					},
 					{ additionalProperties: false },
 				),
@@ -135,7 +143,9 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Fetch and extract readable content from a public URL. Uses TinyFish by default (Markdown), " +
 			"falling back to Mozilla Readability (HTML). " +
-			"Returns the page title and content in the strategy's native format. " +
+			"Returns the page title and content in the strategy's native format (markdown, html, json, text, or unknown). " +
+			"Pass advancedOptions.tinyfish to control TinyFish-specific fetch behavior (format, links, ttl, etc.). " +
+			"Unknown fields in advancedOptions.tinyfish are rejected. " +
 			"Use for reading documentation, articles, or any public web page.",
 		parameters: Type.Object({
 			url: Type.String({ description: "Public HTTP(S) URL to fetch" }),
@@ -147,7 +157,7 @@ export default function (pi: ExtensionAPI) {
 			advancedOptions: Type.Optional(
 				Type.Object(
 					{
-						tinyfish: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+						tinyfish: Type.Optional(TinyFishFetchOptionsSchema),
 					},
 					{ additionalProperties: false },
 				),

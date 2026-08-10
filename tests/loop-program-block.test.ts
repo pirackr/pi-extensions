@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -92,10 +92,28 @@ describe("deep-research prompt contract", () => {
 	];
 
 	const verificationAgents = [
-		{ name: "judge", fields: ["version", "runId", "pass", "verdict", "failedChecks", "fixes"] },
-		{ name: "citation-agent", fields: ["version", "runId", "pass", "unsupportedClaims", "misattributedClaims"] },
-		{ name: "source-auditor", fields: ["version", "runId", "pass", "unresolvedReplacements"] },
-		{ name: "contradiction-resolver", fields: ["version", "runId", "pass", "unhandled", "acknowledged"] },
+		{
+			name: "judge",
+			fields: ["version", "runId", "pass", "verdict", "failedChecks", "fixes"],
+		},
+		{
+			name: "citation-agent",
+			fields: [
+				"version",
+				"runId",
+				"pass",
+				"unsupportedClaims",
+				"misattributedClaims",
+			],
+		},
+		{
+			name: "source-auditor",
+			fields: ["version", "runId", "pass", "unresolvedReplacements"],
+		},
+		{
+			name: "contradiction-resolver",
+			fields: ["version", "runId", "pass", "unhandled", "acknowledged"],
+		},
 	];
 
 	describe("program.v2.md", () => {
@@ -109,10 +127,18 @@ describe("deep-research prompt contract", () => {
 			expect(content).toMatch(/<artifact>/);
 		});
 
-		it("every agent: \"...\" literal in run_subagents examples is a registered profile", () => {
+		it('every agent: "..." literal in run_subagents examples is a registered profile', () => {
 			const resolvable = new Set([
-				"planner", "scout_research", "fetcher", "worker",
-				"judge", "citation_agent", "source_auditor", "contradiction_resolver",
+				"planner",
+				"scout_research",
+				"fetcher",
+				"consolidator",
+				"fragment_writer",
+				"worker",
+				"judge",
+				"citation_agent",
+				"source_auditor",
+				"contradiction_resolver",
 			]);
 			const agentLiteralPattern = /agent:\s*["']([^"']+)["']/gi;
 			const found = new Set<string>();
@@ -132,6 +158,8 @@ describe("deep-research prompt contract", () => {
 			expect(content).toContain("scout_research");
 			expect(content).toContain("worker");
 			expect(content).toContain("citation_agent");
+			expect(content).toContain('agent: "consolidator"');
+			expect(content).toContain('agent: "fragment_writer"');
 		});
 
 		it("does not embed per-agent runtime config (model/tools/access/timeout) adjacent to dispatches", () => {
@@ -140,10 +168,22 @@ describe("deep-research prompt contract", () => {
 			while ((block = blockPattern.exec(content)) !== null) {
 				const code = block[1];
 				if (code.includes("run_subagents")) {
-					expect(code, "run_subagents block must not contain model:").not.toMatch(/\bmodel:\s*/i);
-					expect(code, "run_subagents block must not contain tools:").not.toMatch(/\btools:\s*/i);
-					expect(code, "run_subagents block must not contain access:").not.toMatch(/\baccess:\s*/i);
-					expect(code, "run_subagents block must not contain timeoutSeconds").not.toMatch(/\btimeoutSeconds\b/);
+					expect(
+						code,
+						"run_subagents block must not contain model:",
+					).not.toMatch(/\bmodel:\s*/i);
+					expect(
+						code,
+						"run_subagents block must not contain tools:",
+					).not.toMatch(/\btools:\s*/i);
+					expect(
+						code,
+						"run_subagents block must not contain access:",
+					).not.toMatch(/\baccess:\s*/i);
+					expect(
+						code,
+						"run_subagents block must not contain timeoutSeconds",
+					).not.toMatch(/\btimeoutSeconds\b/);
 				}
 			}
 		});
@@ -186,7 +226,10 @@ describe("deep-research prompt contract", () => {
 
 	for (const agent of verificationAgents) {
 		describe(`[${agent.name}] verification JSON schema`, () => {
-			const content = fs.readFileSync(path.join(agentsDir, `${agent.name}.md`), "utf8");
+			const content = fs.readFileSync(
+				path.join(agentsDir, `${agent.name}.md`),
+				"utf8",
+			);
 			for (const field of agent.fields) {
 				it(`references schema field '${field}'`, () => {
 					expect(content).toMatch(new RegExp(field, "i"));

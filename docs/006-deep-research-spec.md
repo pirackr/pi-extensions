@@ -248,16 +248,16 @@ Illustrative shape:
   },
   "profiles": {
     "quick": {
-      "minRounds": 10,
-      "maxRounds": 10,
+      "minRounds": 3,
+      "maxRounds": 3,
       "minSources": 15,
       "maxScouts": 3,
       "maxFetchers": 1,
       "verification": ["judge"]
     },
     "standard": {
-      "minRounds": 8,
-      "maxRounds": 8,
+      "minRounds": 5,
+      "maxRounds": 5,
       "minSources": 30,
       "maxScouts": 8,
       "maxFetchers": 4,
@@ -284,6 +284,8 @@ Illustrative shape:
     "planner": { "model": "strong", "thinking": "high", "tools": ["read", "grep", "find", "ls"], "access": "read", "timeoutSeconds": 300, "promptPath": "../skills/deep-research/agents/planner.md", "resultFormat": "markdown" },
     "scout_research": { "model": "strong", "thinking": "high", "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"], "access": "read", "timeoutSeconds": 1800, "promptPath": "../skills/deep-research/agents/scout.md", "resultFormat": "markdown" },
     "fetcher": { "model": "strong", "thinking": "minimal", "tools": ["read", "web_lookup", "fetch_web"], "access": "read", "timeoutSeconds": 720, "promptPath": "../skills/deep-research/agents/fetcher.md", "resultFormat": "markdown" },
+    "consolidator": { "model": "strong", "thinking": "high", "tools": ["read", "write", "edit", "grep", "find", "ls"], "access": "write", "timeoutSeconds": 900, "promptPath": "../skills/deep-research/agents/consolidator.md", "resultFormat": "markdown" },
+    "fragment_writer": { "model": "strong", "thinking": "high", "tools": ["read", "grep", "find", "ls"], "access": "read", "timeoutSeconds": 1200, "promptPath": "../skills/deep-research/agents/fragment-writer.md", "resultFormat": "org" },
     "judge": { "model": "eval", "thinking": "medium", "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"], "access": "read", "timeoutSeconds": 1200, "promptPath": "../skills/deep-research/agents/judge.md", "resultFormat": "markdown" },
     "citation_agent": { "model": "strong", "thinking": "low", "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"], "access": "read", "timeoutSeconds": 720, "promptPath": "../skills/deep-research/agents/citation-agent.md", "resultFormat": "markdown" },
     "source_auditor": { "model": "strong", "thinking": "low", "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"], "access": "read", "timeoutSeconds": 720, "promptPath": "../skills/deep-research/agents/source-auditor.md", "resultFormat": "markdown" },
@@ -294,14 +296,14 @@ Illustrative shape:
 
 ### 5.3 CLI Flags
 
-```
+```shell
 /research "XYZ" --profile deep \
   --max-searches-per-agent 100 \
   --max-fetches-per-agent 50
 ```
 
 | Flag | Default | Notes |
-|------|---------|-------|
+| ------ | --------- | ------- |
 | `--profile <p>` | `standard` | `quick`, `standard`, `intermediate`, `deep` |
 | `--max-rounds N` | profile max | Hard cap; effective max used by checkpoint |
 | `--tokens N` | none | Hard token budget |
@@ -318,7 +320,7 @@ Before approval, `/research` displays all resolved operational values: profile, 
 
 The research working directory is the durable boundary for one run:
 
-```
+```text
 /tmp/<project-folder>/research/<research-id>-<research-slug>/
 ├── score.md                 # 5–8 row markdown table: ID | Question | Score (0–100) | Notes
 ├── notes.md                 # claim → source URL → confidence per round

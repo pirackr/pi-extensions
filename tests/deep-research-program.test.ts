@@ -3,13 +3,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 const REPO_ROOT = path.resolve("skills/deep-research");
-const PROGRAM_PATH = path.join(REPO_ROOT, "program.v2.md");
 const AGENTS_DIR = path.join(REPO_ROOT, "agents");
 
 const AGENT_FILES = [
 	"planner.md",
 	"scout.md",
 	"fetcher.md",
+	"consolidator.md",
+	"fragment-writer.md",
 	"judge.md",
 	"citation-agent.md",
 	"source-auditor.md",
@@ -30,6 +31,8 @@ const RESOLVABLE_AGENT_NAMES = new Set([
 	"planner",
 	"scout_research",
 	"fetcher",
+	"consolidator",
+	"fragment_writer",
 	"worker",
 	"judge",
 	"citation_agent",
@@ -43,7 +46,8 @@ describe("deep-research-program contract", () => {
 
 		it("does not contain profile threshold tables with numeric values", () => {
 			// Match lines like "| quick | 10 | 15 | 10 |" etc.
-			const profileTable = /\|+\s*(quick|standard|intermediate|deep)\s*\|\s*\d+\s*\|/i;
+			const profileTable =
+				/\|+\s*(quick|standard|intermediate|deep)\s*\|\s*\d+\s*\|/i;
 			expect(program).not.toMatch(profileTable);
 		});
 
@@ -71,14 +75,19 @@ describe("deep-research-program contract", () => {
 				/\| Deep \|.*judge.*citation.*source/i,
 			];
 			for (const pat of matrixPatterns) {
-				expect(program, `program must not contain verification matrix: ${pat}`).not.toMatch(pat);
+				expect(
+					program,
+					`program must not contain verification matrix: ${pat}`,
+				).not.toMatch(pat);
 			}
 		});
 
 		it("references active profile config but not literal threshold values", () => {
 			// It's OK to reference the config file or "active profile's config";
 			// not OK to embed literal thresholds
-			const hasConfigRef = program.includes("config/deep-research.json") || program.includes("active profile's config");
+			const hasConfigRef =
+				program.includes("config/deep-research.json") ||
+				program.includes("active profile's config");
 			expect(hasConfigRef).toBe(true);
 		});
 
@@ -90,19 +99,48 @@ describe("deep-research-program contract", () => {
 			while ((block = blockPattern.exec(program)) !== null) {
 				const code = block[1];
 				if (code.includes("run_subagents")) {
-					expect(code, "run_subagents block must not contain model:").not.toMatch(/\bmodel:\s*/i);
-					expect(code, "run_subagents block must not contain tools:").not.toMatch(/\btools:\s*/i);
-					expect(code, "run_subagents block must not contain access:").not.toMatch(/\baccess:\s*/i);
-					expect(code, "run_subagents block must not contain timeoutSeconds").not.toMatch(/\btimeoutSeconds\b/);
+					expect(
+						code,
+						"run_subagents block must not contain model:",
+					).not.toMatch(/\bmodel:\s*/i);
+					expect(
+						code,
+						"run_subagents block must not contain tools:",
+					).not.toMatch(/\btools:\s*/i);
+					expect(
+						code,
+						"run_subagents block must not contain access:",
+					).not.toMatch(/\baccess:\s*/i);
+					expect(
+						code,
+						"run_subagents block must not contain timeoutSeconds",
+					).not.toMatch(/\btimeoutSeconds\b/);
 				}
 			}
+		});
+	});
+
+	describe("program.v2.md — subagent retry and web-limit guardrails", () => {
+		const program = readMd("program.v2.md");
+
+		it("forbids coordinator-invented web search and fetch caps", () => {
+			expect(program).toContain("webSearchMaxLookups");
+			expect(program).toContain("webSearchMaxFetches");
+			expect(program).toMatch(/omit[\s\S]{0,300}unless the user explicitly/i);
+		});
+
+		it("requires investigation before redispatching failed subagents", () => {
+			expect(program).toMatch(/tim(?:e|ed)[ -]?out|times out/i);
+			expect(program).toMatch(/inspect[\s\S]{0,300}retained artifacts/i);
+			expect(program).toMatch(/before re-?dispatch/i);
+			expect(program).toMatch(/never (?:blindly )?re-?dispatch/i);
 		});
 	});
 
 	describe("program.v2.md — dispatch names resolve to registered profiles", () => {
 		const program = readMd("program.v2.md");
 
-		it("every agent: \"...\" literal in run_subagents examples is a registered profile", () => {
+		it('every agent: "..." literal in run_subagents examples is a registered profile', () => {
 			// Parse every agent: "..." literal in JS run_subagents examples
 			const agentLiteralPattern = /agent:\s*["']([^"']+)["']/gi;
 			const found = new Set<string>();
@@ -123,6 +161,8 @@ describe("deep-research-program contract", () => {
 			expect(program).toContain("scout_research");
 			expect(program).toContain("worker");
 			expect(program).toContain("citation_agent");
+			expect(program).toContain('agent: "consolidator"');
+			expect(program).toContain('agent: "fragment_writer"');
 		});
 	});
 
@@ -180,7 +220,10 @@ describe("agent prompt contract — coordinator-summary", () => {
 
 	for (const agent of agents) {
 		it(`[${agent.name}] contains coordinator-summary block instructions`, () => {
-			expect(agent.content, `${agent.name} must contain coordinator-summary block`).toMatch(/<coordinator-summary>/);
+			expect(
+				agent.content,
+				`${agent.name} must contain coordinator-summary block`,
+			).toMatch(/<coordinator-summary>/);
 		});
 	}
 });
@@ -192,7 +235,10 @@ describe("agent prompt contract — artifact block", () => {
 	for (const name of artifactAgents) {
 		const content = readAgent(`${name}.md`);
 		it(`[${name}] contains artifact block instructions`, () => {
-			expect(content, `${name} must contain artifact block instructions`).toMatch(/<artifact>/);
+			expect(
+				content,
+				`${name} must contain artifact block instructions`,
+			).toMatch(/<artifact>/);
 		});
 	}
 });
@@ -200,24 +246,50 @@ describe("agent prompt contract — artifact block", () => {
 describe("agent prompt contract — verification JSON schemas", () => {
 	// Verification agents must reference the exact schema field names from verification.ts
 	const verificationAgents = [
-		{ name: "judge", fields: ["version", "runId", "pass", "verdict", "failedChecks", "fixes"] },
-		{ name: "citation-agent", fields: ["version", "runId", "pass", "unsupportedClaims", "misattributedClaims"] },
-		{ name: "source-auditor", fields: ["version", "runId", "pass", "unresolvedReplacements"] },
-		{ name: "contradiction-resolver", fields: ["version", "runId", "pass", "unhandled", "acknowledged"] },
+		{
+			name: "judge",
+			fields: ["version", "runId", "pass", "verdict", "failedChecks", "fixes"],
+		},
+		{
+			name: "citation-agent",
+			fields: [
+				"version",
+				"runId",
+				"pass",
+				"unsupportedClaims",
+				"misattributedClaims",
+			],
+		},
+		{
+			name: "source-auditor",
+			fields: ["version", "runId", "pass", "unresolvedReplacements"],
+		},
+		{
+			name: "contradiction-resolver",
+			fields: ["version", "runId", "pass", "unhandled", "acknowledged"],
+		},
 	];
 
 	for (const agent of verificationAgents) {
 		const content = readAgent(`${agent.name}.md`);
 		for (const field of agent.fields) {
 			it(`[${agent.name}] references schema field '${field}' in artifact instructions`, () => {
-				expect(content, `${agent.name} must reference field: ${field}`).toMatch(new RegExp(field, "i"));
+				expect(content, `${agent.name} must reference field: ${field}`).toMatch(
+					new RegExp(field, "i"),
+				);
 			});
 		}
 	}
 });
 
 describe("agent prompt contract — inline org citations", () => {
-	const reportWriters = ["planner", "scout", "fetcher", "judge"];
+	const reportWriters = [
+		"planner",
+		"scout",
+		"fetcher",
+		"fragment-writer",
+		"judge",
+	];
 
 	for (const name of reportWriters) {
 		const content = readAgent(`${name}.md`);

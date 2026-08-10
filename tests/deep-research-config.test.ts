@@ -2,10 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import {
-	loadDeepResearchConfiguration,
-	type ResolvedDeepResearchConfig,
-} from "../extensions/deep-research/config.ts";
+import { loadDeepResearchConfiguration } from "../extensions/deep-research/config.ts";
 
 /**
  * Create a temporary deep-research config with real files on disk.
@@ -23,6 +20,8 @@ function createTempConfig(overrides?: Record<string, unknown>): string {
 		planner: "# Planner prompt",
 		scout: "# Scout prompt",
 		fetcher: "# Fetcher prompt",
+		consolidator: "# Consolidator prompt",
+		"fragment-writer": "# Fragment writer prompt",
 		judge: "# Judge prompt",
 		"citation-agent": "# Citation agent prompt",
 		"source-auditor": "# Source auditor prompt",
@@ -42,16 +41,16 @@ function createTempConfig(overrides?: Record<string, unknown>): string {
 		},
 		profiles: {
 			quick: {
-				minRounds: 10,
-				maxRounds: 10,
+				minRounds: 3,
+				maxRounds: 3,
 				minSources: 15,
 				maxScouts: 3,
 				maxFetchers: 1,
 				verification: ["judge"],
 			},
 			standard: {
-				minRounds: 8,
-				maxRounds: 8,
+				minRounds: 5,
+				maxRounds: 5,
 				minSources: 30,
 				maxScouts: 8,
 				maxFetchers: 4,
@@ -113,6 +112,28 @@ function createTempConfig(overrides?: Record<string, unknown>): string {
 				promptPath: "../skills/deep-research/agents/fetcher.md",
 				resultFormat: "markdown",
 			},
+			consolidator: {
+				description:
+					"Consolidate new research reports into notes and score tracking",
+				model: "strong",
+				thinking: "high",
+				tools: ["read", "write", "edit", "grep", "find", "ls"],
+				access: "write",
+				timeoutSeconds: 900,
+				promptPath: "../skills/deep-research/agents/consolidator.md",
+				resultFormat: "markdown",
+			},
+			fragment_writer: {
+				description:
+					"Write org-mode report fragments with claim-level citations",
+				model: "strong",
+				thinking: "high",
+				tools: ["read", "grep", "find", "ls"],
+				access: "read",
+				timeoutSeconds: 1200,
+				promptPath: "../skills/deep-research/agents/fragment-writer.md",
+				resultFormat: "org",
+			},
 			judge: {
 				description:
 					"Evaluate draft research report against credibility rubric — returns pass/fail with specific findings",
@@ -169,7 +190,10 @@ function createTempConfig(overrides?: Record<string, unknown>): string {
 	return tmpDir;
 }
 
-function createTempUserConfig(agentDir: string, overrides: Record<string, unknown>): void {
+function createTempUserConfig(
+	agentDir: string,
+	overrides: Record<string, unknown>,
+): void {
 	const userDir = path.join(agentDir, "deep-research");
 	fs.mkdirSync(userDir, { recursive: true });
 	fs.writeFileSync(
@@ -196,22 +220,59 @@ describe("loadDeepResearchConfiguration", () => {
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 	});
 
+	it("packages consolidation as a dedicated strong write-capable agent", () => {
+		const agentDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "deep-research-agent-"),
+		);
+		const packagedConfig = loadDeepResearchConfiguration(
+			path.resolve("."),
+			agentDir,
+		);
+
+		expect(packagedConfig.agents.consolidator).toMatchObject({
+			model: "strong",
+			access: "write",
+			promptPath: expect.stringContaining(
+				"skills/deep-research/agents/consolidator.md",
+			),
+		});
+		fs.rmSync(agentDir, { recursive: true, force: true });
+	});
+	it("packages fragment writing as a dedicated strong read-only research agent", () => {
+		const agentDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "deep-research-agent-"),
+		);
+		const packagedConfig = loadDeepResearchConfiguration(
+			path.resolve("."),
+			agentDir,
+		);
+
+		expect(packagedConfig.agents.fragment_writer).toMatchObject({
+			model: "strong",
+			access: "read",
+			promptPath: expect.stringContaining(
+				"skills/deep-research/agents/fragment-writer.md",
+			),
+		});
+		fs.rmSync(agentDir, { recursive: true, force: true });
+	});
+
 	it("defines all four profiles with correct values", () => {
 		const tmpDir = createTempConfig();
 		const agentDir = path.join(tmpDir, "user-agent-dir");
 		const result = loadDeepResearchConfiguration(tmpDir, agentDir);
 
 		expect(result.profiles.quick).toEqual({
-			minRounds: 10,
-			maxRounds: 10,
+			minRounds: 3,
+			maxRounds: 3,
 			minSources: 15,
 			maxScouts: 3,
 			maxFetchers: 1,
 			verification: ["judge"],
 		});
 		expect(result.profiles.standard).toEqual({
-			minRounds: 8,
-			maxRounds: 8,
+			minRounds: 5,
+			maxRounds: 5,
 			minSources: 30,
 			maxScouts: 8,
 			maxFetchers: 4,
@@ -242,7 +303,7 @@ describe("loadDeepResearchConfiguration", () => {
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it("includes all seven research agents with correct metadata", () => {
+	it("includes all nine research agents with correct metadata", () => {
 		const tmpDir = createTempConfig();
 		const agentDir = path.join(tmpDir, "user-agent-dir");
 		const result = loadDeepResearchConfiguration(tmpDir, agentDir);
@@ -251,6 +312,8 @@ describe("loadDeepResearchConfiguration", () => {
 		expect(agentNames).toContain("planner");
 		expect(agentNames).toContain("scout_research");
 		expect(agentNames).toContain("fetcher");
+		expect(agentNames).toContain("consolidator");
+		expect(agentNames).toContain("fragment_writer");
 		expect(agentNames).toContain("judge");
 		expect(agentNames).toContain("citation_agent");
 		expect(agentNames).toContain("source_auditor");
@@ -264,6 +327,20 @@ describe("loadDeepResearchConfiguration", () => {
 			access: "read",
 			timeoutSeconds: 1800,
 		});
+		expect(result.agents.consolidator).toMatchObject({
+			model: "strong",
+			thinking: "high",
+			tools: expect.arrayContaining(["read", "write", "edit"]),
+			access: "write",
+			timeoutSeconds: 900,
+		});
+		expect(result.agents.fragment_writer).toMatchObject({
+			model: "strong",
+			thinking: "high",
+			tools: expect.arrayContaining(["read", "grep", "find", "ls"]),
+			access: "read",
+			timeoutSeconds: 1200,
+		});
 
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 	});
@@ -275,10 +352,24 @@ describe("loadDeepResearchConfiguration", () => {
 
 		const configDir = path.join(tmpDir, "config");
 		expect(result.agents.scout_research.promptPath).toBe(
-			path.join(configDir, "..", "skills", "deep-research", "agents", "scout.md"),
+			path.join(
+				configDir,
+				"..",
+				"skills",
+				"deep-research",
+				"agents",
+				"scout.md",
+			),
 		);
 		expect(result.agents.judge.promptPath).toBe(
-			path.join(configDir, "..", "skills", "deep-research", "agents", "judge.md"),
+			path.join(
+				configDir,
+				"..",
+				"skills",
+				"deep-research",
+				"agents",
+				"judge.md",
+			),
 		);
 
 		fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -531,7 +622,12 @@ describe("loadDeepResearchConfiguration", () => {
 		const tmpDir = createTempConfig();
 		const agentDir = path.join(tmpDir, "user-agent-dir");
 		// Create skills dir under user-agent-dir so the override's relative promptPath resolves
-		const userAgentsDir = path.join(agentDir, "skills", "deep-research", "agents");
+		const userAgentsDir = path.join(
+			agentDir,
+			"skills",
+			"deep-research",
+			"agents",
+		);
 		fs.mkdirSync(userAgentsDir, { recursive: true });
 		fs.writeFileSync(path.join(userAgentsDir, "scout.md"), "# Scout prompt");
 		createTempUserConfig(agentDir, {

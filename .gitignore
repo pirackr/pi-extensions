@@ -5,3 +5,4 @@ scratchpad/
 package-lock.json
 research/
 .env
+.envrc

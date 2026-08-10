@@ -152,13 +152,15 @@ skills/deep-research/agents/
 ├── planner.md
 ├── scout.md
 ├── fetcher.md
+├── fragment-writer.md
 ├── judge.md
 ├── citation-agent.md
+├── consolidator.md
 ├── source-auditor.md
 └── contradiction-resolver.md
 ```
 
-The generic global `worker` remains the implementation profile for consolidation, fragment writing, and assembly. The research configuration references it rather than duplicating it.
+Consolidation and fragment writing run on the dedicated research profiles (`consolidator`, `fragment_writer`); only report assembly still uses the generic global `worker`. The research configuration references those profiles rather than duplicating them.
 
 Long prompts remain readable Markdown; the JSON file references them and owns their machine-readable runtime profile. The loader validates unknown fields, prompt paths, models, thinking levels, available tools, access requirements, timeouts, limits, role references, verification-role availability, and result formats.
 

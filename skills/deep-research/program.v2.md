@@ -180,10 +180,11 @@ this exact sequence:
    PROCEED or PROCEED_WITH_GAPS.
 
    **Consolidation failure = round failure:** if the consolidator times out
-   or fails, the round is NOT complete. Re-dispatch it (idempotent — it
-   re-reads the same scout-output files) before checkpoint. Never pass an
-   estimated `totalSources`: it must come from a successful consolidator run
-   and equal the unique URL count in `notes.md`.
+   or fails, the round is NOT complete. Follow the failure-investigation rule
+   below before re-dispatching it; the retry remains idempotent because it
+   re-reads the same scout-output files. Never pass an estimated
+   `totalSources`: it must come from a successful consolidator run and equal
+   the unique URL count in `notes.md`.
 
    **Round checklist** — echo before every checkpoint; any unchecked item
    means the round is not complete:
@@ -201,15 +202,31 @@ this). Always supply `return_mode: "summary"` and `retain_artifacts:
 "always"`. When a task supplies `result_path`, the agent's durable payload
 is written atomically to that path.
 
+**Do not invent web-tool caps:** omit `webSearchMaxLookups` and
+`webSearchMaxFetches` from every task unless the user explicitly asks for
+task-level limits. Do not add `0`, copy profile defaults, or introduce a
+"practical" limit on the coordinator's initiative. User-supplied CLI/config
+limits and limits enforced by the active profile remain authoritative.
+
+**Investigate failures before re-dispatch:** when any subagent times out,
+fails, is cancelled, returns a missing/malformed artifact, or otherwise does
+not complete, inspect the retained artifacts first: status metadata, stderr,
+stop reason, elapsed time, and bounded JSONL tail/tool-call counts as available.
+Never load the full transcript or research payload into coordinator context.
+State the evidence-backed failure mode and change the retry strategy to address
+it. Never blindly re-dispatch the same task. If retained artifacts are
+unavailable, report that limitation before re-dispatching rather than guessing.
+
 **Role → profile mapping:** The engine registers research roles under
 profile names from `config/deep-research.json`. Logical roles map to
 executable agent names as follows: scout → `scout_research`, fetcher →
-`fetcher`, judge → `judge`, citation-agent → `citation_agent`,
-source-auditor → `source_auditor`, contradiction-resolver →
-`contradiction_resolver`; consolidation and synthesis (fragment-writer,
-assembler) run on the generic `worker` profile. Use the profile names
-shown here in `agent:` literals — the logical role names in prose are
-for readability.
+`fetcher`, consolidator → `consolidator`, judge → `judge`, citation-agent →
+`citation_agent`, source-auditor → `source_auditor`, contradiction-resolver →
+`contradiction_resolver`; consolidation uses its dedicated strong-model
+`consolidator` profile, fragment writing uses the dedicated research
+`fragment_writer` profile, and only the assembler still uses the generic
+`worker` profile. Use the profile names shown here in `agent:` literals
+— the logical role names in prose are for readability.
 
 **Planner** (Round 0 only):
 
@@ -273,7 +290,7 @@ run_subagents({
 ```js
 run_subagents({
   tasks: [{
-    agent: "worker",
+    agent: "consolidator",
     objective: "Consolidate new scout/fetcher reports into the research knowledge base (round N). This is a knowledge-management task — do NOT inspect or modify repository code. Read exactly these scout-output files: <research-dir>/scout-outputs/<file1>, <research-dir>/scout-outputs/<file2>, ... (only the files echoed this round — never re-read older ones). For each report: append claim → source URL → confidence (0-100) → credibility (1-5) lines to <research-dir>/notes.md; mark UGC pages (forums, Reddit, wikis, reviews) (UGC) and cap credibility at 3; keep exact quotes for load-bearing claims; prune stale search-result dumps; record unresolved contradictions — never paper them over. Update <research-dir>/score.md (0-100 per sub-question + notes column): flag attribution claims lacking a second independent source; flag key claims needing 2+ independent sources (triangulation). If round N is a multiple of 3, revise the sub-questions against the mission at the top of score.md — add dropped angles, merge overlapping, drop exhausted — and record the revision. Return ONLY a one-line summary: updated scores, unique URL count in notes.md, contradiction flags, coverage gaps.",
     scope: ["<research-dir>/notes.md", "<research-dir>/score.md", "<research-dir>/scout-outputs/"],
     inputs: ["<research-dir>/notes.md", "<research-dir>/score.md", "<research-dir>/scout-outputs/"],
@@ -286,16 +303,16 @@ run_subagents({
 
 ### Synthesis and verification (after checkpoint returns PROCEED or PROCEED_WITH_GAPS)
 
-1. **Fragment writers** — one worker per fragment, each with its own
+1. **Fragment writers** — one `fragment_writer` per fragment, each with its own
    `result_path` under `<research-dir>/fragments/`. Split the Findings
-   subsections across them. A single worker writing the whole report times
-   out deterministically on runs with 50+ sources; never do it in one
+   subsections across them. A single fragment writer covering the whole report
+   times out deterministically on runs with 50+ sources; never do it in one
    dispatch.
 
    ```js
    run_subagents({
      tasks: [{
-       agent: "worker",
+       agent: "fragment_writer",
        objective: "Write the Executive Summary + Findings for sub-questions <subset> of the research report to <research-dir>/fragments/findings-<n>.org. This is a document-writing task — do NOT inspect or modify repository code. Read <research-dir>/notes.md (claim → source → confidence → credibility), <research-dir>/score.md (scores + gaps), and the matching <research-dir>/scout-outputs/ files (raw quotes). Every claim must carry an inline [[URL][description]] citation present in notes.md; uncited/low-confidence claims go to an appended 'Uncertainties (fragment <n>)' list. [embed Org-Mode Format section here]",
        scope: ["<research-dir>/fragments/findings-<n>.org"],
        result_path: "<research-dir>/fragments/findings-<n>.org",

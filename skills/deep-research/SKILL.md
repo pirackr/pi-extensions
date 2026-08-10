@@ -26,6 +26,7 @@ Profiles: `quick` (10 rounds, 15 sources, self-judge) | `standard` (8 rounds, 30
 | --------- | ------- | -------- | ---------- |
 | scout_research | read, grep, find, ls, web_lookup, fetch_web | read | Broad search + credibility assessment |
 | fetcher | read, bash, web_lookup, fetch_web | read | Deep URL reads, content extraction |
+| fragment_writer | read, grep, find, ls | read | Write org report fragments with claim-level citations |
 | judge | all tools | write | Report evaluation against rubric |
 | citation_agent | read, grep, find, ls, web_lookup, fetch_web | read | Claim-to-source mapping |
 | source_auditor | read, grep, find, ls, web_lookup, fetch_web | read | Source credibility ratings |

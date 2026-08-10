@@ -179,7 +179,7 @@ describe("/research CLI flags and resolved config display", () => {
 		expect(calls).toHaveLength(1);
 		const msg = calls[0].message;
 		expect(msg).toContain("Profile: quick");
-		expect(msg).toContain("Rounds: 10–10"); // quick: minRounds=10, maxRounds=10
+		expect(msg).toContain("Rounds: 3–3"); // quick: minRounds=3, maxRounds=3
 		expect(msg).toContain("Min sources: 15"); // quick: minSources=15
 		expect(msg).toContain("Scouts: 3"); // quick: maxScouts=3
 		expect(msg).toContain("Fetchers: 1"); // quick: maxFetchers=1
@@ -191,9 +191,12 @@ describe("/research CLI flags and resolved config display", () => {
 			"--yes --max-searches-per-agent 7 --max-fetches-per-agent 4 test mission",
 			mockCtx(cwd),
 		);
-		const appendCalls = (mock.pi.appendEntry as ReturnType<typeof vi.fn>).mock.calls;
+		const appendCalls = (mock.pi.appendEntry as ReturnType<typeof vi.fn>).mock
+			.calls;
 		expect(appendCalls.length).toBeGreaterThan(0);
-		const loopData = appendCalls[appendCalls.length - 1][1] as { loop?: Record<string, unknown> };
+		const loopData = appendCalls[appendCalls.length - 1][1] as {
+			loop?: Record<string, unknown>;
+		};
 		expect(loopData.loop).toBeDefined();
 		expect(loopData.loop?.maxSearchesPerAgent).toBe(7);
 		expect(loopData.loop?.maxFetchesPerAgent).toBe(4);
@@ -252,12 +255,33 @@ describe("effectiveSourceCount", () => {
 
 function latestLoopState(
 	entries: Array<{ type: string; data: unknown }>,
-): { loop?: { id?: string; status?: string; checkpointEvidence?: unknown; profile?: string; workingDir?: string } } | null {
+): {
+	loop?: {
+		id?: string;
+		status?: string;
+		checkpointEvidence?: unknown;
+		profile?: string;
+		workingDir?: string;
+	};
+} | null {
 	const last = entries[entries.length - 1];
-	return last ? (last.data as { loop?: { id?: string; status?: string; checkpointEvidence?: unknown; profile?: string; workingDir?: string } }) : null;
+	return last
+		? (last.data as {
+				loop?: {
+					id?: string;
+					status?: string;
+					checkpointEvidence?: unknown;
+					profile?: string;
+					workingDir?: string;
+				};
+			})
+		: null;
 }
 
-function writeScoreTable(dir: string, rows: Array<{ id: string; score: number }>): void {
+function writeScoreTable(
+	dir: string,
+	rows: Array<{ id: string; score: number }>,
+): void {
 	const header = "| ID | Question | Score | Notes |";
 	const sep = "| --- | --- | ---: | --- |";
 	const body = rows
@@ -266,7 +290,11 @@ function writeScoreTable(dir: string, rows: Array<{ id: string; score: number }>
 	fs.writeFileSync(path.join(dir, "score.md"), `${header}\n${sep}\n${body}\n`);
 }
 
-function writeJudge(dir: string, runId: string, opts?: { pass?: boolean; verdict?: string }): void {
+function writeJudge(
+	dir: string,
+	runId: string,
+	opts?: { pass?: boolean; verdict?: string },
+): void {
 	const a = {
 		version: 1,
 		runId,
@@ -276,7 +304,10 @@ function writeJudge(dir: string, runId: string, opts?: { pass?: boolean; verdict
 		fixes: [],
 	};
 	fs.mkdirSync(path.join(dir, "verification"), { recursive: true });
-	fs.writeFileSync(path.join(dir, "verification", "judge.json"), JSON.stringify(a));
+	fs.writeFileSync(
+		path.join(dir, "verification", "judge.json"),
+		JSON.stringify(a),
+	);
 }
 
 describe("full mocked /research run with quick profile", () => {
@@ -288,9 +319,11 @@ describe("full mocked /research run with quick profile", () => {
 		mock = makeMockPi();
 		// Capture appendEntry calls so we can inspect persisted loop state.
 		entries = [];
-		(mock.pi.appendEntry as ReturnType<typeof vi.fn>).mockImplementation((type: string, data: unknown) => {
-			entries.push({ type, data });
-		});
+		(mock.pi.appendEntry as ReturnType<typeof vi.fn>).mockImplementation(
+			(type: string, data: unknown) => {
+				entries.push({ type, data });
+			},
+		);
 		piLoop(mock.pi as never);
 		cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-loop-test-"));
 	});
@@ -312,15 +345,31 @@ describe("full mocked /research run with quick profile", () => {
 		return dirs[0];
 	}
 
-	async function checkpoint(profile: string, round: number, totalSources: number): Promise<string> {
+	async function checkpoint(
+		profile: string,
+		round: number,
+		totalSources: number,
+	): Promise<string> {
 		const tool = mock.tools.research_checkpoint;
-		const result = await tool.execute("test-call", { profile, round, totalSources }, undefined, undefined, mockCtx(cwd));
+		const result = await tool.execute(
+			"test-call",
+			{ profile, round, totalSources },
+			undefined,
+			undefined,
+			mockCtx(cwd),
+		);
 		return result.content?.[0]?.text ?? "";
 	}
 
 	async function completeLoop(): Promise<{ text: string; isError?: boolean }> {
 		const tool = mock.tools.complete_loop;
-		const result = await tool.execute("test-call", { status: "complete" }, undefined, undefined, mockCtx(cwd));
+		const result = await tool.execute(
+			"test-call",
+			{ status: "complete" },
+			undefined,
+			undefined,
+			mockCtx(cwd),
+		);
 		return { text: result.content?.[0]?.text ?? "", isError: result.isError };
 	}
 
@@ -339,15 +388,18 @@ describe("full mocked /research run with quick profile", () => {
 		]);
 
 		// Write notes.md with real URLs (quick minSources=15).
-		const notesUrls = Array.from({ length: 18 }, (_, i) => `https://example.com/source-${i}`)
+		const notesUrls = Array.from(
+			{ length: 18 },
+			(_, i) => `https://example.com/source-${i}`,
+		)
 			.map((u) => `- Claim → ${u}`)
 			.join("\n");
 		fs.writeFileSync(path.join(dir, "notes.md"), `${notesUrls}\n`);
 
-		// Write scout-outputs (round 10, any slug).
+		// Write scout-outputs (round 3, any slug).
 		fs.mkdirSync(path.join(dir, "scout-outputs"), { recursive: true });
 		fs.writeFileSync(
-			path.join(dir, "scout-outputs", "10-findings-scout.md"),
+			path.join(dir, "scout-outputs", "3-findings-scout.md"),
 			"# Scout report\n\nSome scout findings.\n",
 		);
 
@@ -360,14 +412,17 @@ describe("full mocked /research run with quick profile", () => {
 		// Write verification/judge.json (version 1, runId === loop.id, pass=true, verdict=PASS).
 		writeJudge(dir, loopId);
 
-		// Invoke research_checkpoint: round=10 (quick minRounds=10, maxRounds=10), sources=18 (>= quick minSources=15).
-		const cpText = await checkpoint("quick", 10, 18);
+		// Invoke research_checkpoint: round=3 (quick minRounds=3, maxRounds=3), sources=18 (>= quick minSources=15).
+		const cpText = await checkpoint("quick", 3, 18);
 		expect(cpText).toContain("PROCEED");
 
 		// Verify checkpointEvidence was recorded in persisted state.
 		const cpState = latestLoopState(entries);
 		expect(cpState?.loop?.checkpointEvidence).toBeDefined();
-		const ce = cpState!.loop!.checkpointEvidence as { runId: string; verdict: string };
+		const ce = cpState!.loop!.checkpointEvidence as {
+			runId: string;
+			verdict: string;
+		};
 		expect(ce.runId).toBe(loopId);
 		expect(ce.verdict).toBe("PROCEED");
 
@@ -382,9 +437,10 @@ describe("full mocked /research run with quick profile", () => {
 	});
 
 	it("preserves partial artifacts in a capped run and rejects completion", async () => {
-		const dir = await startResearch("test mission capped", "--profile quick --max-rounds 2");
-		const ls = latestLoopState(entries);
-		const loopId = ls!.loop!.id!;
+		const dir = await startResearch(
+			"test mission capped",
+			"--profile quick --max-rounds 2",
+		);
 
 		// Write score.md with scores BELOW threshold (80).
 		writeScoreTable(dir, [
@@ -432,7 +488,9 @@ describe("full mocked /research run with quick profile", () => {
 		expect(fs.existsSync(path.join(dir, "score.md"))).toBe(true);
 		expect(fs.existsSync(path.join(dir, "notes.md"))).toBe(true);
 		expect(fs.existsSync(path.join(dir, "report.org"))).toBe(true);
-		expect(fs.existsSync(path.join(dir, "scout-outputs", "2-partial-scout.md"))).toBe(true);
+		expect(
+			fs.existsSync(path.join(dir, "scout-outputs", "2-partial-scout.md")),
+		).toBe(true);
 
 		// Verify loop is NOT marked complete.
 		const finalState = latestLoopState(entries);

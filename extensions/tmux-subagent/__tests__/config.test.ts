@@ -802,7 +802,7 @@ describe("loadSubagentConfiguration", () => {
 });
 
 describe("loadResearchProfiles", () => {
-	it("registers all seven research agents with correct tmux profile names", () => {
+	it("registers all nine research agents with correct tmux profile names", () => {
 		mockExistsSync.mockReturnValue(true);
 		const result = loadResearchProfiles(
 			{
@@ -854,6 +854,26 @@ describe("loadResearchProfiles", () => {
 						promptPath: "/mock/agents/fetcher.md",
 						resultFormat: "markdown",
 					},
+					consolidator: {
+						description: "Consolidate research",
+						model: "strong",
+						thinking: "high",
+						tools: ["read", "write", "edit"],
+						access: "write",
+						timeoutSeconds: 900,
+						promptPath: "/mock/agents/consolidator.md",
+						resultFormat: "markdown",
+					},
+					fragment_writer: {
+						description: "Write report fragments",
+						model: "strong",
+						thinking: "high",
+						tools: ["read", "grep"],
+						access: "read",
+						timeoutSeconds: 1200,
+						promptPath: "/mock/agents/fragment-writer.md",
+						resultFormat: "org",
+					},
 					judge: {
 						description: "Judge report",
 						model: "eval",
@@ -896,19 +916,32 @@ describe("loadResearchProfiles", () => {
 					},
 				},
 			},
-			{ strong: "Qwen3.6-35B-A3B-MTP-GGUF", eval: "Gemma-4-31B-it-MTP-GGUF", light: "gpt-oss-20b-GGUF-Q4_K_M" },
-			{ read: "read", grep: "read", web_lookup: "read", fetch_web: "read" },
+			{
+				strong: "Qwen3.6-35B-A3B-MTP-GGUF",
+				eval: "Gemma-4-31B-it-MTP-GGUF",
+				light: "gpt-oss-20b-GGUF-Q4_K_M",
+			},
+			{
+				read: "read",
+				write: "write",
+				edit: "write",
+				grep: "read",
+				web_lookup: "read",
+				fetch_web: "read",
+			},
 		);
 
 		const names = result.map((p) => p.name);
 		expect(names).toContain("planner");
 		expect(names).toContain("scout_research");
 		expect(names).toContain("fetcher");
+		expect(names).toContain("consolidator");
+		expect(names).toContain("fragment_writer");
 		expect(names).toContain("judge");
 		expect(names).toContain("citation_agent");
 		expect(names).toContain("source_auditor");
 		expect(names).toContain("contradiction_resolver");
-		expect(result).toHaveLength(7);
+		expect(result).toHaveLength(9);
 	});
 
 	it("resolves model aliases to concrete model identifiers", () => {

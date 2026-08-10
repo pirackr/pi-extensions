@@ -458,8 +458,8 @@ export function loadSubagentConfiguration(extensionDir: string): {
 /**
  * Register research agents from the deep-research config as tmux-subagent
  * profiles. The profile names match the research registry names
- * (scout_research, fetcher, judge, citation_agent, source_auditor,
- * contradiction_resolver, planner) and do NOT collide with generic profiles
+ * (scout_research, fetcher, consolidator, fragment_writer, judge, citation_agent,
+ * source_auditor, contradiction_resolver, planner) and do NOT collide with generic profiles
  * (worker, reviewer, tester, scout).
  *
  * @param config - The resolved deep-research configuration
@@ -481,7 +481,12 @@ export function loadResearchProfiles(
 	const VALID_ACCESS = new Set<AgentAccess>(["read", "shell", "write"]);
 
 	// Generic profile names that must not be collided with
-	const GENERIC_PROFILE_NAMES = new Set(["worker", "reviewer", "tester", "scout"]);
+	const GENERIC_PROFILE_NAMES = new Set([
+		"worker",
+		"reviewer",
+		"tester",
+		"scout",
+	]);
 
 	const profiles: AgentProfile[] = [];
 	for (const [name, agent] of Object.entries(config.agents)) {

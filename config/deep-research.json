@@ -8,16 +8,16 @@
   },
   "profiles": {
     "quick": {
-      "minRounds": 10,
-      "maxRounds": 10,
+      "minRounds": 3,
+      "maxRounds": 3,
       "minSources": 15,
       "maxScouts": 3,
       "maxFetchers": 1,
       "verification": ["judge"]
     },
     "standard": {
-      "minRounds": 8,
-      "maxRounds": 8,
+      "minRounds": 5,
+      "maxRounds": 5,
       "minSources": 30,
       "maxScouts": 8,
       "maxFetchers": 4,
@@ -70,6 +70,26 @@
       "timeoutSeconds": 720,
       "promptPath": "../skills/deep-research/agents/fetcher.md",
       "resultFormat": "markdown"
+    },
+    "consolidator": {
+      "description": "Consolidate new research reports into notes and score tracking",
+      "model": "strong",
+      "thinking": "high",
+      "tools": ["read", "write", "edit", "grep", "find", "ls"],
+      "access": "write",
+      "timeoutSeconds": 900,
+      "promptPath": "../skills/deep-research/agents/consolidator.md",
+      "resultFormat": "markdown"
+    },
+    "fragment_writer": {
+      "description": "Write org-mode report fragments with claim-level citations from the consolidated knowledge base",
+      "model": "strong",
+      "thinking": "high",
+      "tools": ["read", "grep", "find", "ls"],
+      "access": "read",
+      "timeoutSeconds": 1200,
+      "promptPath": "../skills/deep-research/agents/fragment-writer.md",
+      "resultFormat": "org"
     },
     "judge": {
       "description": "Evaluate draft research report against credibility rubric — returns pass/fail with specific findings",

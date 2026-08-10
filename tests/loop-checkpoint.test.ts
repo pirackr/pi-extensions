@@ -96,7 +96,10 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 		return researchDir;
 	}
 
-	async function startResearchWithMaxRounds(mission: string, maxRounds: number): Promise<string> {
+	async function startResearchWithMaxRounds(
+		mission: string,
+		maxRounds: number,
+	): Promise<string> {
 		await mock.commands.research.handler(
 			`--yes --profile quick --max-rounds ${maxRounds} "${mission}"`,
 			mockCtx(cwd),
@@ -110,7 +113,9 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 		return researchDir;
 	}
 
-	async function checkpoint(params: Record<string, unknown>): Promise<{ text: string; isError?: boolean }> {
+	async function checkpoint(
+		params: Record<string, unknown>,
+	): Promise<{ text: string; isError?: boolean }> {
 		const tool = mock.tools.research_checkpoint;
 		const result = await tool.execute(
 			"test-call",
@@ -247,25 +252,39 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 
 	// ---- Task 4: score validation and override-aware checkpoint ----
 
-	function writeScoreTable(dir: string, rows: Array<{ id: string; score: number }>): void {
+	function writeScoreTable(
+		dir: string,
+		rows: Array<{ id: string; score: number }>,
+	): void {
 		const header = "| ID | Question | Score | Notes |";
 		const sep = "| --- | --- | ---: | --- |";
 		const body = rows
 			.map((r) => `| ${r.id} | some question | ${r.score} | some notes |`)
 			.join("\n");
-		fs.writeFileSync(path.join(dir, "score.md"), `${header}\n${sep}\n${body}\n`);
+		fs.writeFileSync(
+			path.join(dir, "score.md"),
+			`${header}\n${sep}\n${body}\n`,
+		);
 	}
 
 	it("rejects round 0 with isError and planning-only message", async () => {
 		await startResearch("round-0 test");
-		const result = await checkpoint({ profile: "quick", round: 0, totalSources: 5 });
+		const result = await checkpoint({
+			profile: "quick",
+			round: 0,
+			totalSources: 5,
+		});
 		expect(result.isError).toBe(true);
 		expect(result.text).toContain("planning only");
 	});
 
 	it("CONTINUEs when score.md is missing", async () => {
 		const dir = await startResearch("missing-score test");
-		const result = await checkpoint({ profile: "quick", round: 10, totalSources: 20 });
+		const result = await checkpoint({
+			profile: "quick",
+			round: 10,
+			totalSources: 20,
+		});
 		expect(result.text).toContain("CONTINUE");
 		expect(result.text).toContain("score.md");
 	});
@@ -279,7 +298,11 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 			{ id: "q4", score: 90 },
 			{ id: "q5", score: 70 }, // below 80
 		]);
-		const result = await checkpoint({ profile: "quick", round: 5, totalSources: 20 });
+		const result = await checkpoint({
+			profile: "quick",
+			round: 5,
+			totalSources: 20,
+		});
 		expect(result.text).toContain("CONTINUE");
 		expect(result.text).toContain("q5");
 	});
@@ -293,7 +316,11 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 			{ id: "q4", score: 85 },
 			{ id: "q5", score: 90 },
 		]);
-		const result = await checkpoint({ profile: "quick", round: 10, totalSources: 20 });
+		const result = await checkpoint({
+			profile: "quick",
+			round: 10,
+			totalSources: 20,
+		});
 		expect(result.text).toContain("PROCEED — criteria met");
 		const entry = latestLoopEntry();
 		expect(entry).not.toBeNull();
@@ -317,7 +344,11 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 			{ id: "q4", score: 90 },
 			{ id: "q5", score: 90 },
 		]);
-		const result = await checkpoint({ profile: "quick", round: 2, totalSources: 5 });
+		const result = await checkpoint({
+			profile: "quick",
+			round: 2,
+			totalSources: 5,
+		});
 		expect(result.text).toContain("PROCEED_WITH_GAPS");
 		expect(result.text).toContain("gap(s)");
 		const entry = latestLoopEntry();
@@ -336,7 +367,11 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 			{ id: "q4", score: 90 },
 			{ id: "q5", score: 90 },
 		]);
-		const result = await checkpoint({ profile: "quick", round: 5, totalSources: 5 });
+		const result = await checkpoint({
+			profile: "quick",
+			round: 5,
+			totalSources: 5,
+		});
 		expect(result.text).toContain("CONTINUE");
 		expect(result.text).toContain("min sources");
 	});
@@ -370,7 +405,10 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 		// At round 12 with unmet floors, effectiveMax=15 permits CONTINUE.
 		// Old buggy behavior (using profileCfg.maxRounds=10) would have
 		// returned PROCEED_WITH_GAPS at round 12 since 12 >= 10.
-		const dir = await startResearchWithMaxRounds("override-above-profile test", 15);
+		const dir = await startResearchWithMaxRounds(
+			"override-above-profile test",
+			15,
+		);
 		writeScoreTable(dir, [
 			{ id: "q1", score: 90 },
 			{ id: "q2", score: 90 },
@@ -378,12 +416,20 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 			{ id: "q4", score: 90 },
 			{ id: "q5", score: 90 },
 		]);
-		const result = await checkpoint({ profile: "quick", round: 12, totalSources: 5 });
+		const result = await checkpoint({
+			profile: "quick",
+			round: 12,
+			totalSources: 5,
+		});
 		expect(result.text).toContain("CONTINUE");
 		expect(result.text).toContain("min sources");
 
 		// At the actual cap (round 15) with floors still unmet → PROCEED_WITH_GAPS
-		const resultAtCap = await checkpoint({ profile: "quick", round: 15, totalSources: 5 });
+		const resultAtCap = await checkpoint({
+			profile: "quick",
+			round: 15,
+			totalSources: 5,
+		});
 		expect(resultAtCap.text).toContain("PROCEED_WITH_GAPS");
 		expect(resultAtCap.text).toContain("gap(s)");
 	});
@@ -400,22 +446,28 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 			{ id: "q5", score: 90 },
 		]);
 		// Checkpoint at round 10 with enough sources → records evidence
-		const result = await checkpoint({ profile: "quick", round: 10, totalSources: 20 });
+		const result = await checkpoint({
+			profile: "quick",
+			round: 10,
+			totalSources: 20,
+		});
 		expect(result.text).toContain("PROCEED");
 
 		// Verify checkpointEvidence was recorded
 		let entry = latestLoopEntry();
 		let loopState = (entry as { loop?: { checkpointEvidence?: unknown } }).loop;
 		expect(loopState?.checkpointEvidence).toBeDefined();
-		expect((loopState.checkpointEvidence as { verdict?: string }).verdict).toBe("PROCEED");
+		expect((loopState.checkpointEvidence as { verdict?: string }).verdict).toBe(
+			"PROCEED",
+		);
 
 		// Capture and invoke the agent_end handler to trigger queueContinuation
 		const agentEndHandler = mock.pi.getHandler("agent_end");
 		expect(agentEndHandler).not.toBeNull();
-		agentEndHandler!(
-			{ type: "agent_end" as const, messages: [] },
-			{ hasPendingMessages: () => false, ui: { setStatus: () => {} } } as never,
-		);
+		agentEndHandler!({ type: "agent_end" as const, messages: [] }, {
+			hasPendingMessages: () => false,
+			ui: { setStatus: () => {} },
+		} as never);
 
 		// queueContinuation uses queueMicrotask — flush it
 		await new Promise((r) => setImmediate(r));
@@ -458,28 +510,62 @@ describe("complete_loop enforces research verification gates", () => {
 		return dirs[0];
 	}
 
-	function writeScoreTable(dir: string, rows: Array<{ id: string; score: number }>): void {
+	function writeScoreTable(
+		dir: string,
+		rows: Array<{ id: string; score: number }>,
+	): void {
 		const header = "| ID | Question | Score | Notes |";
 		const sep = "| --- | --- | ---: | --- |";
 		const body = rows
 			.map((r) => `| ${r.id} | some question | ${r.score} | some notes |`)
 			.join("\n");
-		fs.writeFileSync(path.join(dir, "score.md"), `${header}\n${sep}\n${body}\n`);
+		fs.writeFileSync(
+			path.join(dir, "score.md"),
+			`${header}\n${sep}\n${body}\n`,
+		);
 	}
 
-	function latestLoopState(): { loop?: { id?: string; status?: string; checkpointEvidence?: unknown; profile?: string } } | null {
+	function latestLoopState(): {
+		loop?: {
+			id?: string;
+			status?: string;
+			checkpointEvidence?: unknown;
+			profile?: string;
+		};
+	} | null {
 		const entries = mock.entries.filter((e) => e.type === "pi-loop");
 		const last = entries[entries.length - 1];
-		return last ? (last.data as { loop?: { id?: string; status?: string; checkpointEvidence?: unknown; profile?: string } }) : null;
+		return last
+			? (last.data as {
+					loop?: {
+						id?: string;
+						status?: string;
+						checkpointEvidence?: unknown;
+						profile?: string;
+					};
+				})
+			: null;
 	}
 
-	async function completeLoop(guardId?: string): Promise<{ text: string; isError?: boolean }> {
+	async function completeLoop(
+		guardId?: string,
+	): Promise<{ text: string; isError?: boolean }> {
 		const tool = mock.tools.complete_loop;
-		const result = await tool.execute("test-call", { status: "complete", guardId }, undefined, undefined, mockCtx(cwd));
+		const result = await tool.execute(
+			"test-call",
+			{ status: "complete", guardId },
+			undefined,
+			undefined,
+			mockCtx(cwd),
+		);
 		return { text: result.content?.[0]?.text ?? "", isError: result.isError };
 	}
 
-	function writeJudge(dir: string, runId: string, opts?: { pass?: boolean; verdict?: string }): void {
+	function writeJudge(
+		dir: string,
+		runId: string,
+		opts?: { pass?: boolean; verdict?: string },
+	): void {
 		const a = {
 			version: 1,
 			runId,
@@ -489,10 +575,17 @@ describe("complete_loop enforces research verification gates", () => {
 			fixes: [],
 		};
 		fs.mkdirSync(path.join(dir, "verification"), { recursive: true });
-		fs.writeFileSync(path.join(dir, "verification", "judge.json"), JSON.stringify(a));
+		fs.writeFileSync(
+			path.join(dir, "verification", "judge.json"),
+			JSON.stringify(a),
+		);
 	}
 
-	function writeCitations(dir: string, runId: string, opts?: { pass?: boolean; unsupported?: string[]; misattributed?: string[] }): void {
+	function writeCitations(
+		dir: string,
+		runId: string,
+		opts?: { pass?: boolean; unsupported?: string[]; misattributed?: string[] },
+	): void {
 		const a = {
 			version: 1,
 			runId,
@@ -501,10 +594,17 @@ describe("complete_loop enforces research verification gates", () => {
 			misattributedClaims: opts?.misattributed ?? [],
 		};
 		fs.mkdirSync(path.join(dir, "verification"), { recursive: true });
-		fs.writeFileSync(path.join(dir, "verification", "citations.json"), JSON.stringify(a));
+		fs.writeFileSync(
+			path.join(dir, "verification", "citations.json"),
+			JSON.stringify(a),
+		);
 	}
 
-	function writeSources(dir: string, runId: string, opts?: { pass?: boolean; unresolved?: string[] }): void {
+	function writeSources(
+		dir: string,
+		runId: string,
+		opts?: { pass?: boolean; unresolved?: string[] },
+	): void {
 		const a = {
 			version: 1,
 			runId,
@@ -512,10 +612,21 @@ describe("complete_loop enforces research verification gates", () => {
 			unresolvedReplacements: opts?.unresolved ?? [],
 		};
 		fs.mkdirSync(path.join(dir, "verification"), { recursive: true });
-		fs.writeFileSync(path.join(dir, "verification", "sources.json"), JSON.stringify(a));
+		fs.writeFileSync(
+			path.join(dir, "verification", "sources.json"),
+			JSON.stringify(a),
+		);
 	}
 
-	function writeContradictions(dir: string, runId: string, opts?: { pass?: boolean; unhandled?: string[]; acknowledged?: Array<{ claim: string; whereInReport: string }> }): void {
+	function writeContradictions(
+		dir: string,
+		runId: string,
+		opts?: {
+			pass?: boolean;
+			unhandled?: string[];
+			acknowledged?: Array<{ claim: string; whereInReport: string }>;
+		},
+	): void {
 		const a = {
 			version: 1,
 			runId,
@@ -524,12 +635,26 @@ describe("complete_loop enforces research verification gates", () => {
 			acknowledged: opts?.acknowledged ?? [],
 		};
 		fs.mkdirSync(path.join(dir, "verification"), { recursive: true });
-		fs.writeFileSync(path.join(dir, "verification", "contradictions.json"), JSON.stringify(a));
+		fs.writeFileSync(
+			path.join(dir, "verification", "contradictions.json"),
+			JSON.stringify(a),
+		);
 	}
 
-	async function checkpoint(dir: string, profile = "quick", round = 10, sources = 20): Promise<{ text: string; isError?: boolean }> {
+	async function checkpoint(
+		dir: string,
+		profile = "quick",
+		round = 10,
+		sources = 20,
+	): Promise<{ text: string; isError?: boolean }> {
 		const tool = mock.tools.research_checkpoint;
-		const result = await tool.execute("test-call", { profile, round, totalSources: sources }, undefined, undefined, mockCtx(cwd));
+		const result = await tool.execute(
+			"test-call",
+			{ profile, round, totalSources: sources },
+			undefined,
+			undefined,
+			mockCtx(cwd),
+		);
 		return { text: result.content?.[0]?.text ?? "", isError: result.isError };
 	}
 
@@ -541,8 +666,11 @@ describe("complete_loop enforces research verification gates", () => {
 		// after a checkpoint, which is the practical equivalent of "stale").
 		const dir = await startResearch("stale checkpoint test");
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "quick", 10, 20);
 		const ls = latestLoopState();
@@ -553,8 +681,11 @@ describe("complete_loop enforces research verification gates", () => {
 		await mock.commands.research.handler("clear", mockCtx(cwd));
 		const dir2 = await startResearch("new run after stale");
 		writeScoreTable(dir2, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		// No checkpoint on new run → checkpointEvidence is missing
 		writeJudge(dir2, "run-id");
@@ -567,8 +698,11 @@ describe("complete_loop enforces research verification gates", () => {
 	it("rejects completion when checkpointEvidence is missing", async () => {
 		const dir = await startResearch("missing checkpoint test");
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		writeJudge(dir, "some-run-id");
 		fs.writeFileSync(path.join(dir, "report.org"), "* Report\n");
@@ -581,8 +715,11 @@ describe("complete_loop enforces research verification gates", () => {
 	it("rejects completion when report.org is missing", async () => {
 		const dir = await startResearch("missing report test");
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "quick", 10, 20);
 		writeJudge(dir, "run-id");
@@ -595,8 +732,11 @@ describe("complete_loop enforces research verification gates", () => {
 	it("rejects completion when report.org is empty", async () => {
 		const dir = await startResearch("empty report test");
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "quick", 10, 20);
 		writeJudge(dir, "run-id");
@@ -609,8 +749,11 @@ describe("complete_loop enforces research verification gates", () => {
 	it("rejects completion when judge.json is missing", async () => {
 		const dir = await startResearch("missing judge test");
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "quick", 10, 20);
 		fs.writeFileSync(path.join(dir, "report.org"), "* Report\n");
@@ -623,8 +766,11 @@ describe("complete_loop enforces research verification gates", () => {
 	it("rejects completion when judge.json has pass=false", async () => {
 		const dir = await startResearch("judge fail test");
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "quick", 10, 20);
 		const ls = latestLoopState();
@@ -638,8 +784,11 @@ describe("complete_loop enforces research verification gates", () => {
 	it("rejects completion when judge.json has CONDITIONAL_PASS verdict", async () => {
 		const dir = await startResearch("judge conditional test");
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "quick", 10, 20);
 		const ls = latestLoopState();
@@ -653,8 +802,11 @@ describe("complete_loop enforces research verification gates", () => {
 	it("rejects completion when artifact runId does not match loop id", async () => {
 		const dir = await startResearch("runId mismatch test");
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "quick", 10, 20);
 		const ls = latestLoopState();
@@ -669,10 +821,16 @@ describe("complete_loop enforces research verification gates", () => {
 		// Quick profile only requires judge.json, but we test that extra artifacts
 		// that exist are still validated if they're in the profile's verification list.
 		// Actually, quick only requires judge. Let's test intermediate profile.
-		const dir = await startResearch("intermediate citations fail test", "--profile intermediate");
+		const dir = await startResearch(
+			"intermediate citations fail test",
+			"--profile intermediate",
+		);
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "intermediate", 10, 40);
 		const ls = latestLoopState();
@@ -686,10 +844,16 @@ describe("complete_loop enforces research verification gates", () => {
 	});
 
 	it("rejects intermediate profile when sources.json has unresolved replacements", async () => {
-		const dir = await startResearch("intermediate sources fail test", "--profile intermediate");
+		const dir = await startResearch(
+			"intermediate sources fail test",
+			"--profile intermediate",
+		);
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "intermediate", 10, 40);
 		const ls = latestLoopState();
@@ -703,10 +867,16 @@ describe("complete_loop enforces research verification gates", () => {
 	});
 
 	it("rejects deep profile when contradictions.json has unhandled contradictions", async () => {
-		const dir = await startResearch("deep contradictions fail test", "--profile deep");
+		const dir = await startResearch(
+			"deep contradictions fail test",
+			"--profile deep",
+		);
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "deep", 20, 250);
 		const ls = latestLoopState();
@@ -721,10 +891,16 @@ describe("complete_loop enforces research verification gates", () => {
 	});
 
 	it("accepts acknowledged contradiction with non-empty whereInReport", async () => {
-		const dir = await startResearch("acknowledged contradiction test", "--profile deep");
+		const dir = await startResearch(
+			"acknowledged contradiction test",
+			"--profile deep",
+		);
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "deep", 20, 250);
 		const ls = latestLoopState();
@@ -743,10 +919,16 @@ describe("complete_loop enforces research verification gates", () => {
 	});
 
 	it("rejects deep profile when contradictions.json is missing", async () => {
-		const dir = await startResearch("deep missing contradictions test", "--profile deep");
+		const dir = await startResearch(
+			"deep missing contradictions test",
+			"--profile deep",
+		);
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "deep", 20, 250);
 		const ls = latestLoopState();
@@ -780,8 +962,11 @@ describe("complete_loop enforces research verification gates", () => {
 	it("completes successfully when all gates pass (quick profile)", async () => {
 		const dir = await startResearch("full pass quick test");
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "quick", 10, 20);
 		const ls = latestLoopState();
@@ -798,8 +983,11 @@ describe("complete_loop enforces research verification gates", () => {
 	it("completes successfully when all gates pass (deep profile)", async () => {
 		const dir = await startResearch("full pass deep test", "--profile deep");
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "deep", 20, 250);
 		const ls = latestLoopState();
@@ -829,8 +1017,11 @@ describe("complete_loop enforces research verification gates", () => {
 	it("returns multiple precise gate failures when multiple gates fail", async () => {
 		const dir = await startResearch("multiple failures test");
 		writeScoreTable(dir, [
-			{ id: "q1", score: 90 }, { id: "q2", score: 90 }, { id: "q3", score: 90 },
-			{ id: "q4", score: 90 }, { id: "q5", score: 90 },
+			{ id: "q1", score: 90 },
+			{ id: "q2", score: 90 },
+			{ id: "q3", score: 90 },
+			{ id: "q4", score: 90 },
+			{ id: "q5", score: 90 },
 		]);
 		// No checkpoint called
 		// No report.org written

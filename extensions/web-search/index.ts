@@ -76,8 +76,8 @@ export default function (pi: ExtensionAPI) {
 		name: "web_lookup",
 		label: "Web Search",
 		description:
-			"Search the web. Uses Exa by default, falling back to DuckDuckGo if Exa is unavailable or returns nothing. " +
-			"Pass engine to force a specific engine ('tavily' for heavy deep research — runs alone, needs TAVILY_API_KEY). " +
+			"Search the web. Uses TinyFish by default, falling back to Exa then DuckDuckGo. " +
+			"Pass engine to force a specific engine ('tinyfish', 'exa', 'duckduckgo', or 'tavily' for heavy deep research — runs alone, needs TAVILY_API_KEY). " +
 			"Returns search results with title, URL, and snippet. " +
 			"Use for finding documentation, facts, code examples, or discovering relevant pages.",
 		parameters: Type.Object({
@@ -92,15 +92,26 @@ export default function (pi: ExtensionAPI) {
 				Type.Union(
 					[
 						Type.Literal("auto"),
+						Type.Literal("tinyfish"),
 						Type.Literal("exa"),
 						Type.Literal("duckduckgo"),
 						Type.Literal("tavily"),
 					],
 					{
 						description:
-							"Engine to use: 'auto' (default) walks the fallback chain — Exa first, DuckDuckGo as backup. " +
-							"'exa' or 'duckduckgo' force a single engine; 'tavily' runs Tavily alone (advanced depth, requires TAVILY_API_KEY) for heavy research.",
+							"Engine to use: 'auto' (default) walks the fallback chain — TinyFish first, then Exa, then DuckDuckGo. " +
+							"'tinyfish', 'exa', or 'duckduckgo' force a single engine; 'tavily' runs Tavily alone (advanced depth, requires TAVILY_API_KEY) for heavy research.",
 					},
+				),
+			),
+			advancedOptions: Type.Optional(
+				Type.Object(
+					{
+						tinyfish: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+						exa: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+						tavily: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+					},
+					{ additionalProperties: false },
 				),
 			),
 		}),
@@ -114,12 +125,14 @@ export default function (pi: ExtensionAPI) {
 			}
 			lookupCalls += 1;
 			const limit = Math.min(Math.max(params.limit ?? 20, 1), 50);
-			const result = await webLookup(
-				params.query,
+			const request = {
+				query: params.query,
 				limit,
-				signal,
-				params.engine,
-			);
+				engine: params.engine,
+				advancedOptions: params.advancedOptions,
+			};
+			if (signal) (request as any).__signal = signal;
+			const result = await webLookup(request);
 
 			let text = `Query: "${result.query}"\n`;
 			text += `Engines: ${result.engines.join(", ") || "none"}\n`;

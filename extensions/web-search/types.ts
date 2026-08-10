@@ -239,7 +239,19 @@ export type FetchFormat = "markdown" | "html" | "json" | "text" | "unknown";
 
 /** Request-object-based search engine interface for future adapters. */
 export interface SearchEngineAdapter {
-	search(request: WebLookupRequest, signal?: AbortSignal): Promise<SearchResponse>;
+	search(request: WebLookupRequest, signal?: AbortSignal): Promise<SearchResult[]>;
+}
+
+export interface Credentials {
+	tinyfish: string | null;
+	exa: string | null;
+	tavily: string | null;
+}
+
+export interface WebLookupContext {
+	credentials: Credentials;
+	config: import("./config.ts").WebSearchConfig;
+	coordinator: import("./rate-limit.ts").RateLimitCoordinator;
 }
 
 /** Request-object-based fetch strategy interface for future adapters. */

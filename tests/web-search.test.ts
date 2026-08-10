@@ -20,6 +20,117 @@ vi.mock("node:fs", async () => {
 	};
 });
 
+// ---------------------------------------------------------------------------
+// Mock config, credentials, and rate-limit so the full routing path works
+// without real network calls or filesystem reads.
+// ---------------------------------------------------------------------------
+vi.mock("../extensions/web-search/config.ts", () => ({
+	loadWebSearchConfig: vi.fn().mockResolvedValue({
+		config: {
+			routing: {
+				searchAuto: ["tinyfish", "exa", "duckduckgo"],
+				fetch: ["tinyfish", "readability"],
+			},
+			providers: {
+				tinyfish: {
+					search: { capacity: 30, windowMs: 60000, maxRetries: 1 },
+					fetch: { capacity: 150, windowMs: 60000, maxRetries: 1 },
+				},
+				exa: {
+					search: { capacity: 10, windowMs: 1000, maxRetries: 1 },
+				},
+				tavily: {
+					search: { capacity: 100, windowMs: 60000, maxRetries: 1 },
+				},
+				duckduckgo: {
+					search: {
+						capacity: null,
+						windowMs: 60000,
+						maxRetries: 1,
+						fallbackCooldownMs: 60000,
+					},
+				},
+			},
+		},
+		warnings: [],
+	}),
+}));
+
+vi.mock("../extensions/web-search/credentials.ts", () => ({
+	loadCredentials: vi.fn().mockResolvedValue({
+		tinyfish: "tf-test-key",
+		exa: "exa-test-key",
+		tavily: "tavily-test-key",
+	}),
+}));
+
+vi.mock("../extensions/web-search/rate-limit.ts", () => {
+	const mockReserve = vi.fn().mockResolvedValue("allowed");
+	const mockPublishCooldown = vi.fn();
+	return {
+		createCoordinator: vi.fn().mockReturnValue({
+			reserve: mockReserve,
+			publishCooldown: mockPublishCooldown,
+		}),
+		RateLimitCoordinator: vi.fn().mockReturnValue({
+			reserve: mockReserve,
+			publishCooldown: mockPublishCooldown,
+		}),
+		__mockReserve: mockReserve,
+		__mockPublishCooldown: mockPublishCooldown,
+	};
+});
+
+// ---------------------------------------------------------------------------
+// Mock SDKs for deterministic engine tests.
+// ---------------------------------------------------------------------------
+vi.mock("exa-js", () => {
+	const mockFn = vi.fn();
+	return {
+		default: vi.fn().mockImplementation(() => ({
+			search: mockFn,
+		})),
+		Exa: vi.fn().mockImplementation(() => ({
+			search: mockFn,
+		})),
+		__mockExaSearch: mockFn,
+	};
+});
+
+vi.mock("@tavily/core", () => {
+	const mockFn = vi.fn();
+	return {
+		default: vi.fn().mockImplementation(() => ({
+			search: mockFn,
+		})),
+		tavily: vi.fn().mockImplementation(() => ({
+			search: mockFn,
+		})),
+		__mockTavilySearch: mockFn,
+	};
+});
+
+vi.mock("@tiny-fish/sdk", () => {
+	const mockFn = vi.fn();
+	return {
+		TinyFish: vi.fn().mockImplementation(() => ({
+			search: { query: mockFn },
+		})),
+		__mockTinyFishSearchQuery: mockFn,
+	};
+});
+
+// ---------------------------------------------------------------------------
+// Access mock instances after module evaluation
+// ---------------------------------------------------------------------------
+const { __mockExaSearch: mockExaSearch } = await import("exa-js");
+const { __mockTavilySearch: mockTavilySearch } = await import("@tavily/core");
+const { __mockTinyFishSearchQuery: mockTinyFishSearchQuery } =
+	await import("@tiny-fish/sdk");
+const { __mockReserve: mockReserve } = await import(
+	"../extensions/web-search/rate-limit.ts"
+);
+
 describe("types", () => {
 	it("SearchResult has required fields", () => {
 		const r: SearchResult = {
@@ -63,60 +174,124 @@ describe("types", () => {
 	});
 });
 
-import { ExaEngine } from "../extensions/web-search/engines/exa";
+import { ExaEngine } from "../extensions/web-search/engines/exa.ts";
 import {
 	DuckDuckGoEngine,
 	decodeDdgUrl,
 	stripHtml,
-} from "../extensions/web-search/engines/duckduckgo";
+} from "../extensions/web-search/engines/duckduckgo.ts";
 
 describe("ExaEngine", () => {
 	let engine: ExaEngine;
 
 	beforeEach(() => {
-		engine = new ExaEngine();
+		vi.clearAllMocks();
+		mockExaSearch.mockReset();
+		engine = new ExaEngine("exa-test-key");
 	});
 
-	it("isAvailable returns false when no API key", () => {
-		// Temporarily clear the key
-		const original = process.env.EXA_API_KEY;
-		delete process.env.EXA_API_KEY;
-		// Also clear cache by reloading the module behavior
-		expect(engine.isAvailable()).toBe(false);
-		if (original) process.env.EXA_API_KEY = original;
-	});
+	it("sends type:auto and contents.text:true by default", async () => {
+		mockExaSearch.mockResolvedValue({
+			results: [
+				{
+					title: "Title One",
+					url: "https://example.com/1",
+					text: "  markdown snippet one  ",
+				},
+			],
+		});
 
-	it("isAvailable returns true when API key exists", () => {
-		process.env.EXA_API_KEY = "test-key";
-		expect(engine.isAvailable()).toBe(true);
-		delete process.env.EXA_API_KEY;
-	});
+		const results = await engine.search({ query: "test", limit: 5 });
 
-	it("search returns empty results when no API key", async () => {
-		const original = process.env.EXA_API_KEY;
-		delete process.env.EXA_API_KEY;
-		const results = await engine.search("test", 3);
-		expect(results).toEqual([]);
-		if (original) process.env.EXA_API_KEY = original;
+		expect(mockExaSearch).toHaveBeenCalledTimes(1);
+		const call = mockExaSearch.mock.calls[0];
+		expect(call[0]).toBe("test");
+		const opts = call[1];
+		expect(opts.type).toBe("auto");
+		expect(opts.contents).toEqual({ text: true });
+		expect(results).toHaveLength(1);
+		expect(results[0]).toEqual({
+			title: "Title One",
+			url: "https://example.com/1",
+			snippet: "markdown snippet one",
+			engine: "exa",
+		});
 	});
 
 	it("clamps numResults to 1-50", async () => {
-		process.env.EXA_API_KEY = "test-key";
-		const bodies: any[] = [];
-		const originalFetch = globalThis.fetch;
-		(globalThis as any).fetch = async (_url: any, opts: any) => {
-			bodies.push(JSON.parse(opts.body));
-			return { ok: true, json: async () => ({ results: [] }) };
-		};
-		try {
-			await engine.search("q", 500);
-			await engine.search("q", 0);
-			expect(bodies[0].numResults).toBe(50);
-			expect(bodies[1].numResults).toBe(1);
-		} finally {
-			(globalThis as any).fetch = originalFetch;
-			delete process.env.EXA_API_KEY;
-		}
+		mockExaSearch.mockResolvedValue({ results: [] });
+
+		await engine.search({ query: "test", limit: 500 });
+		expect(mockExaSearch.mock.calls[0][1].numResults).toBe(50);
+
+		await engine.search({ query: "test", limit: 0 });
+		expect(mockExaSearch.mock.calls[1][1].numResults).toBe(1);
+	});
+
+	it("forwards advancedOptions to SDK search options", async () => {
+		mockExaSearch.mockResolvedValue({ results: [] });
+
+		await engine.search({
+			query: "test",
+			limit: 5,
+			advancedOptions: {
+				exa: {
+					includeDomains: ["example.com"],
+					excludeDomains: ["other.com"],
+					category: "news",
+					type: "neural",
+				},
+			},
+		});
+
+		expect(mockExaSearch).toHaveBeenCalledTimes(1);
+		const opts = mockExaSearch.mock.calls[0][1];
+		expect(opts.includeDomains).toEqual(["example.com"]);
+		expect(opts.excludeDomains).toEqual(["other.com"]);
+		expect(opts.category).toBe("news");
+		expect(opts.type).toBe("neural");
+	});
+
+	it("maps results with text as snippet", async () => {
+		mockExaSearch.mockResolvedValue({
+			results: [
+				{ title: "T1", url: "https://example.com/1", text: "  snippet one  " },
+				{ title: "T2", url: "https://example.com/2", text: "snippet two" },
+				{ url: "https://example.com/3" },
+			],
+		});
+
+		const results = await engine.search({ query: "q", limit: 3 });
+		expect(results).toEqual([
+			{
+				title: "T1",
+				url: "https://example.com/1",
+				snippet: "snippet one",
+				engine: "exa",
+			},
+			{
+				title: "T2",
+				url: "https://example.com/2",
+				snippet: "snippet two",
+				engine: "exa",
+			},
+			{
+				title: "No title",
+				url: "https://example.com/3",
+				snippet: "",
+				engine: "exa",
+			},
+		]);
+	});
+
+	it("surfaces SDK errors", async () => {
+		const err = new Error("not found");
+		(err as any).statusCode = 404;
+		mockExaSearch.mockRejectedValue(err);
+
+		await expect(
+			engine.search({ query: "test", limit: 5 }),
+		).rejects.toThrow();
 	});
 });
 
@@ -177,8 +352,8 @@ describe("DuckDuckGoEngine", () => {
 		expect(engine.name).toBe("duckduckgo");
 	});
 
-	it("search returns results with titles and URLs", async () => {
-		const results = await engine.search("rust programming language", 3);
+	it("search returns results with titles and URLs (live)", async () => {
+		const results = await engine.search({ query: "rust programming language", limit: 3 });
 		expect(results.length).toBeGreaterThan(0);
 		expect(results[0].title).toBeTruthy();
 		expect(results[0].url).toBeTruthy();
@@ -186,119 +361,137 @@ describe("DuckDuckGoEngine", () => {
 	});
 });
 
-import { TavilyEngine } from "../extensions/web-search/engines/tavily";
+import { TavilyEngine } from "../extensions/web-search/engines/tavily.ts";
 
 describe("TavilyEngine", () => {
 	let engine: TavilyEngine;
 
 	beforeEach(() => {
-		engine = new TavilyEngine();
+		vi.clearAllMocks();
+		mockTavilySearch.mockReset();
+		engine = new TavilyEngine("tavily-test-key");
 	});
 
-	it("has correct name", () => {
-		expect(engine.name).toBe("tavily");
+	it("sends searchDepth:advanced by default", async () => {
+		mockTavilySearch.mockResolvedValue({
+			query: "test",
+			results: [
+				{
+					title: "Title One",
+					url: "https://example.com/1",
+					content: "  snippet one  ",
+				},
+			],
+			responseTime: 0.5,
+			images: [],
+			requestId: "req-1",
+		});
+
+		const results = await engine.search({ query: "test", limit: 5 });
+
+		expect(mockTavilySearch).toHaveBeenCalledTimes(1);
+		const call = mockTavilySearch.mock.calls[0];
+		expect(call[0]).toBe("test");
+		const opts = call[1];
+		expect(opts.searchDepth).toBe("advanced");
+		expect(results).toHaveLength(1);
+		expect(results[0]).toEqual({
+			title: "Title One",
+			url: "https://example.com/1",
+			snippet: "snippet one",
+			engine: "tavily",
+		});
 	});
 
-	it("isAvailable returns false when no API key", () => {
-		const original = process.env.TAVILY_API_KEY;
-		delete process.env.TAVILY_API_KEY;
-		expect(engine.isAvailable()).toBe(false);
-		if (original) process.env.TAVILY_API_KEY = original;
+	it("clamps maxResults to 1-20", async () => {
+		mockTavilySearch.mockResolvedValue({
+			query: "test",
+			results: [],
+			responseTime: 0.1,
+			images: [],
+			requestId: "req-1",
+		});
+
+		await engine.search({ query: "test", limit: 500 });
+		expect(mockTavilySearch.mock.calls[0][1].maxResults).toBe(20);
+
+		await engine.search({ query: "test", limit: 0 });
+		expect(mockTavilySearch.mock.calls[1][1].maxResults).toBe(1);
 	});
 
-	it("isAvailable returns true when API key exists", () => {
-		process.env.TAVILY_API_KEY = "test-key";
-		expect(engine.isAvailable()).toBe(true);
-		delete process.env.TAVILY_API_KEY;
-	});
+	it("forwards advancedOptions to SDK search options", async () => {
+		mockTavilySearch.mockResolvedValue({
+			query: "test",
+			results: [],
+			responseTime: 0.1,
+			images: [],
+			requestId: "req-1",
+		});
 
-	it("search returns empty results when no API key", async () => {
-		const original = process.env.TAVILY_API_KEY;
-		delete process.env.TAVILY_API_KEY;
-		const results = await engine.search("test", 3);
-		expect(results).toEqual([]);
-		if (original) process.env.TAVILY_API_KEY = original;
-	});
+		await engine.search({
+			query: "test",
+			limit: 5,
+			advancedOptions: {
+				tavily: {
+					topic: "news",
+					days: 7,
+					includeImages: true,
+				},
+			},
+		});
 
-	it("clamps max_results to 1-20 and sends advanced depth", async () => {
-		process.env.TAVILY_API_KEY = "test-key";
-		const bodies: any[] = [];
-		const originalFetch = globalThis.fetch;
-		(globalThis as any).fetch = async (_url: any, opts: any) => {
-			bodies.push(JSON.parse(opts.body));
-			return { ok: true, json: async () => ({ results: [] }) };
-		};
-		try {
-			await engine.search("q", 500);
-			await engine.search("q", 0);
-			expect(bodies[0].max_results).toBe(20);
-			expect(bodies[0].search_depth).toBe("advanced");
-			expect(bodies[1].max_results).toBe(1);
-		} finally {
-			(globalThis as any).fetch = originalFetch;
-			delete process.env.TAVILY_API_KEY;
-		}
+		expect(mockTavilySearch).toHaveBeenCalledTimes(1);
+		const opts = mockTavilySearch.mock.calls[0][1];
+		expect(opts.topic).toBe("news");
+		expect(opts.days).toBe(7);
+		expect(opts.includeImages).toBe(true);
+		expect(opts.searchDepth).toBe("advanced");
 	});
 
 	it("maps results with content as snippet", async () => {
-		process.env.TAVILY_API_KEY = "test-key";
-		const originalFetch = globalThis.fetch;
-		(globalThis as any).fetch = async () => ({
-			ok: true,
-			json: async () => ({
-				results: [
-					{
-						title: "T1",
-						url: "https://example.com/1",
-						content: "  snippet one  ",
-					},
-					{
-						title: "T2",
-						url: "https://example.com/2",
-						content: "snippet two",
-					},
-					{ url: "https://example.com/3" }, // no title/content
-				],
-			}),
+		mockTavilySearch.mockResolvedValue({
+			query: "test",
+			results: [
+				{ title: "T1", url: "https://example.com/1", content: "  snippet one  " },
+				{ title: "T2", url: "https://example.com/2", content: "snippet two" },
+				{ url: "https://example.com/3" },
+			],
+			responseTime: 0.1,
+			images: [],
+			requestId: "req-1",
 		});
-		try {
-			const results = await engine.search("q", 3);
-			expect(results).toEqual([
-				{
-					title: "T1",
-					url: "https://example.com/1",
-					snippet: "snippet one",
-					engine: "tavily",
-				},
-				{
-					title: "T2",
-					url: "https://example.com/2",
-					snippet: "snippet two",
-					engine: "tavily",
-				},
-				{
-					title: "No title",
-					url: "https://example.com/3",
-					snippet: "",
-					engine: "tavily",
-				},
-			]);
-		} finally {
-			(globalThis as any).fetch = originalFetch;
-			delete process.env.TAVILY_API_KEY;
-		}
+
+		const results = await engine.search({ query: "q", limit: 3 });
+		expect(results).toEqual([
+			{
+				title: "T1",
+				url: "https://example.com/1",
+				snippet: "snippet one",
+				engine: "tavily",
+			},
+			{
+				title: "T2",
+				url: "https://example.com/2",
+				snippet: "snippet two",
+				engine: "tavily",
+			},
+			{
+				title: "No title",
+				url: "https://example.com/3",
+				snippet: "",
+				engine: "tavily",
+			},
+		]);
 	});
 
-	it("returns empty results on non-ok response", async () => {
-		process.env.TAVILY_API_KEY = "test-key";
-		const originalFetch = globalThis.fetch;
-		(globalThis as any).fetch = async () => ({ ok: false, status: 429 });
-		try {
-			expect(await engine.search("q", 3)).toEqual([]);
-		} finally {
-			(globalThis as any).fetch = originalFetch;
-			delete process.env.TAVILY_API_KEY;
-		}
+	it("surfaces SDK errors", async () => {
+		const err = new Error("rate limited");
+		(err as any).statusCode = 429;
+		mockTavilySearch.mockRejectedValue(err);
+
+		await expect(
+			engine.search({ query: "test", limit: 5 }),
+		).rejects.toThrow();
 	});
 });
 
@@ -306,125 +499,249 @@ import {
 	resolveChain,
 	searchEngines,
 	webLookup,
-} from "../extensions/web-search/search";
+} from "../extensions/web-search/search.ts";
+import type { WebLookupRequest } from "../extensions/web-search/types.ts";
+import { createCoordinator } from "../extensions/web-search/rate-limit.ts";
 
 describe("search composition", () => {
 	it("full registry lists chain engines first, then opt-in tavily", () => {
 		const names = searchEngines.map((e) => e.name);
-		expect(names).toEqual(["exa", "duckduckgo", "tavily"]);
+		expect(names).toEqual(["tinyfish", "exa", "duckduckgo", "tavily"]);
 	});
 
 	describe("resolveChain", () => {
-		it("defaults to the full chain (exa first)", () => {
-			const names = resolveChain().map((e) => e.name);
-			expect(names).toEqual(["exa", "duckduckgo"]);
+		it("defaults to the full chain (tinyfish first)", () => {
+			expect(resolveChain()).toEqual(["tinyfish", "exa", "duckduckgo"]);
 		});
 
 		it("honors explicit 'auto'", () => {
-			expect(resolveChain("auto").map((e) => e.name)).toEqual([
-				"exa",
-				"duckduckgo",
-			]);
+			expect(resolveChain("auto")).toEqual(["tinyfish", "exa", "duckduckgo"]);
 		});
 
 		it("forces a single engine", () => {
-			expect(resolveChain("exa").map((e) => e.name)).toEqual(["exa"]);
-			expect(resolveChain("duckduckgo").map((e) => e.name)).toEqual([
-				"duckduckgo",
-			]);
-			expect(resolveChain("tavily").map((e) => e.name)).toEqual(["tavily"]);
+			expect(resolveChain("tinyfish")).toEqual(["tinyfish"]);
+			expect(resolveChain("exa")).toEqual(["exa"]);
+			expect(resolveChain("duckduckgo")).toEqual(["duckduckgo"]);
+			expect(resolveChain("tavily")).toEqual(["tavily"]);
 		});
 
 		it("degrades unknown choices to the default chain", () => {
-			expect(resolveChain("bogus" as any).map((e) => e.name)).toEqual([
+			expect(resolveChain("bogus" as any)).toEqual([
+				"tinyfish",
 				"exa",
 				"duckduckgo",
 			]);
 		});
 
 		it("auto chain never includes opt-in engines", () => {
-			expect(resolveChain().map((e) => e.name)).toEqual(["exa", "duckduckgo"]);
-			expect(resolveChain("auto").map((e) => e.name)).toEqual([
-				"exa",
-				"duckduckgo",
-			]);
+			expect(resolveChain()).toEqual(["tinyfish", "exa", "duckduckgo"]);
+			expect(resolveChain("auto")).toEqual(["tinyfish", "exa", "duckduckgo"]);
+			expect(resolveChain("tavily")).toEqual(["tavily"]);
 		});
 	});
 
 	describe("webLookup chain behavior", () => {
-		// These tests assume no EXA_API_KEY is set: the fs mock neutralizes .env
-		// and we clear the env var explicitly so Exa is always skipped.
-		const originalKey = process.env.EXA_API_KEY;
-		const originalTavilyKey = process.env.TAVILY_API_KEY;
-		beforeEach(() => {
-			delete process.env.EXA_API_KEY;
-			delete process.env.TAVILY_API_KEY;
-		});
-		afterEach(() => {
-			if (originalKey) process.env.EXA_API_KEY = originalKey;
-			if (originalTavilyKey) process.env.TAVILY_API_KEY = originalTavilyKey;
+		const makeRequest = (overrides: Partial<WebLookupRequest> = {}): WebLookupRequest => ({
+			query: "test query",
+			limit: 5,
+			...overrides,
 		});
 
-		it("falls back to DuckDuckGo when Exa is unavailable", async () => {
-			const result = await webLookup("rust programming language", 3);
-			expect(result.query).toBe("rust programming language");
-			expect(result.results.length).toBeGreaterThan(0);
-			// Exa skipped (no key), DuckDuckGo served the results.
-			expect(result.engines).toEqual(["duckduckgo"]);
-			expect(result.partialFailures.some((pf) => pf.engine === "exa")).toBe(
-				true,
-			);
+		const makeContext = (overrides: {
+			tinyfishKey?: string | null;
+			exaKey?: string | null;
+			tavilyKey?: string | null;
+		} = {}) => ({
+			credentials: {
+				tinyfish:
+					overrides.tinyfishKey !== undefined
+						? overrides.tinyfishKey
+						: "tf-key",
+				exa: overrides.exaKey !== undefined ? overrides.exaKey : "exa-key",
+				tavily:
+					overrides.tavilyKey !== undefined
+						? overrides.tavilyKey
+						: "tavily-key",
+			},
+			config: {
+				routing: {
+					searchAuto: ["tinyfish", "exa", "duckduckgo"],
+					fetch: ["tinyfish", "readability"],
+				},
+				providers: {
+					tinyfish: {
+						search: { capacity: 30, windowMs: 60000, maxRetries: 1 },
+					},
+					exa: {
+						search: { capacity: 10, windowMs: 1000, maxRetries: 1 },
+					},
+					tavily: {
+						search: { capacity: 100, windowMs: 60000, maxRetries: 1 },
+					},
+					duckduckgo: {
+						search: {
+							capacity: null,
+							windowMs: 60000,
+							maxRetries: 1,
+							fallbackCooldownMs: 60000,
+						},
+					},
+				},
+			},
+			coordinator: createCoordinator("/tmp/web-search-test", {
+				tinyfish: { search: { capacity: 30, windowMs: 60000, maxRetries: 1 } },
+				exa: { search: { capacity: 10, windowMs: 1000, maxRetries: 1 } },
+				tavily: { search: { capacity: 100, windowMs: 60000, maxRetries: 1 } },
+				duckduckgo: {
+					search: {
+						capacity: null,
+						windowMs: 60000,
+						maxRetries: 1,
+						fallbackCooldownMs: 60000,
+					},
+				},
+			}),
+		});
+
+		beforeEach(() => {
+			vi.clearAllMocks();
+			mockReserve.mockReset();
+			mockTinyFishSearchQuery.mockReset();
+			mockExaSearch.mockReset();
+			mockTavilySearch.mockReset();
+		});
+
+		it("falls back to Exa when TinyFish returns no results", async () => {
+			mockTinyFishSearchQuery.mockResolvedValue({
+				query: "test query",
+				results: [],
+				total_results: 0,
+				page: 1,
+			});
+			mockExaSearch.mockResolvedValue({
+				results: [
+					{ title: "Exa Title", url: "https://exa.example.com/1", text: "exa snippet" },
+				],
+			});
+			mockReserve.mockResolvedValue("allowed");
+
+			const result = await webLookup(makeRequest(), makeContext());
+
+			expect(result.engines).toEqual(["exa"]);
+			expect(result.results).toHaveLength(1);
+			expect(result.results[0].engine).toBe("exa");
+			expect(
+				result.partialFailures.some((pf) => pf.engine === "tinyfish"),
+			).toBe(true);
 		});
 
 		it("honors a forced engine choice", async () => {
+			mockExaSearch.mockResolvedValue({
+				results: [{ title: "E", url: "https://e.com/1", text: "t" }],
+			});
+			mockReserve.mockResolvedValue("allowed");
+
 			const result = await webLookup(
-				"rust programming language",
-				3,
-				undefined,
-				"duckduckgo",
+				makeRequest({ engine: "exa" }),
+				makeContext(),
 			);
-			expect(result.engines).toEqual(["duckduckgo"]);
-			expect(result.results.length).toBeGreaterThan(0);
+
+			expect(result.engines).toEqual(["exa"]);
+			expect(result.results).toHaveLength(1);
+			expect(mockTinyFishSearchQuery).not.toHaveBeenCalled();
 		});
 
 		it("forced exa with no key returns no results and reports the skip", async () => {
-			const result = await webLookup(
-				"rust programming language",
-				3,
-				undefined,
-				"exa",
-			);
+			const ctx = makeContext({ exaKey: null });
+			mockReserve.mockResolvedValue("allowed");
+
+			const result = await webLookup(makeRequest({ engine: "exa" }), ctx);
+
 			expect(result.results).toEqual([]);
 			expect(result.engines).toEqual([]);
-			expect(result.partialFailures.some((pf) => pf.engine === "exa")).toBe(
-				true,
+			const exaFailures = result.partialFailures.filter(
+				(pf) => pf.engine === "exa",
 			);
+			expect(exaFailures.length).toBeGreaterThan(0);
+			expect(exaFailures[0].error).toContain("provider credentials unavailable");
+			expect(mockExaSearch).not.toHaveBeenCalled();
 		});
 
 		it("forced tavily with no key returns no results and reports the skip", async () => {
+			const ctx = makeContext({ tavilyKey: null });
+			mockReserve.mockResolvedValue("allowed");
+
 			const result = await webLookup(
-				"rust programming language",
-				3,
-				undefined,
-				"tavily",
+				makeRequest({ engine: "tavily" }),
+				ctx,
 			);
+
 			expect(result.results).toEqual([]);
 			expect(result.engines).toEqual([]);
-			expect(result.partialFailures.some((pf) => pf.engine === "tavily")).toBe(
-				true,
+			const tavilyFailures = result.partialFailures.filter(
+				(pf) => pf.engine === "tavily",
 			);
+			expect(tavilyFailures.length).toBeGreaterThan(0);
+			expect(tavilyFailures[0].error).toContain(
+				"provider credentials unavailable",
+			);
+			expect(mockTavilySearch).not.toHaveBeenCalled();
+		});
+
+		it("explicit tavily engine runs Tavily alone, never falls back", async () => {
+			mockTavilySearch.mockResolvedValue({
+				query: "test query",
+				results: [
+					{
+						title: "Tavily Title",
+						url: "https://tavily.example.com/1",
+						content: "tavily snippet",
+					},
+				],
+				responseTime: 0.1,
+				images: [],
+				requestId: "req-1",
+			});
+			mockReserve.mockResolvedValue("allowed");
+
+			const result = await webLookup(
+				makeRequest({ engine: "tavily" }),
+				makeContext(),
+			);
+
+			expect(result.engines).toEqual(["tavily"]);
+			expect(result.results).toHaveLength(1);
+			expect(result.results[0].engine).toBe("tavily");
+			expect(mockTinyFishSearchQuery).not.toHaveBeenCalled();
+			expect(mockExaSearch).not.toHaveBeenCalled();
 		});
 	});
 
 	it("webLookup deduplicates by URL", async () => {
-		const result = await webLookup("rust programming language", 5);
+		mockTinyFishSearchQuery.mockResolvedValue({
+			query: "test",
+			results: [
+				{
+					position: 1,
+					site_name: "TF",
+					snippet: "s1",
+					title: "T1",
+					url: "https://example.com/1",
+				},
+			],
+			total_results: 1,
+			page: 1,
+		});
+		mockReserve.mockResolvedValue("allowed");
+
+		const result = await webLookup({ query: "test", limit: 5 });
 		const urls = result.results.map((r) => r.url);
 		const uniqueUrls = new Set(urls);
 		expect(urls.length).toBe(uniqueUrls.size);
 	});
 });
 
-import { ReadabilityStrategy } from "../extensions/web-search/strategies/readability";
+import { ReadabilityStrategy } from "../extensions/web-search/strategies/readability.ts";
 
 describe("ReadabilityStrategy", () => {
 	let strategy: ReadabilityStrategy;
@@ -484,6 +801,22 @@ describe("extension tools", () => {
 		const lookupTool = results.find((t: any) => t.name === "web_lookup");
 		expect(lookupTool).toBeDefined();
 
+		mockTinyFishSearchQuery.mockResolvedValue({
+			query: "rust async",
+			results: [
+				{
+					position: 1,
+					site_name: "TF",
+					snippet: "rust async snippet",
+					title: "Rust Async",
+					url: "https://rust.example.com/async",
+				},
+			],
+			total_results: 1,
+			page: 1,
+		});
+		mockReserve.mockResolvedValue("allowed");
+
 		const res = await lookupTool.execute("test-id", { query: "rust async" });
 		expect(res.content).toHaveLength(1);
 		expect(res.content[0].type).toBe("text");
@@ -534,6 +867,15 @@ describe("extension tools", () => {
 		createExtension(mockPi as any);
 		const lookupTool = results.find((t: any) => t.name === "web_lookup");
 
+		// Mock a successful response for the first two calls.
+		mockTinyFishSearchQuery.mockResolvedValue({
+			query: "test",
+			results: [],
+			total_results: 0,
+			page: 1,
+		});
+		mockReserve.mockResolvedValue("allowed");
+
 		await expect(lookupTool.execute("1", { query: "a" })).resolves.toBeTruthy();
 		await expect(lookupTool.execute("2", { query: "b" })).resolves.toBeTruthy();
 		await expect(lookupTool.execute("3", { query: "c" })).rejects.toThrow(
@@ -551,6 +893,14 @@ describe("extension tools", () => {
 		createExtension(mockPi as any);
 		const lookupTool = results.find((t: any) => t.name === "web_lookup");
 
+		mockTinyFishSearchQuery.mockResolvedValue({
+			query: "test",
+			results: [],
+			total_results: 0,
+			page: 1,
+		});
+		mockReserve.mockResolvedValue("allowed");
+
 		const res = await lookupTool.execute("1", { query: "a" });
 		const text = res.content[0].text as string;
 		expect(text).toContain("[Search budget: 1/2 calls used");
@@ -566,6 +916,7 @@ describe("extension tools", () => {
 		createExtension(mockPi as any);
 		const fetchTool = results.find((t: any) => t.name === "fetch_web");
 
+		// First call succeeds (Readability fetch).
 		await expect(
 			fetchTool.execute("1", { url: "https://example.com/a" }),
 		).resolves.toBeTruthy();
@@ -581,6 +932,14 @@ describe("extension tools", () => {
 		};
 		createExtension(mockPi as any);
 		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+
+		mockTinyFishSearchQuery.mockResolvedValue({
+			query: "test",
+			results: [],
+			total_results: 0,
+			page: 1,
+		});
+		mockReserve.mockResolvedValue("allowed");
 
 		await expect(lookupTool.execute("1", { query: "a" })).resolves.toBeTruthy();
 		const res = await lookupTool.execute("2", { query: "b" });

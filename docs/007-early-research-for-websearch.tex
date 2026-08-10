@@ -1,0 +1,1073 @@
+% Created 2026-08-09 Sun 15:57
+% Intended LaTeX compiler: pdflatex
+\documentclass[11pt]{article}
+
+\usepackage{inputenc}
+\usepackage{fontenc}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{url}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\date{\today}
+\title{Early Research for a High-Availability Web Search Gateway\\\medskip
+\large Notes on free capacity, provider limits, SearXNG, policy constraints, and a proposed Pi-controlled architecture}
+\hypersetup{
+ pdfauthor={},
+ pdftitle={Early Research for a High-Availability Web Search Gateway},
+ pdfkeywords={},
+ pdfsubject={},
+ pdfcreator={},
+ pdflang={English}}
+
+% minimal-texlive fix: itemize bullets + section sign need textcomp (tcrm), not installed
+\renewcommand{\labelitemi}{$\bullet$}
+\renewcommand{\labelitemii}{$\circ$}
+\renewcommand{\labelitemiii}{$\cdot$}
+\renewcommand{\labelitemiv}{$\bullet$}
+\pdfstringdefDisableCommands{\def\textsubscript#1{#1}\def\textsuperscript#1{#1}}
+
+\begin{document}
+
+\maketitle
+\setcounter{tocdepth}{3}
+\tableofcontents
+
+\section*{Status}
+\label{sec:org4750991}
+
+These are working notes from the early research and brainstorming phase.  They
+record the evidence, calculations, rejected ideas, and current design direction;
+they are not yet an approved implementation specification.
+
+No code was changed during this research phase.
+
+Primary local inputs:
+
+\begin{itemize}
+\item Existing extension: \texttt{extensions/web-search/}.
+\item Existing skill: \texttt{skills/web-search/SKILL.md}.
+\item User-provided report: \texttt{/home/pirackr/Working/generated-reports/web-search.pdf}.
+\item Extracted report text used during review: \texttt{/tmp/web-search-report.txt}.
+\item Exa terms text captured during review: \texttt{/tmp/exa-terms.txt}.
+\end{itemize}
+\section*{Executive conclusions}
+\label{sec:orgfb06cb1}
+
+\begin{itemize}
+\item The desired scale is approximately \textbf{5,000 programmatic searches/day}, or
+approximately \textbf{150,000/month}.
+\item The average request rate is small: \texttt{5,000 / 86,400 = 0.0579 requests/second}.
+Per-minute and per-second limits matter for report bursts, but \textbf{monthly free
+credits are the binding constraint}.
+\item Approximately \textbf{114 fresh searches/day} are available from the verified
+recurring direct/AI-search free tiers (Exa, Brave, and Tavily basic).
+\item Including fixed-quota third-party SERP intermediaries, especially Bright
+Data, raises the documented recurring total to approximately \textbf{286/day}.
+\item A broad optimistic ceiling, including variable generic scraping credits, is
+approximately \textbf{330/day}, but it is not reliable planning capacity.
+\item One-time signup and trial grants provide approximately \textbf{25,000--31,000
+searches}, enough for only approximately \textbf{5--6 days} at the target rate.
+\item Self-hosted SearXNG can accept 5,000 local calls/day, but it owns no search
+index.  It fans queries out to upstream engines that can return CAPTCHAs,
+throttle, block the host IP, or change markup.  It therefore cannot guarantee
+fresh results or a 99\% fresh-search SLA.
+\item A hard-\char36{}0 system cannot guarantee 99\% fresh, unrestricted, general-web search
+at 5,000/day.  It can target \textbf{99\% non-empty tool responses} only because the
+accepted success definition includes fresh cache hits, stale cache hits, and
+explicit partial results.
+\item The recommended baseline is a local resilient search gateway:
+\texttt{fresh cache -> healthy authorized/live engines -> stale cache -> explicit
+  partial response}.
+\item Pi must continue to orchestrate every query and receive every result.  Hosted
+consumer research agents are not substitutes for a raw search backend.
+\item Quota routing must use one legitimate account per provider and stay within
+every provider's authorization.  Multi-account quota multiplication, stealth
+automation, proxy rotation, CAPTCHA solving, and similar circumvention are
+excluded.
+\end{itemize}
+\section*{Mission and constraints}
+\label{sec:orgc0adea0}
+
+\subsection*{Workload}
+\label{sec:org60c92c4}
+
+\begin{itemize}
+\item Approximately 1--10 reports/day.
+\item A report may fan out to approximately 1,000 searches.
+\item Peak daily workload may reach approximately 5,000 searches.
+\item Preserve high fan-out; do not redefine the problem by forcing reports to use
+only a small number of searches.
+\item Expected cache reuse is only approximately 10--40\%.
+\end{itemize}
+\subsection*{Hard requirements}
+\label{sec:orgb3a22c0}
+
+\begin{itemize}
+\item Maximum monthly operating cost: \textbf{\char36{}0}, including APIs, proxies, and servers.
+\item Self-hosting is allowed when it uses already-available hardware/connectivity.
+\item Pi controls query generation, dispatch, result receipt, synthesis, and report
+production.
+\item General-web queries must not be restricted to a small curated corpus.
+\item Cached, stale, or partial non-empty results count toward the availability
+objective, but their status must be explicit.
+\item Fresh-only 99\% coverage is not required after clarification.
+\item Respect provider terms, hard quotas, burst limits, \texttt{Retry-After}, and blocks.
+\end{itemize}
+\subsection*{Explicit non-goals}
+\label{sec:org34bbcd6}
+
+\begin{itemize}
+\item No multiple accounts at one provider to multiply a free allowance.
+\item No rotating identities, IPs, or proxies to evade a rate limit or block.
+\item No browser fingerprint mimicry, stealth scraping, or CAPTCHA solving.
+\item No automation of consumer chat subscriptions as unofficial search APIs.
+\item No hidden conversion of a stale or partial result into a result labeled
+\texttt{fresh}.
+\item No claim that best-effort upstream scraping provides an SLA.
+\end{itemize}
+\section*{Existing extension architecture}
+\label{sec:org2b4b739}
+
+The current extension is intentionally small and provider-oriented:
+
+\begin{itemize}
+\item \texttt{extensions/web-search/index.ts} registers \texttt{web\_lookup} and \texttt{fetch\_web}.
+\item \texttt{extensions/web-search/search.ts} implements \texttt{webLookup()} and walks an
+ordered provider chain.  The first available provider returning results wins.
+\item \texttt{extensions/web-search/types.ts} contains shared search/fetch result types.
+\item \texttt{extensions/web-search/engines/exa.ts} calls Exa directly.
+\item \texttt{extensions/web-search/engines/duckduckgo.ts} scrapes DuckDuckGo's HTML
+endpoint and decodes redirect URLs.
+\item \texttt{extensions/web-search/engines/tavily.ts} calls Tavily directly.
+\item \texttt{extensions/web-search/strategies/readability.ts} fetches pages and extracts
+readable content with Mozilla Readability and linkedom.
+\item \texttt{tests/web-search.test.ts} contains the web-search extension tests.
+\item \texttt{skills/web-search/SKILL.md} provides engine-selection judgment,
+search-vs-fetch guidance, prompt-injection safety, and recovery guidance.
+\end{itemize}
+
+Current automatic chain:
+
+\begin{enumerate}
+\item Exa.
+\item DuckDuckGo fallback.
+\end{enumerate}
+
+Tavily is registered but opt-in rather than part of \texttt{engine: "auto"}.
+
+The extension already has process-level usage caps:
+
+\begin{itemize}
+\item \texttt{-{}-{}web-search-max-lookups}
+\item \texttt{-{}-{}web-search-max-fetches}
+\end{itemize}
+
+Those caps prevent accidental use inside one process; they are not persistent
+cross-session provider quota accounting and do not provide caching, health
+tracking, or circuit breaking.
+
+Historical compatibility note: the tool is named \texttt{web\_lookup} rather than
+\texttt{web\_search}.  \texttt{web\_search} collides with Anthropic's reserved server-side web
+search tool name and previously broke requests through an Anthropic-compatible
+non-Anthropic gateway.
+\section*{Capacity arithmetic}
+\label{sec:orgd420882}
+
+\subsection*{Baseline volume}
+\label{sec:orgfb27f55}
+
+\begin{verbatim}
+5,000 searches/day * 30 days = 150,000 searches/month
+5,000 searches/day / 86,400 seconds = 0.0579 searches/second average
+1,000-search report completed in one hour = 16.7 searches/minute
+\end{verbatim}
+
+Consequently, most published burst limits are generous enough if requests are
+queued.  The scarce resource is the monthly allowance.
+\subsection*{Verified fixed recurring free capacity}
+\label{sec:org41f4cf1}
+
+The following calculation assumes one legitimate account per provider and
+Tavily \texttt{basic} searches.
+
+\begin{center}
+\begin{tabular}{lllrll}
+Provider & Recurring allowance & Approx. searches/month & 30-day average/day & Published burst/operational limit & Important caveat\\
+\hline
+Bright Data SERP API & 5,000 credits/month & 5,000 & 166.7 & No clear binding limit found & Third-party SERP scraping/unlocking, not an independent index\\
+Exa & \char36{}10 recurring credit/month; basic search \char36{}7/1,000 & 1,428.6 & 47.6 & 10 QPS found in docs & Credit-denominated; \char36{}20 signup credit is separate\\
+Brave Search API & \char36{}5 recurring credit/month; \char36{}5/1,000 & 1,000 & 33.3 & 50 RPS & Credit card required for free plan; multiple-account bypass prohibited\\
+Tavily basic & 1,000 credits/month; 1 credit/basic query & 1,000 & 33.3 & 100 RPM development limit & Advanced search uses 2 credits\\
+Serpstack & 100 searches/month & 100 & 3.3 & Not verified & Third-party Google SERP intermediary\\
+Zenserp & 50 requests/month & 50 & 1.7 & Not verified & Third-party SERP intermediary\\
+\hline
+\textbf{Total, Tavily basic} &  & \textbf{8,578.6} & \textbf{286.0} &  & \\
+\end{tabular}
+\end{center}
+
+With Tavily advanced searches, Tavily contributes 500 searches/month rather
+than 1,000:
+
+\begin{verbatim}
+8,578.6 - 500 = 8,078.6/month = 269.3/day
+\end{verbatim}
+
+A 10\% safety reserve for billing differences, failed parsing, clock boundaries,
+and operational drift reduces the basic-search planning figure from 286/day to
+approximately \textbf{257/day}; using a round \textbf{250/day} budget is safer.
+\subsection*{Capacity by policy/risk category}
+\label{sec:orga478027}
+
+Direct/AI-search APIs only:
+
+\begin{verbatim}
+Exa 1,428.6 + Brave 1,000 + Tavily 1,000
+= 3,428.6/month
+= 114.3/day
+\end{verbatim}
+
+Including fixed-quota SERP intermediaries:
+
+\begin{verbatim}
+3,428.6 + Bright Data 5,000 + Serpstack 100 + Zenserp 50
+= 8,578.6/month
+= 286.0/day
+\end{verbatim}
+
+Bright Data supplies approximately 58\% of this broader total.  Whether the
+baseline should include vendor-managed scraping of upstream search engines is
+therefore a load-bearing design and policy decision.
+\subsection*{Variable recurring services}
+\label{sec:org96c94ca}
+
+These services have recurring free resources, but their units cannot safely be
+translated one-for-one into general-web search queries.
+
+\begin{center}
+\begin{tabular}{llll}
+Service & Free resource & Best-case interpretation & Why it is not counted in the fixed total\\
+\hline
+ScraperAPI & 1,000 API credits/month; max 5 concurrent connections & At most 1,000 one-credit fetches/month, or 33/day & Protected domains, rendering, premium proxies, and options can consume multiple credits; it is a generic scraper rather than a structured search index\\
+Apify & \char36{}5 platform credit/month & Product copy says over 1,000 Google results; roughly 100 ten-result SERP pages, approximately 3 queries/day & Actor event pricing, result count, compute, proxies, and add-ons affect cost\\
+SerpAPI & Small free plan reported by secondary pages & Often reported near 250/month & Current official public page did not expose a verifiable allowance in extracted content; confirm in dashboard before counting\\
+Jina Search & Keyless use and higher authenticated limits are documented & Unknown & No stable contractual free daily/monthly search allowance was found\\
+\end{tabular}
+\end{center}
+
+Adding the most optimistic interpretations of ScraperAPI, Apify, and a reported
+250/month SerpAPI plan to the fixed total gives roughly:
+
+\begin{verbatim}
+8,578.6 + 1,000 + 100 + 250 = 9,928.6/month
+9,928.6 / 30 = 331/day
+\end{verbatim}
+
+This is an \textbf{optimistic ceiling}, not dependable capacity.
+\subsection*{One-time and trial capacity}
+\label{sec:orgf3de616}
+
+\begin{center}
+\begin{tabular}{llll}
+Provider & One-time resource & Approximate base searches & Status/caveat\\
+\hline
+You.com & \char36{}100 signup credit; web search \char36{}5/1,000 & 20,000 & No card reported; does not recur\\
+Exa & \char36{}20 signup credit in addition to recurring \char36{}10 & 2,857 & At \char36{}7/1,000 basic searches\\
+Serper & Reported 2,500 signup credits & 2,500 & Re-verify in official dashboard before relying on it\\
+SearchAPI.io & 100 get-started requests & 100 & Treat as trial unless recurrence is explicitly confirmed\\
+Scrapingdog & 200 starting credits & 200 & Not shown as a recurring monthly grant\\
+ScraperAPI & Up to 5,000 requests during first 7 days & Up to 5,000 & Request/credit cost can vary\\
+\end{tabular}
+\end{center}
+
+\begin{verbatim}
+Without the variable ScraperAPI trial: approximately 25,657 searches
+Including its best-case trial: approximately 30,657 searches
+At 5,000/day: approximately 5.1--6.1 days
+\end{verbatim}
+
+Signup grants must never be presented as sustainable daily capacity.
+\subsection*{Existing-customer and retired products}
+\label{sec:orgf688375}
+
+\begin{itemize}
+\item Google Custom Search JSON API advertises 100 free queries/day for eligible
+existing customers, but it is unavailable to new customers and sunsets on
+2027-01-01.  It contributes zero to a new deployment.  An already-eligible
+account could temporarily add 100/day, taking the broad fixed total from
+approximately 286/day to approximately 386/day.
+\item Standalone Microsoft Bing Search APIs were retired on 2025-08-11 and
+contribute zero.
+\end{itemize}
+\section*{What 5,000 calls/day requires}
+\label{sec:orgb7bbb59}
+
+With expected cache reuse:
+
+\begin{center}
+\begin{tabular}{lllll}
+Cache reuse & Cache-served calls/day & Remaining live demand/day & After 286/day fixed free API capacity & Best-effort/unmetered demand\\
+\hline
+10\% & 500 & 4,500 & 4,500 - 286 & 4,214/day\\
+40\% & 2,000 & 3,000 & 3,000 - 286 & 2,714/day\\
+\end{tabular}
+\end{center}
+
+Using the safer 250/day metered budget leaves approximately 2,750--4,250 daily
+queries for SearXNG, DuckDuckGo HTML, Jina, other best-effort routes, or stale
+cache.
+
+The verified fixed recurring APIs therefore cover only:
+
+\begin{itemize}
+\item Approximately 5.7\% of all 5,000 daily calls when intermediaries are included.
+\item Approximately 2.3\% when only Exa, Brave, and Tavily are counted.
+\item Approximately 6.4--9.5\% of the post-cache live demand with intermediaries,
+depending on cache reuse.
+\end{itemize}
+\section*{SearXNG findings}
+\label{sec:orgd6a79ee}
+
+\subsection*{What it provides}
+\label{sec:org8f09f08}
+
+\begin{itemize}
+\item A self-hosted metasearch HTTP service.
+\item Query fan-out to multiple configured upstream search engines.
+\item A normalized result shape over heterogeneous upstreams.
+\item Engine configuration, timeout handling, and suspension/cooldown mechanisms.
+\item A practical place to centralize best-effort search traffic on local hardware.
+\end{itemize}
+\subsection*{What it does not provide}
+\label{sec:org6c8b86b}
+
+\begin{itemize}
+\item Its own general-web crawler or independent index.
+\item A contractual quota from Google, Bing, DuckDuckGo, or other scraped engines.
+\item Immunity from CAPTCHA challenges, rate limits, datacenter-IP blocks, or
+upstream markup changes.
+\item A fresh-result SLA.
+\end{itemize}
+
+SearXNG documentation explicitly discusses upstream bot classification,
+CAPTCHAs, and engine suspension.  Cooldowns reduce repeated failures but do not
+turn an unauthorized or blocked route into authorized capacity.
+
+If one local SearXNG query enables four upstream engines, 5,000 Pi calls can
+produce approximately 20,000 upstream requests/day.  Fan-out therefore
+increases breadth and failure independence but also accelerates upstream
+blocking and consumes more network work than the Pi-call count suggests.
+
+The PDF included anecdotal DuckDuckGo blocking near 50+ queries/hour on some
+shared/datacenter IPs.  This is not a guaranteed threshold; the actual limit is
+unpublished, dynamic, and dependent on IP reputation and traffic shape.
+\subsection*{Appropriate role}
+\label{sec:org6a0c93f}
+
+Treat SearXNG as \textbf{best-effort enrichment and overflow}, never as guaranteed free
+fresh capacity.  Honor a block, CAPTCHA, or \texttt{Retry-After} by cooling down or
+suspending the engine.  Do not add proxies or stealth techniques to force
+continued access.
+\section*{Provider and product findings}
+\label{sec:org1e8901c}
+
+\subsection*{Exa}
+\label{sec:orgbf94166}
+
+\begin{itemize}
+\item Direct API and suitable result structure for Pi.
+\item \char36{}20 signup credit plus \char36{}10 recurring monthly credit were documented.
+\item No payment method is required for the free tier.
+\item Basic search was priced at \char36{}7/1,000, yielding approximately 1,428 recurring
+searches/month.
+\item The terms include anti-abuse/anti-circumvention and suspension provisions.
+Creating many accounts to multiply credits is therefore operationally
+fragile and contrary to the design's compliance requirement.
+\end{itemize}
+\subsection*{Brave Search API}
+\label{sec:orgd25db6e}
+
+\begin{itemize}
+\item Independent search API with a documented recurring credit.
+\item \char36{}5 monthly credit at \char36{}5/1,000 searches yields 1,000/month.
+\item Published capacity found during research: 50 requests/second.
+\item A credit card is required even for the free plan.
+\item Brave explicitly prohibits bypassing limits by creating multiple accounts.
+\end{itemize}
+\subsection*{Tavily}
+\label{sec:orgf8240bb}
+
+\begin{itemize}
+\item 1,000 monthly credits.
+\item Basic search consumes one credit; advanced consumes two.
+\item Approximately 33 basic or 16 advanced searches/day on a 30-day average.
+\item Development rate limit found: 100 requests/minute.
+\item Existing extension support is opt-in, so it can be integrated into a
+quota-aware chain without inventing a new provider implementation.
+\end{itemize}
+\subsection*{Bright Data SERP API}
+\label{sec:org25caddb}
+
+\begin{itemize}
+\item Official docs advertise 5,000 SERP API credits every month with no credit
+card.
+\item Billing is per successful request; failed/errored requests are not billed in
+the standard configuration.
+\item Custom headers/cookies change that behavior: all attempts may then be billed.
+\item Parsing, proxy management, retries, unlocking, and CAPTCHA handling are
+included according to its docs.
+\item It is the largest documented recurring free bucket found, but it is a
+vendor-managed SERP scraper rather than first-party index access.  Its API
+authorization does not automatically settle every upstream search engine's
+policy.  This is a policy/legal-risk distinction, not a claim of illegality.
+\end{itemize}
+\subsection*{DuckDuckGo HTML}
+\label{sec:orgb6ec859}
+
+\begin{itemize}
+\item Works today as the current no-key fallback.
+\item It has no published programmatic quota or SLA.
+\item HTML parsing can break when markup changes.
+\item Rate limits and blocks are dynamic; it cannot be included in guaranteed
+numeric capacity.
+\end{itemize}
+\subsection*{Jina Search}
+\label{sec:orge0e6269}
+
+\begin{itemize}
+\item Keyless access and authenticated higher limits are documented.
+\item No stable contractual free daily/monthly request allowance was found.
+\item Useful only as a best-effort route until a quota is explicitly documented.
+\end{itemize}
+\subsection*{Serpstack, Zenserp, SerpAPI, SearchAPI, Serper, and Scrapingdog}
+\label{sec:orgb30dd45}
+
+\begin{itemize}
+\item These are third-party SERP services or trials, not independent general-web
+indexes.
+\item Verified recurring quantities were small: Serpstack 100/month and Zenserp
+50/month.
+\item SerpAPI's current free quantity was not sufficiently visible in the official
+extracted page to count conservatively.
+\item SearchAPI, Serper, and Scrapingdog were treated as signup/trial capacity, not
+recurring capacity.
+\end{itemize}
+\subsection*{ScraperAPI and Apify}
+\label{sec:org575aa61}
+
+\begin{itemize}
+\item Both provide legitimate APIs/platforms with recurring free resources.
+\item They are generic scraping infrastructure or actors, so one credit, one
+result, one SERP page, and one user query are different units.
+\item They can be optional overflow experiments, but the router must learn actual
+observed credit cost before assigning a hard daily budget.
+\end{itemize}
+\section*{Consumer subscriptions and hosted agents}
+\label{sec:org22e9aaa}
+
+The following were considered and rejected as raw capacity sources:
+
+\begin{itemize}
+\item ChatGPT subscriptions.
+\item Gemini consumer subscriptions.
+\item Perplexity subscriptions.
+\item Claude subscriptions.
+\item OpenCode Go.
+\item Kagi and Perplexity paid APIs under a hard-\char36{}0 budget.
+\end{itemize}
+
+Reasons:
+
+\begin{itemize}
+\item Consumer plans provide hosted interactive research, not 5,000 raw
+programmatic search calls/day for Pi.
+\item Automating a consumer UI would be fragile and commonly disallowed.
+\item A hosted research agent would control query planning and result handling,
+violating the requirement that Pi orchestrate every query and receive every
+result.
+\item OpenCode Go covers model inference rather than increased web-search capacity.
+\item OpenCode's unauthenticated Exa MCP route has no appropriate published quota
+or SLA and is not a basis for production planning.
+\end{itemize}
+\section*{Compliance and routing rules}
+\label{sec:orgb9e99f9}
+
+\subsection*{Allowed}
+\label{sec:org86a98b1}
+
+\begin{itemize}
+\item One legitimate account per independent provider.
+\item Weighted or quota-aware routing across providers.
+\item Pacing requests below each published QPS/RPM limit.
+\item Tracking monthly credits locally and stopping before exhaustion.
+\item Honoring \texttt{429}, \texttt{Retry-After}, CAPTCHA, and explicit blocks.
+\item Caching, in-flight deduplication, stale fallback, and partial responses.
+\item Using a provider's documented API according to its own terms.
+\end{itemize}
+\subsection*{Excluded}
+\label{sec:org8b7300d}
+
+\begin{itemize}
+\item Waiting for one account to be blocked and continuing through another account
+at the same provider.
+\item Multiple accounts, identities, or organizations created to multiply a free
+tier.
+\item IP/proxy rotation intended to defeat an upstream limit.
+\item Browser fingerprint spoofing or stealth plugins for this feature.
+\item CAPTCHA solving or bypass.
+\item Describing an intermediary API as first-party authorization from the upstream
+engine.
+\end{itemize}
+
+Provider rotation increases resilience only when each route is independently
+authorized.  It does not convert scraping or quota bypass into authorized use.
+\section*{Approaches considered}
+\label{sec:orga131658}
+
+\subsection*{Approach 1: API-only free-tier router}
+\label{sec:org3f68652}
+
+Use Exa, Brave, Tavily, and small documented free APIs with persistent quota
+tracking.
+
+Advantages:
+
+\begin{itemize}
+\item Clear result contracts.
+\item Easier accounting and circuit breaking.
+\item Better policy position than direct scraping.
+\end{itemize}
+
+Disadvantages:
+
+\begin{itemize}
+\item Only approximately 114/day from direct/AI-search APIs.
+\item Only approximately 286/day even after adding fixed SERP intermediaries.
+\item Cannot approach 5,000 fresh searches/day.
+\end{itemize}
+
+Conclusion: useful as the high-quality tier, insufficient by itself.
+\subsection*{Approach 2: resilient local search gateway (recommended baseline)}
+\label{sec:org661f093}
+
+Combine persistent cache, quota-aware authorized APIs, self-hosted SearXNG,
+best-effort direct routes, stale fallback, and explicit metadata.
+
+Advantages:
+
+\begin{itemize}
+\item Pi retains full orchestration.
+\item Can target high non-empty-response availability.
+\item Uses scarce authorized API credits where they add the most value.
+\item Persistent state survives Pi processes and reports.
+\item Failures are explicit and measurable.
+\end{itemize}
+
+Disadvantages:
+
+\begin{itemize}
+\item Cannot guarantee freshness.
+\item SearXNG/upstream parsing remains operationally fragile.
+\item 99\% availability depends materially on cached/stale/partial acceptance.
+\item More components and policy distinctions must be maintained.
+\end{itemize}
+
+Conclusion: best fit under the clarified requirements and \char36{}0 constraint.
+\subsection*{Approach 3: local crawler/index}
+\label{sec:orga792812}
+
+Build or import a local searchable web corpus.
+
+Advantages:
+
+\begin{itemize}
+\item Predictable local availability after indexing.
+\item No per-query provider quota for already indexed documents.
+\end{itemize}
+
+Disadvantages:
+
+\begin{itemize}
+\item A broad fresh web index has major storage, bandwidth, crawling, ranking, and
+compliance costs.
+\item Poor fit for a hard-\char36{}0 general-web freshness target.
+\item Estimated query reuse of 10--40\% may not justify the initial complexity.
+\end{itemize}
+
+Conclusion: defer.  Reconsider only if observed query/domain reuse supports a
+narrow, valuable local corpus.
+\section*{Recommended design baseline}
+\label{sec:org3791195}
+
+This remains a proposal pending explicit approval.
+\subsection*{Components}
+\label{sec:orgdc96810}
+
+\begin{enumerate}
+\item \textbf{Gateway inside or adjacent to the web-search extension}
+\begin{itemize}
+\item Receives normalized \texttt{web\_lookup} requests.
+\item Owns routing, deadlines, merge behavior, and response metadata.
+\end{itemize}
+\item \textbf{Persistent SQLite cache}
+\begin{itemize}
+\item Shared across Pi sessions and processes.
+\item Stores normalized query/parameters, results, timestamps, provider,
+freshness class, and quality/failure metadata.
+\end{itemize}
+\item \textbf{In-flight request coalescing}
+\begin{itemize}
+\item Concurrent equivalent queries share one upstream request.
+\end{itemize}
+\item \textbf{Provider adapters}
+\begin{itemize}
+\item Existing Exa, Tavily, and DuckDuckGo adapters.
+\item Optional Brave, Bright Data, SearXNG, and other approved adapters.
+\end{itemize}
+\item \textbf{Quota ledger and rate limiter}
+\begin{itemize}
+\item Persistent monthly counters plus in-memory token buckets for burst limits.
+\end{itemize}
+\item \textbf{Engine health manager}
+\begin{itemize}
+\item Consecutive-failure counts, cooldowns, circuit breakers, and recovery
+probes.
+\end{itemize}
+\item \textbf{Merger/deduplicator}
+\begin{itemize}
+\item Canonicalizes URLs, removes duplicates, preserves provenance, and merges
+non-identical useful snippets.
+\end{itemize}
+\item \textbf{Metrics and operator visibility}
+\begin{itemize}
+\item Measures status, freshness, provider use, quota, latency, and failures.
+\end{itemize}
+\end{enumerate}
+\subsection*{Routing sequence}
+\label{sec:org35a29f4}
+
+\begin{verbatim}
+normalize query and parameters
+        |
+        v
+fresh persistent cache hit? -- yes --> return status=fresh-cache
+        |
+        no
+        v
+coalesce with equivalent in-flight query if present
+        |
+        v
+choose healthy provider with quota and rate tokens
+        |
+        +--> authorized/direct APIs
+        +--> approved SERP APIs
+        +--> self-hosted SearXNG / best-effort routes
+        |
+        v
+merge + URL-deduplicate + persist
+        |
+        +--> non-empty live result: return status=fresh or partial
+        |
+        +--> live routes unavailable/empty
+                    |
+                    v
+             stale cache hit? -- yes --> return status=stale
+                    |
+                    no
+                    v
+             explicit partial/unavailable response
+\end{verbatim}
+
+The exact ordering within the live tier should be configurable and may depend
+on query type, remaining monthly budget, historical quality, and latency.
+\subsection*{Query normalization and cache keys}
+\label{sec:org043906f}
+
+At minimum, keys need to include:
+
+\begin{itemize}
+\item Whitespace and Unicode-normalized query text.
+\item Case normalization where semantics permit it.
+\item Requested engine or automatic routing mode.
+\item Result limit.
+\item Locale, country, language, safe-search, and time filters.
+\item Any search mode that materially changes results.
+\item A cache schema/version field so parser or ranking changes can invalidate old
+entries safely.
+\end{itemize}
+
+Do not normalize away quoted phrases, operators, punctuation, or filters that
+change search meaning.
+\subsection*{Freshness model}
+\label{sec:orgfc99731}
+
+Response states should distinguish at least:
+
+\begin{itemize}
+\item \texttt{fresh}: produced by a live upstream call within the request.
+\item \texttt{fresh-cache} or \texttt{cached}: cache entry within configured fresh TTL.
+\item \texttt{stale}: cache entry beyond fresh TTL but within allowed stale retention.
+\item \texttt{partial}: non-empty result set with one or more providers failed, timed out,
+or were skipped.
+\item \texttt{unavailable}: no non-empty live or cache result; should not be counted as an
+availability success.
+\end{itemize}
+
+Exact fresh TTLs and maximum stale ages were not approved during early
+research.  They should be configurable by query/result class and selected from
+observed reuse and freshness needs rather than invented globally.
+
+Recommended metadata fields:
+
+\begin{verbatim}
+{
+  "status": "fresh|cached|stale|partial|unavailable",
+  "query": "normalized query",
+  "results": [],
+  "providersAttempted": [],
+  "providersSucceeded": [],
+  "partialFailures": [],
+  "fetchedAt": "timestamp",
+  "cacheAgeSeconds": 0,
+  "freshnessTtlSeconds": 0,
+  "servedFromCache": false,
+  "quotaSnapshot": {},
+  "requestId": "..."
+}
+\end{verbatim}
+
+The public shape may need to preserve backward compatibility with the current
+\texttt{web\_lookup} tool while exposing additional metadata in a concise text or
+structured envelope.
+\subsection*{Quota-aware scheduling}
+\label{sec:orgde30be6}
+
+Do not implement "try providers until one emits 429" as normal scheduling.
+Maintain local counters and reserve capacity across the remaining billing
+period.
+
+For a monthly allowance:
+
+\begin{verbatim}
+safe_remaining = documented_remaining - reserve
+pace_per_day = safe_remaining / days_remaining_in_provider_cycle
+\end{verbatim}
+
+A weighted distribution over the 286/day broad total is approximately:
+
+\begin{center}
+\begin{tabular}{ll}
+Provider & Approximate share\\
+\hline
+Bright Data & 58.3\%\\
+Exa & 16.7\%\\
+Brave & 11.7\%\\
+Tavily basic & 11.7\%\\
+Serpstack & 1.2\%\\
+Zenserp & 0.6\%\\
+\end{tabular}
+\end{center}
+
+Use those figures only after each provider is approved and configured.  A safer
+operational allocation is approximately:
+
+\begin{itemize}
+\item Bright Data: 150/day.
+\item Exa: 42/day.
+\item Brave: 30/day.
+\item Tavily basic: 30/day.
+\item Serpstack: 3/day.
+\item Zenserp: 1/day.
+\item Total: approximately 256/day, with monthly reserve.
+\end{itemize}
+
+The scheduler should also support:
+
+\begin{itemize}
+\item Per-second/per-minute token buckets.
+\item Provider billing-cycle boundaries rather than assuming every month is exactly
+30 days.
+\item Atomic quota updates across concurrent Pi processes.
+\item Manual quota correction after dashboard reconciliation.
+\item Hard zero-cost behavior: never fall through to paid overage.
+\item Provider disable switches.
+\item Priority preservation for high-value or freshness-sensitive requests if the
+user later defines such classes.
+\end{itemize}
+\subsection*{Cooldowns and circuit breakers}
+\label{sec:orgc663866}
+
+Suggested state transitions:
+
+\begin{itemize}
+\item Timeout/transient 5xx: short exponential backoff with jitter.
+\item \texttt{429} with \texttt{Retry-After}: disable until the indicated time.
+\item Repeated failures or parser-empty anomalies: open circuit for a longer
+cooldown.
+\item CAPTCHA/block page: suspend route; do not retry aggressively.
+\item Quota exhausted: disable until the next verified billing reset.
+\item Half-open recovery: one bounded probe, then close or reopen.
+\end{itemize}
+
+Track failures separately by engine and failure class.  An empty result can be
+legitimate for a narrow query, so parser/block detection must not equate every
+empty result with upstream failure.
+\subsection*{Result merging}
+\label{sec:org60073fe}
+
+\begin{itemize}
+\item Normalize URLs by removing known tracking parameters and fragments where
+safe.
+\item Preserve canonical URL, original URL, provider, title, snippet, rank, and
+retrieval time.
+\item Deduplicate exact/canonical URLs across providers.
+\item Prefer more informative titles/snippets without discarding provenance.
+\item Do not pretend independently returned duplicates are independent evidence.
+\item Record which providers contributed each merged result.
+\item Keep provider-native ordering available for debugging.
+\end{itemize}
+\subsection*{Observability}
+\label{sec:org89749b5}
+
+At minimum collect:
+
+\begin{itemize}
+\item Total calls and non-empty response rate.
+\item Counts by \texttt{fresh}, \texttt{cached}, \texttt{stale}, \texttt{partial}, and \texttt{unavailable}.
+\item Cache hit rate and cache-age distributions.
+\item Per-provider attempts, successes, empty responses, timeouts, blocks, 429s,
+latency, and result count.
+\item Quota remaining and projected exhaustion date.
+\item In-flight deduplication savings.
+\item URL overlap among providers.
+\item Percentage of requests requiring stale fallback.
+\item Percentage of partial responses and their failed providers.
+\end{itemize}
+
+These metrics are necessary to distinguish "the tool answered" from "the web
+was searched freshly and comprehensively."
+\section*{Service objectives and honest claims}
+\label{sec:org2edb433}
+
+\subsection*{Feasible target}
+\label{sec:orgd617df4}
+
+A target such as the following is plausible only after measurement:
+
+\begin{itemize}
+\item 99\% of calls return a non-empty response from live results, fresh cache, stale
+cache, or an explicitly partial non-empty result.
+\item Every response includes freshness and degradation metadata.
+\item Zero paid overage.
+\item No retry behavior that circumvents provider controls.
+\end{itemize}
+\subsection*{Not supportable under these constraints}
+\label{sec:org05eb1b4}
+
+\begin{itemize}
+\item 99\% fresh general-web result availability at 5,000/day.
+\item 99\% comprehensive coverage of the public web.
+\item A guarantee that SearXNG's famous-engine backends remain usable.
+\item A claim that 5,000 successful local SearXNG HTTP responses equal 5,000 fresh,
+independent search-index queries.
+\item A fixed number for Jina, DuckDuckGo HTML, or public SearXNG capacity without a
+published quota/SLA.
+\end{itemize}
+\subsection*{Availability denominator}
+\label{sec:orgee8b813}
+
+Before implementation, define precisely:
+
+\begin{itemize}
+\item Whether a partial response with one result counts.
+\item Whether an informative \texttt{unavailable} response counts only as tool uptime or
+as search success (recommended: tool uptime yes, search success no).
+\item Maximum acceptable stale age by use case.
+\item Whether duplicate-only results count.
+\item Whether a cache hit for exactly normalized parameters is required.
+\end{itemize}
+
+Report at least two objectives separately:
+
+\begin{enumerate}
+\item \textbf{Tool availability}: the function returns a valid response envelope.
+\item \textbf{Search-result availability}: the response contains one or more results.
+\end{enumerate}
+
+Also report live/fresh coverage separately so stale fallback cannot hide an
+upstream outage.
+\section*{Rejected strategies and rationale}
+\label{sec:org926003a}
+
+\subsection*{Many Exa or Brave accounts}
+\label{sec:org0feeb72}
+
+Rejected because it is quota multiplication rather than independent-provider
+resilience.  Brave explicitly prohibits multiple-account limit bypass; Exa has
+anti-circumvention and suspension language.  It also creates key-management,
+identity, reset, and sudden-ban failure modes.
+\subsection*{Playwright/stealth automation of search engines}
+\label{sec:org9d39a15}
+
+Rejected because browser mimicry does not create stable authorization or quota.
+CAPTCHA and block thresholds are dynamic, browser maintenance is costly, and
+forcing continued access would violate the no-circumvention requirement.
+\subsection*{Proxy rotation}
+\label{sec:org1df2b14}
+
+Rejected under the \char36{}0 and compliance constraints.  Free proxies are unreliable
+and unsafe; paid proxies violate the budget; rotation intended to evade blocks
+is out of scope regardless of cost.
+\subsection*{Consumer research subscriptions as backends}
+\label{sec:orgf5a8af9}
+
+Rejected because they do not grant Pi a raw high-volume search API.  They also
+move query planning and evidence handling into another hosted agent.
+\subsection*{Claiming burst aggregation solves monthly capacity}
+\label{sec:org3238d64}
+
+Rejected mathematically.  Fifty requests/second is irrelevant once a provider's
+1,000 monthly requests are consumed.  Burst limits control when requests may be
+sent; credits control how many can be sent sustainably.
+\section*{Open decisions before implementation}
+\label{sec:org1d29c4e}
+
+\begin{itemize}
+\item Approve or reject Approach 2 as the design baseline.
+\item Decide whether Bright Data and other third-party SERP scrapers are acceptable
+policy dependencies.  Without them, recurring numeric capacity falls from
+approximately 286/day to approximately 114/day.
+\item Decide which providers may require a payment card even though configured
+spend remains zero (notably Brave).
+\item Define fresh TTLs and maximum stale retention by query class.
+\item Define the exact success denominator for the 99\% objective.
+\item Decide whether live providers race in parallel, run sequentially, or use a
+bounded hybrid.  Parallel racing improves latency but consumes multiple
+provider credits for one user query.
+\item Choose whether provider results are first-success or merged.  Merging improves
+coverage but multiplies quota use.
+\item Choose SQLite location, locking strategy, retention size, and privacy policy.
+\item Define cache handling for potentially sensitive queries.
+\item Decide whether explicit \texttt{engine} requests may fall back to other engines or
+must fail closed.
+\item Reconfirm every provider's quota, reset behavior, overage behavior, and terms
+immediately before implementation because free plans change frequently.
+\item Determine whether the extension should run SearXNG itself, call an externally
+managed local instance, or merely support an optional URL.
+\item Establish a test method using mocked provider responses; live tests must not
+consume uncontrolled quota.
+\end{itemize}
+\section*{Likely implementation impact}
+\label{sec:org6ea1e47}
+
+If the design is approved, likely touched or new areas include:
+
+\begin{itemize}
+\item \texttt{extensions/web-search/search.ts}: replace first-success-only chain with the
+approved cache/router behavior.
+\item \texttt{extensions/web-search/types.ts}: add provider health, provenance, cache, and
+response-status types.
+\item \texttt{extensions/web-search/index.ts}: configuration/CLI options and result
+rendering while preserving tool compatibility.
+\item \texttt{extensions/web-search/engines/}: add approved Brave, Bright Data, and SearXNG
+adapters.
+\item New cache/quota/health modules under \texttt{extensions/web-search/}.
+\item \texttt{tests/web-search.test.ts}: deterministic cache, quota, cooldown, fallback,
+merge, and metadata tests.
+\item \texttt{skills/web-search/SKILL.md}: teach the model how to interpret fresh, cached,
+stale, partial, and unavailable responses.
+\end{itemize}
+
+This is only a scope sketch.  A written implementation plan and test-first
+workflow should follow design approval.
+\section*{Research quality, contradictions, and gaps}
+\label{sec:orgaf8e80d}
+
+\begin{itemize}
+\item Provider pricing and free plans are volatile.  The values in this document
+are snapshots from official documentation reviewed during this research.
+\item "All available providers" cannot literally be exhaustive: scraper
+marketplaces, promotional credits, and small SERP vendors appear and vanish
+frequently.
+\item Search-result snippets sometimes disagreed with current official pages.  The
+conservative calculation counts only quantities that could be tied to
+official provider material, except where explicitly labeled reported or
+provisional.
+\item Bright Data's documentation maps its 5,000 monthly credits to successful SERP
+requests and says unlocking/CAPTCHA handling is included.  This supports the
+capacity calculation but also reinforces that it is a managed scraper, not
+first-party search-index authorization.
+\item ScraperAPI and Apify have real recurring free resources, but a stable
+query-equivalent requires actual configuration and billing telemetry.
+\item SerpAPI's recurring free quantity remained insufficiently verified from the
+official extracted page and is excluded from the conservative total.
+\item Jina's keyless access lacks a stable published hard allowance and is excluded
+from numeric capacity.
+\item SearXNG and DuckDuckGo can add substantial best-effort volume, but assigning a
+hard daily number would be false precision.
+\item A \char36{}0 system cannot make a contractual availability guarantee when its bulk
+live capacity comes from services with no SLA.
+\end{itemize}
+\section*{Primary references}
+\label{sec:org8df449a}
+
+Official and primary documentation used or identified during the research:
+
+\begin{itemize}
+\item Bright Data SERP quickstart and free tier:
+\url{https://docs.brightdata.com/scraping-automation/serp-api/quickstart}
+\item Bright Data SERP pricing and successful-request billing:
+\url{https://docs.brightdata.com/scraping-automation/serp-api/pricing-and-billing}
+\item Exa billing/pricing documentation:
+\url{https://exa.ai/docs/reference/billing}
+\item Exa terms:
+\url{https://exa.ai/terms}
+\item Brave Search API pricing:
+\url{https://api-dashboard.search.brave.com/documentation/pricing}
+\item Brave Search API terms:
+\url{https://brave.com/search/api/terms-of-service/}
+\item Tavily API credits:
+\url{https://docs.tavily.com/documentation/api-credits}
+\item Serpstack pricing:
+\url{https://serpstack.com/pricing}
+\item Zenserp pricing:
+\url{https://zenserp.com/pricing-plans/}
+\item ScraperAPI plans and billing:
+\url{https://docs.scraperapi.com/resources/faq/plans-and-billing}
+\item ScraperAPI credit/request costs:
+\url{https://docs.scraperapi.com/getting-started/quick-start/credits-and-requests-costs}
+\item Apify pricing:
+\url{https://apify.com/pricing}
+\item Apify Google Search Scraper:
+\url{https://apify.com/apify/google-search-scraper}
+\item You.com billing:
+\url{https://you.com/docs/administration/billing}
+\item Google Custom Search JSON API overview:
+\url{https://developers.google.com/custom-search/v1/overview}
+\item Microsoft Bing Search API retirement:
+\url{https://learn.microsoft.com/en-us/lifecycle/announcements/bing-search-api-retirement}
+\item SearXNG administrator documentation:
+\url{https://docs.searxng.org/admin/index.html}
+\item SearXNG bot/CAPTCHA documentation:
+\url{https://docs.searxng.org/admin/answer-captcha.html}
+\item Jina Reader/Search documentation:
+\url{https://jina.ai/reader/}
+\item Scrapingdog Google SERP API:
+\url{https://www.scrapingdog.com/google-serp-api/}
+\item Scrapingdog pricing:
+\url{https://www.scrapingdog.com/pricing/}
+\end{itemize}
+\section*{Current recommendation}
+\label{sec:org8706914}
+
+Adopt Approach 2 as the design baseline only if the availability goal is stated
+honestly as high \textbf{non-empty response availability}, with separate reporting for
+fresh/live coverage.  Use a persistent cache and quota-aware authorized APIs as
+the reliable core, SearXNG and other no-SLA routes as best-effort enrichment,
+and stale/partial responses as explicit degradation modes.
+
+Do not claim that this architecture produces 5,000 fresh searches/day at \char36{}0.
+It produces up to 5,000 Pi-controlled lookup attempts/day and seeks to answer
+most of them through a measured combination of live search, cache, stale data,
+and partial results.
+\end{document}

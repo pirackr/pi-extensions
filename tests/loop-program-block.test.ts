@@ -4,6 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { programBlockFor } from "../extensions/loop/index.ts";
 
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+	getAgentDir: vi.fn().mockReturnValue("/mock/agent/dir"),
+	parseFrontmatter: vi.fn(),
+}));
+
 // The loop re-injects the program file every round today, which is the
 // biggest fixed context tax on long runs. programBlockFor gates that:
 // when the file is unchanged since the last full injection, the coordinator
@@ -65,4 +70,128 @@ describe("programBlockFor", () => {
 		expect(block).toContain("program file missing");
 		expect(sig).toBeNull();
 	});
+});
+
+// Prompt-discovery tests: verify agent prompt files contain the required
+// coordinator-summary, artifact, and verification-JSON instructions.
+// These live here because they exercise the same program-block loader path
+// (the loop injects program.v2.md each round; the agent prompts are
+// referenced from that document and must conform to the same contract).
+describe("deep-research prompt contract", () => {
+	const agentsDir = path.resolve("skills/deep-research/agents");
+	const programPath = path.resolve("skills/deep-research/program.v2.md");
+
+	const agentFiles = [
+		"planner.md",
+		"scout.md",
+		"fetcher.md",
+		"judge.md",
+		"citation-agent.md",
+		"source-auditor.md",
+		"contradiction-resolver.md",
+	];
+
+	const verificationAgents = [
+		{ name: "judge", fields: ["version", "runId", "pass", "verdict", "failedChecks", "fixes"] },
+		{ name: "citation-agent", fields: ["version", "runId", "pass", "unsupportedClaims", "misattributedClaims"] },
+		{ name: "source-auditor", fields: ["version", "runId", "pass", "unresolvedReplacements"] },
+		{ name: "contradiction-resolver", fields: ["version", "runId", "pass", "unhandled", "acknowledged"] },
+	];
+
+	describe("program.v2.md", () => {
+		const content = fs.readFileSync(programPath, "utf8");
+
+		it("contains coordinator-summary block reference", () => {
+			expect(content).toMatch(/<coordinator-summary>/);
+		});
+
+		it("contains artifact block reference", () => {
+			expect(content).toMatch(/<artifact>/);
+		});
+
+		it("every agent: \"...\" literal in run_subagents examples is a registered profile", () => {
+			const resolvable = new Set([
+				"planner", "scout_research", "fetcher", "worker",
+				"judge", "citation_agent", "source_auditor", "contradiction_resolver",
+			]);
+			const agentLiteralPattern = /agent:\s*["']([^"']+)["']/gi;
+			const found = new Set<string>();
+			let match: RegExpExecArray | null;
+			while ((match = agentLiteralPattern.exec(content)) !== null) {
+				found.add(match[1]);
+			}
+			for (const name of found) {
+				expect(
+					resolvable.has(name),
+					`agent literal "${name}" is not a registered profile`,
+				).toBe(true);
+			}
+		});
+
+		it("contains the role→profile mapping note", () => {
+			expect(content).toContain("scout_research");
+			expect(content).toContain("worker");
+			expect(content).toContain("citation_agent");
+		});
+
+		it("does not embed per-agent runtime config (model/tools/access/timeout) adjacent to dispatches", () => {
+			const blockPattern = /```js\s*([\s\S]*?)```/g;
+			let block: RegExpExecArray | null;
+			while ((block = blockPattern.exec(content)) !== null) {
+				const code = block[1];
+				if (code.includes("run_subagents")) {
+					expect(code, "run_subagents block must not contain model:").not.toMatch(/\bmodel:\s*/i);
+					expect(code, "run_subagents block must not contain tools:").not.toMatch(/\btools:\s*/i);
+					expect(code, "run_subagents block must not contain access:").not.toMatch(/\baccess:\s*/i);
+					expect(code, "run_subagents block must not contain timeoutSeconds").not.toMatch(/\btimeoutSeconds\b/);
+				}
+			}
+		});
+
+		it("does not contain multi-task run_subagents arrays", () => {
+			const multiTask = /tasks:\s*\[\s*\{[\s\S]*?\},\s*\{/i;
+			expect(content).not.toMatch(multiTask);
+		});
+
+		it("contains valid org heading markers", () => {
+			expect(content).toMatch(/\*\*\*\s/);
+		});
+
+		it("does not contain invalid heading level prose", () => {
+			expect(content).not.toMatch(/level-\d+\s+heading/i);
+		});
+
+		it("uses inline [[URL][description]] citations", () => {
+			expect(content).toMatch(/\[\[URL\]\[description\]\]/);
+		});
+
+		it("does not use numbered citation guidance", () => {
+			expect(content).not.toMatch(/\[\s*\d+\s*\]/);
+		});
+	});
+
+	for (const file of agentFiles) {
+		describe(`[${file.replace(".md", "")}]`, () => {
+			const content = fs.readFileSync(path.join(agentsDir, file), "utf8");
+
+			it("contains coordinator-summary block instructions", () => {
+				expect(content).toMatch(/<coordinator-summary>/);
+			});
+
+			it("contains artifact block instructions", () => {
+				expect(content).toMatch(/<artifact>/);
+			});
+		});
+	}
+
+	for (const agent of verificationAgents) {
+		describe(`[${agent.name}] verification JSON schema`, () => {
+			const content = fs.readFileSync(path.join(agentsDir, `${agent.name}.md`), "utf8");
+			for (const field of agent.fields) {
+				it(`references schema field '${field}'`, () => {
+					expect(content).toMatch(new RegExp(field, "i"));
+				});
+			}
+		});
+	}
 });

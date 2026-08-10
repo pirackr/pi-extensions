@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { loadSubagentConfiguration } from "./config.ts";
-import { renderSummaryResults } from "./render.ts";
+import { parseCoordinatorResult, renderSummaryResults } from "./render.ts";
+import { getActiveResearchBudgets } from "../deep-research/session.ts";
 
 const MAX_RESULT_BYTES = 50 * 1024;
 const POLL_INTERVAL_MS = 250;
@@ -54,6 +55,8 @@ export interface TaskItem {
 	inputs?: string[];
 	expected_output?: string;
 	cwd?: string;
+	/** Absolute path where the artifact block payload will be written. When supplied, the agent must also return an <artifact> block. */
+	result_path?: string;
 	/** Hard cap on web_lookup calls for this task (overrides config default). 0/unset = use config. */
 	webSearchMaxLookups?: number;
 	/** Hard cap on fetch_web calls for this task (overrides config default). 0/unset = use config. */
@@ -161,15 +164,19 @@ export function getRunnerInvocation(): PiInvocation {
 	return { command: "node", args: [runnerPath] };
 }
 
-export function buildTaskPrompt(task: {
-	objective: string;
-	scope?: string[];
-	non_goals?: string[];
-	constraints?: string[];
-	acceptance_criteria?: string[];
-	inputs?: string[];
-	expected_output?: string;
-}): string {
+export function buildTaskPrompt(
+	task: {
+		objective: string;
+		scope?: string[];
+		non_goals?: string[];
+		constraints?: string[];
+		acceptance_criteria?: string[];
+		inputs?: string[];
+		expected_output?: string;
+		result_path?: string;
+	},
+	returnMode: "full" | "summary",
+): string {
 	const sections = [
 		`# Objective\n${task.objective}`,
 		`# Scope\n${task.scope?.map((item) => `- ${item}`).join("\n") || "- Use only the scope needed for the objective."}`,
@@ -180,6 +187,24 @@ export function buildTaskPrompt(task: {
 		`# Expected Output\n${task.expected_output || "Return status, concise results, evidence, checks performed, unresolved risks, and the recommended next action."}`,
 		"# Delegation Boundary\nDo not spawn, invoke, or delegate to other agents. Report any need for additional specialization to the parent agent.",
 	];
+	if (returnMode === "summary") {
+		const resultFormatLines = [
+			"# Result Format",
+			"When return_mode is \"summary\", your output MUST include a <coordinator-summary> block with these exact fields:",
+			"- Status: succeeded | partial | blocked | failed",
+			"- Outcome: one-sentence result",
+			"- Evidence added: count or none",
+			"- Key changes: up to 3 concise items",
+			"- Contradictions/blockers: concise list or none",
+			"- Recommended next action: one concrete action",
+		];
+		if (task.result_path) {
+			resultFormatLines.push(
+				`When a result_path is supplied, your output MUST ALSO include a separate <artifact> block containing the complete durable payload. The exact text between <artifact> and </artifact> will be written to ${task.result_path}.`,
+			);
+		}
+		sections.push(...resultFormatLines);
+	}
 	return sections.join("\n\n");
 }
 
@@ -320,6 +345,58 @@ export function delay(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
+export interface PreparedTask {
+	task: TaskItem;
+	profile: import("./config.ts").AgentProfile;
+	cwd: string;
+	timeoutSeconds: number;
+	taskId: string;
+}
+
+/**
+ * Validate coordinator-summary blocks and export artifact payloads for
+ * summary-mode results. Mutates statuses in place when validation fails.
+ */
+export async function validateAndExportSummaryResults(
+	statuses: TaskStatus[],
+	prepared: PreparedTask[],
+): Promise<void> {
+	for (let index = 0; index < statuses.length; index++) {
+		if (statuses[index].state !== "succeeded") continue;
+		const fullText = statuses[index].result || "";
+		const task = prepared[index].task;
+		try {
+			const parsed = parseCoordinatorResult(fullText, {
+				requireArtifact: !!task.result_path,
+			});
+			(statuses[index] as any).parsedResult = parsed;
+			(statuses[index] as any).result_path = task.result_path;
+			(statuses[index] as any).usage = statuses[index].usage;
+
+			if (task.result_path && parsed.artifact !== undefined) {
+				const dir = path.dirname(task.result_path);
+				await fs.promises.mkdir(dir, { recursive: true });
+				const tmpPath = `${task.result_path}.${process.pid}.tmp`;
+				await fs.promises.writeFile(tmpPath, parsed.artifact, {
+					mode: 0o600,
+				});
+				try {
+					fs.renameSync(tmpPath, task.result_path);
+				} catch (renameError) {
+					await fs.promises
+						.rm(tmpPath, { force: true })
+						.catch(() => undefined);
+					statuses[index].state = "failed";
+					statuses[index].errorMessage = `Result export failed: ${renameError instanceof Error ? renameError.message : String(renameError)}`;
+				}
+			}
+		} catch (error) {
+			statuses[index].state = "failed";
+			statuses[index].errorMessage = `Structured result validation failed: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	}
+}
+
 export default function (pi: ExtensionAPI) {
 	const { config, profiles, userConfigPath } =
 		loadSubagentConfiguration(extensionDir);
@@ -381,6 +458,12 @@ export default function (pi: ExtensionAPI) {
 			Type.Number({
 				description:
 					"Hard cap on fetch_web calls for this task (overrides config default). 0 = unlimited.",
+			}),
+		),
+		result_path: Type.Optional(
+			Type.String({
+				description:
+					"Absolute path where the artifact block payload will be written",
 			}),
 		),
 	});
@@ -494,6 +577,15 @@ export default function (pi: ExtensionAPI) {
 				}),
 			);
 
+			// I1: absolute-path guard for result_path
+			for (const item of prepared) {
+				if (item.task.result_path && !path.isAbsolute(item.task.result_path)) {
+					throw new Error(
+						`result_path must be an absolute path, got: ${item.task.result_path}`,
+					);
+				}
+			}
+
 			const writerDirectories = new Set<string>();
 			for (const item of prepared) {
 				if (item.profile.access === "read") continue;
@@ -570,7 +662,8 @@ export default function (pi: ExtensionAPI) {
 				sessionCreated = true;
 				emitUpdate();
 
-				for (let index = 0; index < prepared.length; index++) {
+				const activeResearchBudgets = getActiveResearchBudgets();
+			for (let index = 0; index < prepared.length; index++) {
 					const item = prepared[index];
 					const promptPath = path.join(
 						runDir,
@@ -585,7 +678,7 @@ export default function (pi: ExtensionAPI) {
 					await fs.promises.writeFile(promptPath, item.profile.systemPrompt, {
 						mode: 0o600,
 					});
-					const taskPrompt = buildTaskPrompt(item.task);
+					const taskPrompt = buildTaskPrompt(item.task, returnMode);
 					await fs.promises.writeFile(taskPath, taskPrompt, {
 						mode: 0o600,
 					});
@@ -610,9 +703,23 @@ export default function (pi: ExtensionAPI) {
 						childExtensions: config.childExtensions,
 						loadContextFiles: config.loadContextFiles,
 						webSearchMaxLookups:
-							item.task.webSearchMaxLookups ?? config.webSearchMaxLookups,
+							// Active budget 0 = unlimited (falls through to task arg / config);
+							// a positive active budget is a hard cap task args cannot exceed.
+							activeResearchBudgets.maxSearchesPerAgent != null &&
+							activeResearchBudgets.maxSearchesPerAgent > 0
+								? Math.min(
+										item.task.webSearchMaxLookups ?? Infinity,
+										activeResearchBudgets.maxSearchesPerAgent,
+								  )
+								: item.task.webSearchMaxLookups ?? config.webSearchMaxLookups,
 						webSearchMaxFetches:
-							item.task.webSearchMaxFetches ?? config.webSearchMaxFetches,
+							activeResearchBudgets.maxFetchesPerAgent != null &&
+							activeResearchBudgets.maxFetchesPerAgent > 0
+								? Math.min(
+										item.task.webSearchMaxFetches ?? Infinity,
+										activeResearchBudgets.maxFetchesPerAgent,
+								  )
+								: item.task.webSearchMaxFetches ?? config.webSearchMaxFetches,
 					};
 					requests.push(request);
 					const requestPath = path.join(
@@ -687,6 +794,11 @@ export default function (pi: ExtensionAPI) {
 					if (stderr)
 						statuses[index].errorMessage =
 							statuses[index].errorMessage || stderr;
+				}
+
+				// Summary mode: validate coordinator-summary and export artifacts.
+				if (returnMode === "summary") {
+					await validateAndExportSummaryResults(statuses, prepared);
 				}
 
 				const failed = statuses.some((status) => status.state !== "succeeded");

@@ -13,6 +13,8 @@ vi.mock("typebox", () => ({
 		Number: vi.fn((opts: any) => ({ type: "number", ...opts })),
 		Array: vi.fn((item: any, opts: any) => ({ type: "array", item, ...opts })),
 		Optional: vi.fn((item: any) => ({ optional: true, ...item })),
+		Literal: vi.fn((val: any) => ({ literal: val })),
+		Union: vi.fn((items: any, opts: any) => ({ union: items, ...opts })),
 	},
 }));
 
@@ -60,40 +62,28 @@ vi.mock("node:fs", async () => {
 	};
 });
 
+vi.mock("../../deep-research/session.ts", () => ({
+	getActiveResearchBudgets: vi.fn().mockReturnValue({
+		maxSearchesPerAgent: null,
+		maxFetchesPerAgent: null,
+	}),
+	setActiveResearchBudgets: vi.fn(),
+	clearActiveResearchBudgets: vi.fn(),
+}));
+
 vi.mock("node:os", () => ({
 	homedir: vi.fn().mockReturnValue("/home/user"),
 	tmpdir: vi.fn().mockReturnValue("/tmp"),
 }));
 
-vi.mock("./config.ts", () => ({
-	loadSubagentConfiguration: vi.fn().mockReturnValue({
-		config: {
-			maxTasks: 4,
-			defaultTimeoutSeconds: 300,
-			retainArtifacts: "on_failure",
-			childExtensions: [],
-			loadContextFiles: true,
-		},
-		profiles: [
-			{
-				name: "worker",
-				description: "A worker agent",
-				model: "gpt-4o",
-				thinking: "medium",
-				tools: ["read", "edit"],
-				access: "write",
-				timeoutSeconds: 600,
-				systemPrompt: "You are a worker.",
-				filePath: "/agents/worker.md",
-				source: "bundled",
-			},
-		],
-		userConfigPath: "/mock/config.json",
-	}),
-}));
 
 import { execFile } from "node:child_process";
+import * as os from "node:os";
+import piTmuxSubagent from "../index.ts";
+
 import * as fs from "node:fs";
+import * as configMod from "../config.ts";
+import { getActiveResearchBudgets } from "../../deep-research/session.ts";
 import {
 	runCommand,
 	shellQuote,
@@ -108,7 +98,10 @@ import {
 	renderProgress,
 	renderResults,
 	delay,
+	validateAndExportSummaryResults,
+
 	type TaskStatus,
+	type PreparedTask,
 } from "../index.ts";
 
 const mockExecFile = vi.mocked(execFile);
@@ -283,7 +276,7 @@ describe("buildTaskPrompt", () => {
 			expected_output: "Fixed code",
 		};
 
-		const result = buildTaskPrompt(task);
+		const result = buildTaskPrompt(task, "full");
 		expect(result).toContain("# Objective\nFix the bug");
 		expect(result).toContain("# Scope\n- src/bug.ts");
 		expect(result).toContain("# Non-Goals\n- Don't refactor");
@@ -296,7 +289,7 @@ describe("buildTaskPrompt", () => {
 
 	it("uses defaults for missing fields", () => {
 		const task = { objective: "Do something" };
-		const result = buildTaskPrompt(task);
+		const result = buildTaskPrompt(task, "full");
 		expect(result).toContain("# Objective\nDo something");
 		expect(result).toContain(
 			"# Scope\n- Use only the scope needed for the objective.",
@@ -325,7 +318,7 @@ describe("buildTaskPrompt", () => {
 			acceptance_criteria: [],
 			inputs: [],
 		};
-		const result = buildTaskPrompt(task);
+		const result = buildTaskPrompt(task, "full");
 		expect(result).toContain(
 			"# Scope\n- Use only the scope needed for the objective.",
 		);
@@ -750,5 +743,701 @@ describe("delay", () => {
 
 	it("resolves normally without signal", async () => {
 		await expect(delay(10)).resolves.toBeUndefined();
+	});
+});
+
+describe("validateAndExportSummaryResults", () => {
+	const mockRenameSync = vi.fn();
+	const mockWriteFile = vi.mocked(fs.promises.writeFile);
+	const mockMkdir = vi.mocked(fs.promises.mkdir);
+	const mockRm = vi.mocked(fs.promises.rm);
+
+	beforeEach(() => {
+		vi.spyOn(fs, "renameSync").mockImplementation(mockRenameSync);
+		mockWriteFile.mockReset();
+		mockMkdir.mockReset();
+		mockRm.mockReset();
+		mockRenameSync.mockReset();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	function makeStatus(
+		overrides: Partial<TaskStatus> = {},
+	): TaskStatus {
+		return {
+			taskId: "task-1",
+			agent: "scout",
+			state: "succeeded",
+			startedAt: "2024-01-01T00:00:00Z",
+			model: "test-model",
+			result: `<coordinator-summary>
+Status: succeeded
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>`,
+			...overrides,
+		};
+	}
+
+	function makePrepared(
+		overrides: Partial<PreparedTask> = {},
+	): PreparedTask {
+		return {
+			task: { agent: "scout", objective: "test" },
+			profile: {
+				name: "scout",
+				description: "scout",
+				model: "test",
+				tools: [],
+				access: "read",
+				systemPrompt: "prompt",
+				filePath: "/p",
+				source: "bundled",
+			},
+			cwd: "/tmp",
+			timeoutSeconds: 300,
+			taskId: "task-1",
+			...overrides,
+		};
+	}
+
+	it("succeeds when coordinator-summary is present and valid", async () => {
+		const statuses = [makeStatus()];
+		const prepared = [makePrepared()];
+		await validateAndExportSummaryResults(statuses, prepared);
+		expect(statuses[0].state).toBe("succeeded");
+		expect((statuses[0] as any).parsedResult).toBeDefined();
+		expect((statuses[0] as any).parsedResult.summary.status).toBe("succeeded");
+	});
+
+	it("fails when coordinator-summary block is missing", async () => {
+		const statuses = [makeStatus({ result: "no summary here" })];
+		const prepared = [makePrepared()];
+		await validateAndExportSummaryResults(statuses, prepared);
+		expect(statuses[0].state).toBe("failed");
+		expect(statuses[0].errorMessage).toContain(
+			"Structured result validation failed",
+		);
+		expect(statuses[0].errorMessage).toContain(
+			"Missing <coordinator-summary> block",
+		);
+	});
+
+	it("fails when coordinator-summary is malformed (invalid status)", async () => {
+		const result = `<coordinator-summary>
+Status: unknown
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [makePrepared()];
+		await validateAndExportSummaryResults(statuses, prepared);
+		expect(statuses[0].state).toBe("failed");
+		expect(statuses[0].errorMessage).toContain(
+			"invalid Status value",
+		);
+	});
+
+	it("skips non-succeeded tasks", async () => {
+		const statuses = [
+			makeStatus({ state: "failed", errorMessage: "err" }),
+		];
+		const prepared = [makePrepared()];
+		await validateAndExportSummaryResults(statuses, prepared);
+		expect(statuses[0].state).toBe("failed");
+		expect(statuses[0].errorMessage).toBe("err");
+	});
+
+	it("exports artifact atomically when result_path is supplied", async () => {
+		const result = `<coordinator-summary>
+Status: succeeded
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>
+<artifact>artifact payload</artifact>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [
+			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+		];
+		mockWriteFile.mockResolvedValue(undefined as any);
+		mockMkdir.mockResolvedValue(undefined as any);
+		mockRenameSync.mockReturnValue(undefined as any);
+
+		await validateAndExportSummaryResults(statuses, prepared);
+
+		expect(statuses[0].state).toBe("succeeded");
+		expect(mockMkdir).toHaveBeenCalledWith(
+			"/data",
+			{ recursive: true },
+		);
+		expect(mockWriteFile).toHaveBeenCalled();
+		expect(mockRenameSync).toHaveBeenCalledWith(
+			expect.stringContaining(".tmp"),
+			"/data/out.org",
+		);
+	});
+
+	it("does not require artifact when result_path is not supplied", async () => {
+		const result = `<coordinator-summary>
+Status: succeeded
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [makePrepared()];
+		await validateAndExportSummaryResults(statuses, prepared);
+		expect(statuses[0].state).toBe("succeeded");
+		expect(mockWriteFile).not.toHaveBeenCalled();
+	});
+
+	it("fails when artifact is required but missing", async () => {
+		const result = `<coordinator-summary>
+Status: succeeded
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [
+			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+		];
+		await validateAndExportSummaryResults(statuses, prepared);
+		expect(statuses[0].state).toBe("failed");
+		expect(statuses[0].errorMessage).toContain(
+			"Missing <artifact> block",
+		);
+	});
+
+	it("fails the task when export rename fails and cleans up temp", async () => {
+		const result = `<coordinator-summary>
+Status: succeeded
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>
+<artifact>artifact payload</artifact>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [
+			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+		];
+		mockWriteFile.mockResolvedValue(undefined as any);
+		mockMkdir.mockResolvedValue(undefined as any);
+		mockRenameSync.mockImplementation(() => {
+			throw new Error("Permission denied");
+		});
+		mockRm.mockResolvedValue(undefined as any);
+
+		await validateAndExportSummaryResults(statuses, prepared);
+
+		expect(statuses[0].state).toBe("failed");
+		expect(statuses[0].errorMessage).toContain("Result export failed");
+		expect(mockRm).toHaveBeenCalled();
+	});
+
+	it("preserves the target path when export rename fails", async () => {
+		// If the target path already exists, rename failure should not remove it.
+		const result = `<coordinator-summary>
+Status: succeeded
+Outcome: done
+Evidence added: 1
+Key changes: none
+Contradictions/blockers: none
+Recommended next action: proceed
+</coordinator-summary>
+<artifact>artifact payload</artifact>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [
+			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+		];
+		mockWriteFile.mockResolvedValue(undefined as any);
+		mockMkdir.mockResolvedValue(undefined as any);
+		mockRenameSync.mockImplementation(() => {
+			throw new Error("EEXIST");
+		});
+		mockRm.mockResolvedValue(undefined as any);
+
+		await validateAndExportSummaryResults(statuses, prepared);
+
+		expect(statuses[0].state).toBe("failed");
+		// Target path should not have been touched by the cleanup.
+		expect(mockRm).toHaveBeenCalledWith(
+			expect.stringContaining(".tmp"),
+			{ force: true },
+		);
+	});
+
+	it("includes parsed result and result_path on statuses", async () => {
+		const result = `<coordinator-summary>
+Status: partial
+Outcome: partial work
+Evidence added: 2
+Key changes: item1
+Contradictions/blockers: blocker1
+Recommended next action: retry
+</coordinator-summary>
+<artifact>org fragment content</artifact>`;
+		const statuses = [makeStatus({ result })];
+		const prepared = [
+			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+		];
+		await validateAndExportSummaryResults(statuses, prepared);
+		const s = statuses[0] as any;
+		expect(s.parsedResult.summary.status).toBe("partial");
+		expect(s.parsedResult.summary.outcome).toBe("partial work");
+		expect(s.parsedResult.summary.keyChanges).toEqual(["item1"]);
+		expect(s.parsedResult.summary.contradictions).toEqual(["blocker1"]);
+		expect(s.result_path).toBe("/data/out.org");
+	});
+
+	it("schema exposes result_path in the TypeBox TaskItem", () => {
+		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
+			config: {
+				models: {},
+				toolAccess: {},
+				agentDirs: [],
+				maxTasks: 4,
+				defaultTimeoutSeconds: 300,
+				retainArtifacts: "on_failure",
+				childExtensions: [],
+				loadContextFiles: true,
+				webSearchMaxLookups: 0,
+				webSearchMaxFetches: 0,
+			},
+			profiles: [
+				{
+					name: "worker",
+					description: "A worker agent",
+					model: "gpt-4o",
+					thinking: "medium",
+					tools: ["read", "edit"],
+					access: "write",
+					timeoutSeconds: 600,
+					systemPrompt: "You are a worker.",
+					filePath: "/agents/worker.md",
+					source: "bundled",
+				},
+			],
+			userConfigPath: "/mock/config.json",
+		});
+		const registered: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => registered.push(tool),
+		};
+		piTmuxSubagent(mockPi as any);
+		const tool = registered.find((t: any) => t.name === "run_subagents");
+		expect(tool).toBeDefined();
+		// The mocked Type.Object returns the props object directly.
+		// C1: result_path must be present in the schema definition.
+		const paramsSchema = tool!.parameters;
+		expect(paramsSchema).toHaveProperty("tasks");
+		const taskItemSchema = (paramsSchema as any).tasks;
+		expect(taskItemSchema).toBeDefined();
+		const taskItemProps = (taskItemSchema as any).item;
+		expect(taskItemProps).toHaveProperty("result_path");
+	});
+
+	it("rejects a relative result_path upfront", async () => {
+		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
+			config: {
+				models: {},
+				toolAccess: {},
+				agentDirs: [],
+				maxTasks: 4,
+				defaultTimeoutSeconds: 300,
+				retainArtifacts: "on_failure",
+				childExtensions: [],
+				loadContextFiles: true,
+				webSearchMaxLookups: 0,
+				webSearchMaxFetches: 0,
+			},
+			profiles: [
+				{
+					name: "worker",
+					description: "A worker agent",
+					model: "gpt-4o",
+					thinking: "medium",
+					tools: ["read", "edit"],
+					access: "write",
+					timeoutSeconds: 600,
+					systemPrompt: "You are a worker.",
+					filePath: "/agents/worker.md",
+					source: "bundled",
+				},
+			],
+			userConfigPath: "/mock/config.json",
+		});
+		const registered: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => registered.push(tool),
+		};
+		piTmuxSubagent(mockPi as any);
+		const tool = registered.find((t: any) => t.name === "run_subagents");
+		expect(tool).toBeDefined();
+
+		const mockExecFile = vi.mocked(execFile);
+		mockExecFile.mockImplementation((_cmd, _args, _opts, cb) => {
+			if (_cmd === "tmux" && _args?.[0] === "-V") {
+				cb!(null, "3.4.0", "");
+			} else {
+				cb!(new Error("unexpected command"), "", "");
+			}
+			return undefined as any;
+		});
+		const mockAccess = vi.mocked(fs.promises.access);
+		mockAccess.mockResolvedValue(undefined as any);
+		const mockStat = vi.mocked(fs.promises.stat);
+		mockStat.mockResolvedValue({ isDirectory: () => true } as any);
+
+		await expect(
+			tool!.execute(
+				"call-id",
+				{
+					tasks: [
+						{
+							agent: "worker",
+							objective: "test",
+							result_path: "relative/path.org", // not absolute
+						},
+					],
+				},
+				new AbortController().signal,
+				undefined,
+				{ cwd: "/tmp" },
+			),
+		).rejects.toThrow("result_path must be an absolute path");
+	});
+
+	it("accepts an absolute result_path", async () => {
+		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
+			config: {
+				models: {},
+				toolAccess: {},
+				agentDirs: [],
+				maxTasks: 4,
+				defaultTimeoutSeconds: 300,
+				retainArtifacts: "on_failure",
+				childExtensions: [],
+				loadContextFiles: true,
+				webSearchMaxLookups: 0,
+				webSearchMaxFetches: 0,
+			},
+			profiles: [
+				{
+					name: "worker",
+					description: "A worker agent",
+					model: "gpt-4o",
+					thinking: "medium",
+					tools: ["read", "edit"],
+					access: "write",
+					timeoutSeconds: 600,
+					systemPrompt: "You are a worker.",
+					filePath: "/agents/worker.md",
+					source: "bundled",
+				},
+			],
+			userConfigPath: "/mock/config.json",
+		});
+		const registered: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => registered.push(tool),
+		};
+		piTmuxSubagent(mockPi as any);
+		const tool = registered.find((t: any) => t.name === "run_subagents");
+		expect(tool).toBeDefined();
+
+		const mockExecFile = vi.mocked(execFile);
+		mockExecFile.mockImplementation((_cmd, _args, _opts, cb) => {
+			if (_cmd === "tmux" && _args?.[0] === "-V") {
+				cb!(null, "3.4.0", "");
+			} else {
+				cb!(new Error("unexpected command"), "", "");
+			}
+			return undefined as any;
+		});
+		const mockAccess = vi.mocked(fs.promises.access);
+		mockAccess.mockResolvedValue(undefined as any);
+		const mockStat = vi.mocked(fs.promises.stat);
+		mockStat.mockResolvedValue({ isDirectory: () => true } as any);
+		vi.mocked(fs.promises.realpath).mockImplementation(async () => "/tmp");
+		vi.mocked(fs.promises.mkdtemp).mockImplementation(async () => "/tmp/pi-subagent-test");
+		// vi.restoreAllMocks() in this describe's afterEach wipes module-mock
+		// implementations (os.tmpdir etc.) — re-establish what execute() needs.
+		vi.mocked(os.tmpdir).mockReturnValue("/tmp");
+
+		// Should not throw the absolute-path error; any later error is expected.
+		await expect(
+			tool!.execute(
+				"call-id",
+				{
+					tasks: [
+						{
+							agent: "worker",
+							objective: "test",
+							result_path: "/absolute/path.org",
+						},
+					],
+				},
+				new AbortController().signal,
+				undefined,
+				{ cwd: "/tmp" },
+			),
+		).rejects.toThrow("unexpected command");
+	});
+});
+
+describe("active research session budget enforcement", () => {
+	function buildTool() {
+		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
+			config: {
+				models: {},
+				toolAccess: {},
+				agentDirs: [],
+				maxTasks: 4,
+				defaultTimeoutSeconds: 300,
+				retainArtifacts: "on_failure",
+				childExtensions: [],
+				loadContextFiles: true,
+				webSearchMaxLookups: 10,
+				webSearchMaxFetches: 5,
+			},
+			profiles: [
+				{
+					name: "worker",
+					description: "A worker agent",
+					model: "gpt-4o",
+					thinking: "medium",
+					tools: ["read", "edit"],
+					access: "write",
+					timeoutSeconds: 600,
+					systemPrompt: "You are a worker.",
+					filePath: "/agents/worker.md",
+					source: "bundled",
+				},
+			],
+			userConfigPath: "/mock/config.json",
+		});
+		const registered: any[] = [];
+		const mockPi = {
+			registerTool: (tool: any) => registered.push(tool),
+		};
+		piTmuxSubagent(mockPi as any);
+		return registered.find((t: any) => t.name === "run_subagents");
+	}
+
+	function stubTmuxCalls() {
+		const mockExecFile = vi.mocked(execFile);
+		mockExecFile.mockImplementation((_cmd, _args, _opts, cb) => {
+			// -V and new-session must succeed so execute() reaches the requests loop
+			// (request.json gets written there); new-window then rejects, which lets
+			// the test capture the request file and observe the rejection.
+			if (_cmd === "tmux" && (_args?.[0] === "-V" || _args?.[0] === "new-session")) {
+				cb!(null, "3.4.0", "");
+			} else {
+				cb!(new Error("unexpected command"), "", "");
+			}
+			return undefined as any;
+		});
+		vi.mocked(fs.promises.access).mockResolvedValue(undefined as any);
+		vi.mocked(fs.promises.stat).mockResolvedValue({ isDirectory: () => true } as any);
+		vi.mocked(fs.promises.realpath).mockImplementation(async () => "/tmp");
+		vi.mocked(fs.promises.mkdtemp).mockImplementation(async () => "/tmp/pi-subagent-test");
+		vi.mocked(os.tmpdir).mockReturnValue("/tmp");
+		// Terminal status so the finally-block shutdown poll exits immediately
+		// instead of burning its 6s deadline (which exceeds the 5s test timeout).
+		vi.mocked(fs.promises.readFile).mockResolvedValue(
+			JSON.stringify({
+				taskId: "task-1",
+				agent: "worker",
+				state: "succeeded",
+				startedAt: "2024-01-01T00:00:00Z",
+				model: "gpt-4o",
+			}) as any,
+		);
+	}
+
+	function captureRequest(): { webSearchMaxLookups: number; webSearchMaxFetches: number } | null {
+		const writtenFiles = vi.mocked(fs.promises.writeFile).mock.calls;
+		const requestFile = writtenFiles.find(
+			(call: unknown[]) =>
+				String(call[0]).includes("request") && String(call[0]).endsWith(".json"),
+		);
+		if (!requestFile) return null;
+		return JSON.parse(requestFile[1] as string) as { webSearchMaxLookups: number; webSearchMaxFetches: number };
+	}
+
+	beforeEach(() => {
+		vi.mocked(fs.promises.writeFile).mockClear();
+	});
+
+	it("falls back to config defaults when no active research session exists", async () => {
+		vi.mocked(getActiveResearchBudgets).mockReturnValue({
+			maxSearchesPerAgent: null,
+			maxFetchesPerAgent: null,
+		});
+		const tool = buildTool();
+		stubTmuxCalls();
+
+		await expect(
+			tool!.execute(
+				"call-id",
+				{ tasks: [{ agent: "worker", objective: "test" }] },
+				new AbortController().signal,
+				undefined,
+				{ cwd: "/tmp" },
+			),
+		).rejects.toThrow("unexpected command");
+
+		const req = captureRequest();
+		expect(req).not.toBeNull();
+		expect(req!.webSearchMaxLookups).toBe(10); // from config
+		expect(req!.webSearchMaxFetches).toBe(5); // from config
+	});
+
+	it("applies active research budget as hard cap even when task arg is absent", async () => {
+		vi.mocked(getActiveResearchBudgets).mockReturnValue({
+			maxSearchesPerAgent: 3,
+			maxFetchesPerAgent: 2,
+		});
+		const tool = buildTool();
+		stubTmuxCalls();
+
+		await expect(
+			tool!.execute(
+				"call-id",
+				{ tasks: [{ agent: "worker", objective: "test" }] },
+				new AbortController().signal,
+				undefined,
+				{ cwd: "/tmp" },
+			),
+		).rejects.toThrow("unexpected command");
+
+		const req = captureRequest();
+		expect(req).not.toBeNull();
+		expect(req!.webSearchMaxLookups).toBe(3); // active budget cap
+		expect(req!.webSearchMaxFetches).toBe(2); // active budget cap
+	});
+
+	it("BYPASS TEST: task arg cannot exceed a stricter active budget", async () => {
+		// Active session budget is 5 searches, 4 fetches.
+		vi.mocked(getActiveResearchBudgets).mockReturnValue({
+			maxSearchesPerAgent: 5,
+			maxFetchesPerAgent: 4,
+		});
+		const tool = buildTool();
+		stubTmuxCalls();
+
+		await expect(
+			tool!.execute(
+				"call-id",
+				{
+					tasks: [
+						{
+							agent: "worker",
+							objective: "test",
+							webSearchMaxLookups: 100, // task tries to bypass
+							webSearchMaxFetches: 200, // task tries to bypass
+						},
+					],
+				},
+				new AbortController().signal,
+				undefined,
+				{ cwd: "/tmp" },
+			),
+		).rejects.toThrow("unexpected command");
+
+		const req = captureRequest();
+		expect(req).not.toBeNull();
+		// Task arg of 100 must be capped at active budget of 5.
+		expect(req!.webSearchMaxLookups).toBe(5);
+		// Task arg of 200 must be capped at active budget of 4.
+		expect(req!.webSearchMaxFetches).toBe(4);
+	});
+
+	it("honours a looser task arg when no active research session is present", async () => {
+		vi.mocked(getActiveResearchBudgets).mockReturnValue({
+			maxSearchesPerAgent: null,
+			maxFetchesPerAgent: null,
+		});
+		const tool = buildTool();
+		stubTmuxCalls();
+
+		await expect(
+			tool!.execute(
+				"call-id",
+				{
+					tasks: [
+						{
+							agent: "worker",
+							objective: "test",
+							webSearchMaxLookups: 50,
+							webSearchMaxFetches: 25,
+						},
+					],
+				},
+				new AbortController().signal,
+				undefined,
+				{ cwd: "/tmp" },
+			),
+		).rejects.toThrow("unexpected command");
+
+		const req = captureRequest();
+		expect(req).not.toBeNull();
+		// No active session → task arg wins.
+		expect(req!.webSearchMaxLookups).toBe(50);
+		expect(req!.webSearchMaxFetches).toBe(25);
+	});
+
+	it("0 in active budget means unlimited (task arg is respected)", async () => {
+		// 0 = unlimited active budget; task arg should pass through.
+		vi.mocked(getActiveResearchBudgets).mockReturnValue({
+			maxSearchesPerAgent: 0,
+			maxFetchesPerAgent: 0,
+		});
+		const tool = buildTool();
+		stubTmuxCalls();
+
+		await expect(
+			tool!.execute(
+				"call-id",
+				{
+					tasks: [
+						{
+							agent: "worker",
+							objective: "test",
+							webSearchMaxLookups: 7,
+							webSearchMaxFetches: 3,
+						},
+					],
+				},
+				new AbortController().signal,
+				undefined,
+				{ cwd: "/tmp" },
+			),
+		).rejects.toThrow("unexpected command");
+
+		const req = captureRequest();
+		expect(req).not.toBeNull();
+		// Active budget 0 = unlimited, so task arg is not capped.
+		expect(req!.webSearchMaxLookups).toBe(7);
+		expect(req!.webSearchMaxFetches).toBe(3);
 	});
 });

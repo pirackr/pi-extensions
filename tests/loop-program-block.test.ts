@@ -71,3 +71,105 @@ describe("programBlockFor", () => {
 		expect(sig).toBeNull();
 	});
 });
+
+// Prompt-discovery tests: verify agent prompt files contain the required
+// coordinator-summary, artifact, and verification-JSON instructions.
+// These live here because they exercise the same program-block loader path
+// (the loop injects program.v2.md each round; the agent prompts are
+// referenced from that document and must conform to the same contract).
+describe("deep-research prompt contract", () => {
+	const agentsDir = path.resolve("skills/deep-research/agents");
+	const programPath = path.resolve("skills/deep-research/program.v2.md");
+
+	const agentFiles = [
+		"planner.md",
+		"scout.md",
+		"fetcher.md",
+		"judge.md",
+		"citation-agent.md",
+		"source-auditor.md",
+		"contradiction-resolver.md",
+	];
+
+	const verificationAgents = [
+		{ name: "judge", fields: ["version", "runId", "pass", "verdict", "failedChecks", "fixes"] },
+		{ name: "citation-agent", fields: ["version", "runId", "pass", "unsupportedClaims", "misattributedClaims"] },
+		{ name: "source-auditor", fields: ["version", "runId", "pass", "unresolvedReplacements"] },
+		{ name: "contradiction-resolver", fields: ["version", "runId", "pass", "unhandled", "acknowledged"] },
+	];
+
+	describe("program.v2.md", () => {
+		const content = fs.readFileSync(programPath, "utf8");
+
+		it("contains coordinator-summary block reference", () => {
+			expect(content).toMatch(/<coordinator-summary>/);
+		});
+
+		it("contains artifact block reference", () => {
+			expect(content).toMatch(/<artifact>/);
+		});
+
+		it("uses logical role names in run_subagents examples", () => {
+			const logicalRoles = ["planner", "scout", "fetcher", "consolidator", "judge", "citation-agent", "source-auditor", "contradiction-resolver"];
+			const found = new Set<string>();
+			for (const role of logicalRoles) {
+				if (content.match(new RegExp(`agent:\\s*["']${role}["']`, "i"))) found.add(role);
+			}
+			expect(found.size).toBeGreaterThan(0);
+		});
+
+		it("does not contain banned agent-profile literals as run_subagents agents", () => {
+			const banned = ["scout_research", "citation_agent", "source_auditor", "contradiction_resolver"];
+			for (const name of banned) {
+				const pat = new RegExp(`agent:\\s*["']${name}["']`, "i");
+				expect(content, `must not contain agent literal: ${name}`).not.toMatch(pat);
+			}
+		});
+
+		it("does not contain multi-task run_subagents arrays", () => {
+			const multiTask = /tasks:\s*\[\s*\{[\s\S]*?\},\s*\{/i;
+			expect(content).not.toMatch(multiTask);
+		});
+
+		it("contains valid org heading markers", () => {
+			expect(content).toMatch(/\*\*\*\s/);
+		});
+
+		it("does not contain invalid heading level prose", () => {
+			expect(content).not.toMatch(/level-\d+\s+heading/i);
+		});
+
+		it("uses inline [[URL][description]] citations", () => {
+			expect(content).toMatch(/\[\[URL\]\[description\]\]/);
+		});
+
+		it("does not use numbered citation guidance", () => {
+			expect(content).not.toMatch(/\[\s*\d+\s*\]/);
+		});
+	});
+
+	for (const file of agentFiles) {
+		describe(`[${file.replace(".md", "")}]`, () => {
+			const content = fs.readFileSync(path.join(agentsDir, file), "utf8");
+
+			it("contains coordinator-summary block instructions", () => {
+				expect(content).toMatch(/<coordinator-summary>/);
+			});
+
+			it("contains artifact block instructions", () => {
+				expect(content).toMatch(/<artifact>/);
+			});
+		});
+	}
+
+	for (const agent of verificationAgents) {
+		describe(`[${agent.name}] verification JSON schema`, () => {
+			const content = fs.readFileSync(path.join(agentsDir, `${agent.name}.md`), "utf8");
+			for (const field of agent.fields) {
+				it(`references schema field '${field}'`, () => {
+					expect(content).toMatch(new RegExp(field, "i"));
+				});
+			}
+		});
+	}
+});

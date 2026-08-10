@@ -7,6 +7,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { loadSubagentConfiguration } from "./config.ts";
 import { parseCoordinatorResult, renderSummaryResults } from "./render.ts";
+import { getActiveResearchBudgets } from "../deep-research/session.ts";
 
 const MAX_RESULT_BYTES = 50 * 1024;
 const POLL_INTERVAL_MS = 250;
@@ -661,7 +662,8 @@ export default function (pi: ExtensionAPI) {
 				sessionCreated = true;
 				emitUpdate();
 
-				for (let index = 0; index < prepared.length; index++) {
+				const activeResearchBudgets = getActiveResearchBudgets();
+			for (let index = 0; index < prepared.length; index++) {
 					const item = prepared[index];
 					const promptPath = path.join(
 						runDir,
@@ -701,9 +703,23 @@ export default function (pi: ExtensionAPI) {
 						childExtensions: config.childExtensions,
 						loadContextFiles: config.loadContextFiles,
 						webSearchMaxLookups:
-							item.task.webSearchMaxLookups ?? config.webSearchMaxLookups,
+							// Active budget 0 = unlimited (falls through to task arg / config);
+							// a positive active budget is a hard cap task args cannot exceed.
+							activeResearchBudgets.maxSearchesPerAgent != null &&
+							activeResearchBudgets.maxSearchesPerAgent > 0
+								? Math.min(
+										item.task.webSearchMaxLookups ?? Infinity,
+										activeResearchBudgets.maxSearchesPerAgent,
+								  )
+								: item.task.webSearchMaxLookups ?? config.webSearchMaxLookups,
 						webSearchMaxFetches:
-							item.task.webSearchMaxFetches ?? config.webSearchMaxFetches,
+							activeResearchBudgets.maxFetchesPerAgent != null &&
+							activeResearchBudgets.maxFetchesPerAgent > 0
+								? Math.min(
+										item.task.webSearchMaxFetches ?? Infinity,
+										activeResearchBudgets.maxFetchesPerAgent,
+								  )
+								: item.task.webSearchMaxFetches ?? config.webSearchMaxFetches,
 					};
 					requests.push(request);
 					const requestPath = path.join(

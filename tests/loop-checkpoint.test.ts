@@ -1,8 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import piLoop from "../extensions/loop/index.ts";
+
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+	getAgentDir: vi.fn().mockReturnValue("/mock/agent/dir"),
+	parseFrontmatter: vi.fn(),
+}));
 
 // Integration coverage for research_checkpoint's honest source counting
 // (Task 3 of deep-research-program-v2). These tests drive the REAL extension

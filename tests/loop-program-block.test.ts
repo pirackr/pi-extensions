@@ -4,6 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { programBlockFor } from "../extensions/loop/index.ts";
 
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+	getAgentDir: vi.fn().mockReturnValue("/mock/agent/dir"),
+	parseFrontmatter: vi.fn(),
+}));
+
 // The loop re-injects the program file every round today, which is the
 // biggest fixed context tax on long runs. programBlockFor gates that:
 // when the file is unchanged since the last full injection, the coordinator

@@ -6,26 +6,19 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { loadDeepResearchConfiguration } from "../deep-research/config.ts";
+import {
+	setActiveResearchBudgets,
+	getActiveResearchBudgets,
+	clearActiveResearchBudgets,
+} from "../deep-research/session.ts";
 
 const CUSTOM_TYPE = "pi-loop";
 const EVENT_TYPE = "pi-loop-event";
 const DEFAULT_MAX_ROUNDS = 10;
 const DEFAULT_NO_PROGRESS_TURNS = 3;
-
-const PROFILE_MAX_ROUNDS = {
-	quick: 10,
-	standard: 8,
-	intermediate: 10,
-	deep: 20,
-};
-
-const RESEARCH_THRESHOLDS = {
-	quick: { minRounds: 10, minSources: 15, maxRounds: 10 },
-	standard: { minRounds: 8, minSources: 30, maxRounds: 8 },
-	intermediate: { minRounds: 10, minSources: 40, maxRounds: 10 },
-	deep: { minRounds: 20, minSources: 250, maxRounds: 20 },
-};
 
 // Bundled deep-research program — the default program for /research. Resolved
 // from this module's location so it works regardless of cwd.
@@ -70,6 +63,10 @@ interface LoopState {
 	workingDir?: string; // /research only — scratch dir under /tmp for run artifacts
 	programSig?: string; // mtime:size of the program file at the last full injection
 	programInjected?: boolean; // true once the full program text has been embedded
+	/** Hard cap on web_lookup calls per research subagent (0 = unlimited). */
+	maxSearchesPerAgent?: number;
+	/** Hard cap on fetch_web calls per research subagent (0 = unlimited). */
+	maxFetchesPerAgent?: number;
 }
 
 let loop: LoopState | null = null;
@@ -77,6 +74,30 @@ let continuationQueued = false;
 let activeLoopThisTurn = false;
 let continuationTurnPending = false; // a continuation was emitted; the next turn is continuation-owned
 let thisTurnIsContinuation = false;
+
+// Resolved deep-research configuration — loaded once at extension init time.
+// Used by /research for profile thresholds and default per-agent budgets.
+let researchConfig:
+	| {
+			defaults: {
+				maxSearchesPerAgent: number;
+				maxFetchesPerAgent: number;
+				scoreThreshold: number;
+				retryCount: number;
+			};
+			profiles: Record<
+				string,
+				{
+					minRounds: number;
+					maxRounds: number;
+					minSources: number;
+					maxScouts: number;
+					maxFetchers: number;
+					verification: string[];
+				}
+			>;
+	  }
+	| null = null;
 
 // --- helpers ---------------------------------------------------------------
 
@@ -176,6 +197,10 @@ function normalizeState(s: LoopState): LoopState {
 		noProgressTurns: s.noProgressTurns ?? DEFAULT_NO_PROGRESS_TURNS,
 		noProgressCount: s.noProgressCount ?? 0,
 		lastFingerprint: s.lastFingerprint ?? null,
+		// Default to 0 (unlimited) when absent on restore — matches the packaged
+		// config defaults and keeps legacy runs working without explicit values.
+		maxSearchesPerAgent: s.maxSearchesPerAgent ?? 0,
+		maxFetchesPerAgent: s.maxFetchesPerAgent ?? 0,
 	};
 }
 
@@ -200,7 +225,9 @@ function parseArgs(args: string): {
 				key === "max-rounds" ||
 				key === "tokens" ||
 				key === "no-progress" ||
-				key === "profile"
+				key === "profile" ||
+				key === "max-searches-per-agent" ||
+				key === "max-fetches-per-agent"
 			) {
 				if (val && !val.startsWith("--")) {
 					flags[key] = val;
@@ -441,11 +468,14 @@ interface LoopCommandOptions {
 	defaultProgram: string; // absolute, or cwd-relative
 	defaultMaxRounds: number;
 	isResearch?: boolean;
+	/** Resolved deep-research config (only used when isResearch is true). */
+	config?: NonNullable<typeof researchConfig>;
 }
 
 function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 	const cmd = opts.command;
-	const usage = `/${cmd} [--program <path>] [--max-rounds N] [--tokens N] [--no-progress N|off]${opts.isResearch ? " [--profile <p>] [--yes]" : ""} <mission>`;
+	const config = opts.config;
+	const usage = `/${cmd} [--program <path>] [--max-rounds N] [--tokens N] [--no-progress N|off]${opts.isResearch ? " [--profile <p>] [--max-searches-per-agent N] [--max-fetches-per-agent N] [--yes]" : ""} <mission>`;
 
 	pi.registerCommand(cmd, {
 		description: `${opts.description} Usage: ${usage}`,
@@ -507,6 +537,9 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 				loop = null;
 				persist(pi, ctx);
 				emit(pi, "cleared", previous);
+				// Clear the active research budget so subsequent run_subagents
+				// calls fall back to config defaults / task args.
+				if (opts.isResearch) clearActiveResearchBudgets();
 				return;
 			}
 
@@ -522,15 +555,15 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 			if (!Number.isFinite(maxRounds) || maxRounds < 1) {
 				ctx.ui.notify(
 					`Invalid --max-rounds: ${flags["max-rounds"]}`,
-					"warning",
-				);
+					"warning");
 				return;
 			}
 			// research: profile flag overrides default maxRounds
 			let profile: string | undefined;
 			if (opts.isResearch && flags.profile) {
 				const p = flags.profile;
-				if (!Object.hasOwn(PROFILE_MAX_ROUNDS, p)) {
+				const profileCfg = config?.profiles[p];
+				if (!profileCfg) {
 					ctx.ui.notify(
 						`Unknown profile: ${p}. Use quick, standard, intermediate, or deep.`,
 						"warning",
@@ -540,9 +573,43 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 				profile = p;
 				// Only override if user didn't explicitly set --max-rounds
 				if (!flags["max-rounds"]) {
-					maxRounds = PROFILE_MAX_ROUNDS[p as keyof typeof PROFILE_MAX_ROUNDS];
+					maxRounds = profileCfg.maxRounds;
 				}
 			}
+			// Validate and resolve per-agent search/fetch budgets.
+			// 0 = unlimited; negative or non-integer values are rejected.
+			function parseNonNegInt(val: string | undefined, flag: string): number | null {
+				if (val === undefined) return null;
+				const n = Number(val);
+				if (!Number.isInteger(n) || n < 0) {
+					ctx.ui.notify(
+						`Invalid ${flag}: ${val} (must be a non-negative integer; 0 = unlimited)`,
+						"warning",
+					);
+					return NaN; // sentinel to abort
+				}
+				return n;
+			}
+			const maxSearchesPerAgentParsed = parseNonNegInt(
+				flags["max-searches-per-agent"],
+				"--max-searches-per-agent",
+			);
+			if (Number.isNaN(maxSearchesPerAgentParsed)) return;
+			const maxFetchesPerAgentParsed = parseNonNegInt(
+				flags["max-fetches-per-agent"],
+				"--max-fetches-per-agent",
+			);
+			if (Number.isNaN(maxFetchesPerAgentParsed)) return;
+
+			const maxSearchesPerAgent =
+				maxSearchesPerAgentParsed ??
+				config?.defaults.maxSearchesPerAgent ??
+				0;
+			const maxFetchesPerAgent =
+				maxFetchesPerAgentParsed ??
+				config?.defaults.maxFetchesPerAgent ??
+				0;
+
 			let tokenBudget: number | null = null;
 			if (flags.tokens) {
 				tokenBudget = Number(flags.tokens);
@@ -606,16 +673,19 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 				lastFingerprint: null,
 				profile,
 				workingDir,
+				maxSearchesPerAgent,
+				maxFetchesPerAgent,
 				status: "active",
 				updatedAt: now,
 			};
 			// research: plan approval gate — confirm before burning tokens
-			if (opts.isResearch) {
+			if (opts.isResearch && config) {
 				const yesFlag =
 					flags["yes"] !== undefined || flags["no-confirm"] !== undefined;
 				if (!yesFlag && ctx.ui?.confirm) {
-					const profile = loop!.profile ?? "standard";
-					const planSummary = `🔬 Deep research: "${truncate(mission)}"\nProfile: ${profile} · Max rounds: ${maxRounds} · Min sources: ${RESEARCH_THRESHOLDS[profile as keyof typeof RESEARCH_THRESHOLDS]?.minSources ?? 20}\nOutput: ${loop!.workingDir ?? "n/a"}\n\nSub-questions and search strategy will be defined in Round 0. Do you want to proceed?`;
+					const p = loop!.profile ?? "standard";
+					const pc = config.profiles[p];
+					const planSummary = `🔬 Deep research: "${truncate(mission)}"\nProfile: ${p}\nRounds: ${pc.minRounds}–${pc.maxRounds} · Min sources: ${pc.minSources}\nScouts: ${pc.maxScouts} · Fetchers: ${pc.maxFetchers}\nSearches/agent: ${maxSearchesPerAgent} · Fetches/agent: ${maxFetchesPerAgent}\nVerification: ${pc.verification.join(", ")}\nTokens: ${loop!.tokenBudget ?? "none"}\nOutput: ${loop!.workingDir ?? "n/a"}\n\nSub-questions and search strategy will be defined in Round 0. Do you want to proceed?`;
 					const approved = await ctx.ui.confirm(
 						"Start deep research?",
 						planSummary,
@@ -631,6 +701,8 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 					}
 				}
 				// If no UI or --yes flag, proceed silently (headless safety)
+				// Set the active research budget so run_subagents caps child processes.
+				setActiveResearchBudgets(maxSearchesPerAgent, maxFetchesPerAgent);
 			}
 			persist(pi, ctx);
 			emit(pi, "active", loop, { triggerTurn: ctx.isIdle() });
@@ -641,6 +713,26 @@ function registerLoopCommand(pi: ExtensionAPI, opts: LoopCommandOptions) {
 // --- extension -------------------------------------------------------------
 
 export default function piLoop(pi: ExtensionAPI) {
+	// Load deep-research configuration once at init time. This is the source
+	// of truth for profile thresholds and default per-agent budgets.
+	try {
+		const packageRoot = path.resolve(
+			path.dirname(fileURLToPath(import.meta.url)),
+			"../..",
+		);
+		const agentDir = getAgentDir();
+		const loaded = loadDeepResearchConfiguration(packageRoot, agentDir);
+		researchConfig = {
+			defaults: loaded.defaults,
+			profiles: loaded.profiles,
+		};
+	} catch {
+		// Config loading failure is fatal for /research but /loop still works.
+		// The error will have been thrown during extension registration and
+		// surfaced to the user via pi's load error handling.
+		researchConfig = null;
+	}
+
 	pi.registerTool({
 		name: "complete_loop",
 		label: "Complete Loop",
@@ -689,6 +781,8 @@ export default function piLoop(pi: ExtensionAPI) {
 			loop = { ...loop, status: "complete", updatedAt: Date.now() };
 			persist(pi, ctx);
 			emit(pi, "complete", loop);
+			// Clear the active research budget on completion.
+			if (loop.commandName === "research") clearActiveResearchBudgets();
 			return {
 				content: [{ type: "text", text: JSON.stringify({ loop }, null, 2) }],
 				details: { loop },
@@ -697,8 +791,9 @@ export default function piLoop(pi: ExtensionAPI) {
 	});
 
 	// research_checkpoint — code-enforced floor against premature conclusion.
-	// Thresholds are hardcoded (source-of-truth); program.md mirrors them for
-	// the agent's reference. If they diverge, the extension wins.
+	// Thresholds are loaded from config/deep-research.json (source-of-truth);
+	// program.md mirrors them for the agent's reference. If they diverge, the
+	// extension wins.
 	pi.registerTool({
 		name: "research_checkpoint",
 		label: "Research Checkpoint",
@@ -736,9 +831,8 @@ export default function piLoop(pi: ExtensionAPI) {
 				contradictions?: string[];
 			};
 			const profile = p.profile ?? "standard";
-			const thresholds =
-				RESEARCH_THRESHOLDS[profile as keyof typeof RESEARCH_THRESHOLDS];
-			if (!thresholds) {
+			const profileCfg = researchConfig?.profiles[profile];
+			if (!profileCfg) {
 				return {
 					content: [
 						{
@@ -754,13 +848,13 @@ export default function piLoop(pi: ExtensionAPI) {
 			const counted = countNotesSources(loop?.workingDir);
 			const { sources, hint } = effectiveSourceCount(reported, counted);
 			const issues: string[] = [];
-			if (round < thresholds.minRounds) {
-				issues.push(`⛔ min rounds: ${round}/${thresholds.minRounds}`);
+			if (round < profileCfg.minRounds) {
+				issues.push(`⛔ min rounds: ${round}/${profileCfg.minRounds}`);
 			}
-			if (sources < thresholds.minSources) {
-				issues.push(`⛔ min sources: ${sources}/${thresholds.minSources}`);
+			if (sources < profileCfg.minSources) {
+				issues.push(`⛔ min sources: ${sources}/${profileCfg.minSources}`);
 			}
-			if (round >= thresholds.maxRounds) {
+			if (round >= profileCfg.maxRounds) {
 				return {
 					content: [
 						{
@@ -801,14 +895,15 @@ export default function piLoop(pi: ExtensionAPI) {
 	});
 
 	// /research — deep-research front-end of the same engine: defaults to the
-	// bundled research program. Profile-based maxRounds set from PROFILE_MAX_ROUNDS.
+	// bundled research program. Profile-based maxRounds set from config.
 	registerLoopCommand(pi, {
 		command: "research",
 		description:
 			"Deep research: run the bundled research program (program.v2.md) as an autonomous loop — searches, fetches sources, and compiles report.org (claim-level citations) into a per-run scratch directory under /tmp.",
 		defaultProgram: RESEARCH_PROGRAM_PATH,
-		defaultMaxRounds: PROFILE_MAX_ROUNDS.standard,
+		defaultMaxRounds: researchConfig?.profiles.standard?.maxRounds ?? 8,
 		isResearch: true,
+		config: researchConfig ?? undefined,
 	});
 
 	// NOTE: these handlers are registered here exactly once. pi loads each
@@ -826,6 +921,14 @@ export default function piLoop(pi: ExtensionAPI) {
 		thisTurnIsContinuation = false;
 		syncLoopTools(pi);
 		updateStatus(ctx);
+		// Re-populate the active research budget from the restored loop state
+		// so that a reload does not silently drop the cap.
+		if (loop?.commandName === "research") {
+			setActiveResearchBudgets(
+				loop.maxSearchesPerAgent ?? 0,
+				loop.maxFetchesPerAgent ?? 0,
+			);
+		}
 		const reason = (event as { reason?: string }).reason;
 		if (loop?.status === "active" && reason === "reload") {
 			// Reload pauses an active loop so it does not silently resume.
@@ -874,6 +977,8 @@ export default function piLoop(pi: ExtensionAPI) {
 					triggerTurn: true,
 					deliverAs: "followUp",
 				});
+				// Clear the active research budget when the run ends.
+				if (state.commandName === "research") clearActiveResearchBudgets();
 				return;
 			}
 		}
@@ -920,6 +1025,8 @@ export default function piLoop(pi: ExtensionAPI) {
 					triggerTurn: true,
 					deliverAs: "followUp",
 				});
+				// Clear the active research budget when the run ends.
+				if (state.commandName === "research") clearActiveResearchBudgets();
 				return;
 			}
 		}

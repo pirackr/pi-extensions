@@ -5,12 +5,14 @@
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
+	closeSync,
 	mkdirSync,
 	openSync,
 	readFileSync,
 	renameSync,
 	unlinkSync,
 	writeFileSync,
+	writeSync,
 } from "node:fs";
 import { resolve } from "node:path";
 
@@ -140,7 +142,7 @@ function acquireLock(lockFile: string): Promise<number> {
 				const fd = openSync(lockFile, "wx", 0o600);
 				// Write PID + timestamp for stale-lock detection.
 				const payload = `${process.pid}:${Date.now()}\n`;
-				writeFileSync(lockFile, payload, { flag: "w" });
+				writeSync(fd, payload);
 				return fd;
 			} catch (err: unknown) {
 				// If the lock file exists but is stale, remove and retry.
@@ -158,8 +160,12 @@ function acquireLock(lockFile: string): Promise<number> {
 				try {
 					const content = readFileSync(lockFile, "utf-8");
 					const parts = content.trim().split(":");
+					// Treat empty or unparseable locks as FRESH — a crashed
+					// process leaves a valid timestamp (written at create-time);
+					// an empty/partially-written file means another process is
+					// in the middle of creating it and we must not steal it.
 					const lockTime = parts.length >= 2 ? Number(parts[1]) : 0;
-					if (Date.now() - lockTime > STALE_LOCK_MS) {
+					if (lockTime > 0 && Date.now() - lockTime > STALE_LOCK_MS) {
 						// Steal the stale lock.
 						unlinkSync(lockFile);
 						continue;
@@ -183,7 +189,7 @@ function acquireLock(lockFile: string): Promise<number> {
 function releaseLock(lockFile: string, fd: number): void {
 	try {
 		if (fd >= 0) {
-			// Closing the fd is sufficient; the file will be cleaned up on next acquire.
+			closeSync(fd);
 		}
 	} catch {
 		// Best-effort.

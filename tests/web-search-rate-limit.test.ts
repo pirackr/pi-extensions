@@ -598,7 +598,9 @@ describe("rate-limit.ts — spawned-process concurrency", async () => {
 			const { createHash } = await import("node:crypto");
 			const fp = createHash("sha256").update("key-a").digest("hex");
 			const lockFile = path.join(stateDir, `tinyfish.search.${fp}.lock`);
-			fs.writeFileSync(lockFile, `0:0\n`, "utf-8");
+			// Simulate a lock left by a dead process: valid PID but timestamp is stale.
+			fs.writeFileSync(lockFile, `0:${Date.now() - 60000}\n`, "utf-8");
+			fs.chmodSync(lockFile, 0o600);
 			const r = await workerReserve(stateDir, "tinyfish", "search", "key-a");
 			expect(r).toBe("allowed");
 		});
@@ -612,6 +614,34 @@ describe("rate-limit.ts — spawned-process concurrency", async () => {
 			fs.writeFileSync(lockFile, `0:${Date.now()}\n`, "utf-8");
 			const r = await workerReserve(stateDir, "tinyfish", "search", "key-a");
 			expect(r).toBe("allowed");
+		});
+	});
+
+	describe("empty/partial lock safety", () => {
+		it("empty lock file is NOT stolen — returns contention", async () => {
+			writeTestConfig(stateDir, 1, 60000);
+			const { createHash } = await import("node:crypto");
+			const fp = createHash("sha256").update("key-empty-lock").digest("hex");
+			const lockFile = path.join(stateDir, `tinyfish.search.${fp}.lock`);
+			// Pre-create an empty lock file (simulates the window between
+			// openSync("wx") and the payload write — the exact race condition).
+			fs.writeFileSync(lockFile, "", "utf-8");
+			fs.chmodSync(lockFile, 0o600);
+			const r = await workerReserve(stateDir, "tinyfish", "search", "key-empty-lock");
+			// Must not steal an empty lock; should time out and return contention.
+			expect(r).toBe("contention");
+		});
+
+		it("partially-written lock file is NOT stolen — returns contention", async () => {
+			writeTestConfig(stateDir, 1, 60000);
+			const { createHash } = await import("node:crypto");
+			const fp = createHash("sha256").update("key-partial-lock").digest("hex");
+			const lockFile = path.join(stateDir, `tinyfish.search.${fp}.lock`);
+			// Pre-create a partially-written lock (PID without colon/timestamp).
+			fs.writeFileSync(lockFile, `${process.pid}`, "utf-8");
+			fs.chmodSync(lockFile, 0o600);
+			const r = await workerReserve(stateDir, "tinyfish", "search", "key-partial-lock");
+			expect(r).toBe("contention");
 		});
 	});
 

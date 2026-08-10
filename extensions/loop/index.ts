@@ -9,6 +9,7 @@ import type {
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { loadDeepResearchConfiguration } from "../deep-research/config.ts";
+import { parseScoreTable } from "../deep-research/verification.ts";
 import {
 	setActiveResearchBudgets,
 	getActiveResearchBudgets,
@@ -67,6 +68,14 @@ interface LoopState {
 	maxSearchesPerAgent?: number;
 	/** Hard cap on fetch_web calls per research subagent (0 = unlimited). */
 	maxFetchesPerAgent?: number;
+	/** Persisted checkpoint evidence — invalidated when a new research round starts. */
+	checkpointEvidence?: {
+		runId: string;
+		round: number;
+		sources: number;
+		scoreState: { satisfied: boolean; belowThreshold: string[] };
+		verdict: "PROCEED" | "PROCEED_WITH_GAPS" | "CONTINUE";
+	};
 }
 
 let loop: LoopState | null = null;
@@ -201,6 +210,8 @@ function normalizeState(s: LoopState): LoopState {
 		// config defaults and keeps legacy runs working without explicit values.
 		maxSearchesPerAgent: s.maxSearchesPerAgent ?? 0,
 		maxFetchesPerAgent: s.maxFetchesPerAgent ?? 0,
+		// checkpointEvidence is cleared on restore; only valid for the current run.
+		checkpointEvidence: undefined,
 	};
 }
 
@@ -449,6 +460,10 @@ function queueContinuation(
 			rounds: loop.rounds + 1,
 			programSig: prog.sig ?? undefined,
 			programInjected: true,
+			// Invalidate any stale checkpoint evidence when a new research round starts.
+			...(loop.commandName === "research"
+				? { checkpointEvidence: undefined }
+				: {}),
 			updatedAt: Date.now(),
 		};
 		persist(pi, ctx);
@@ -823,7 +838,7 @@ export default function piLoop(pi: ExtensionAPI) {
 				}),
 			),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const p = params as {
 				profile?: string;
 				round?: number;
@@ -844,9 +859,59 @@ export default function piLoop(pi: ExtensionAPI) {
 				};
 			}
 			const round = p.round ?? 0;
+			// Round 0 is planning only — do not checkpoint before round 1.
+			if (round < 1) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: "Round 0 is planning only — do not checkpoint before round 1.",
+						},
+					],
+					isError: true,
+				};
+			}
 			const reported = p.totalSources ?? 0;
 			const counted = countNotesSources(loop?.workingDir);
 			const { sources, hint } = effectiveSourceCount(reported, counted);
+
+			// Parse score.md if we have a working directory.
+			let scoreState = { satisfied: true as const, belowThreshold: [] as string[] };
+			const scoreThreshold = researchConfig?.defaults.scoreThreshold ?? 80;
+			if (loop?.workingDir) {
+				const scorePath = path.join(loop.workingDir, "score.md");
+				if (!fs.existsSync(scorePath)) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `🔴 CONTINUE — score.md not found at ${scorePath}. Create it with the required table (5–8 unique IDs, integer scores 0–100) and re-run.`,
+							},
+						],
+					};
+				}
+				try {
+					const parsed = parseScoreTable(fs.readFileSync(scorePath, "utf8"));
+					const below: string[] = [];
+					for (const row of parsed.rows) {
+						if (row.score < scoreThreshold) {
+							below.push(row.id);
+						}
+					}
+					scoreState = { satisfied: below.length === 0, belowThreshold: below };
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					return {
+						content: [
+							{
+								type: "text",
+								text: `🔴 CONTINUE — score.md malformed: ${msg} — repair it and re-run.`,
+							},
+						],
+					};
+				}
+			}
+
 			const issues: string[] = [];
 			if (round < profileCfg.minRounds) {
 				issues.push(`⛔ min rounds: ${round}/${profileCfg.minRounds}`);
@@ -854,15 +919,37 @@ export default function piLoop(pi: ExtensionAPI) {
 			if (sources < profileCfg.minSources) {
 				issues.push(`⛔ min sources: ${sources}/${profileCfg.minSources}`);
 			}
-			if (round >= profileCfg.maxRounds) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `🟢 PROCEED (max rounds reached). Flag ${issues.length} gap(s) in Uncertainties & Gaps.${hint}`,
+			if (!scoreState.satisfied) {
+				issues.push(
+					`⛔ score threshold (${scoreThreshold}): ${scoreState.belowThreshold.join(", ")}`,
+				);
+			}
+
+			// Use loop.maxRounds (CLI-override-aware) as the effective cap.
+			const effectiveMax = loop?.maxRounds ?? profileCfg.maxRounds;
+			if (round >= effectiveMax) {
+				// Cap reached: return PROCEED_WITH_GAPS if there are unmet floors,
+				// otherwise PROCEED.
+				const verdict = issues.length > 0 ? "PROCEED_WITH_GAPS" : "PROCEED";
+				const verdictText =
+					verdict === "PROCEED_WITH_GAPS"
+						? `🟢 PROCEED_WITH_GAPS — max rounds reached with ${issues.length} gap(s): ${issues.join("; ")}.${hint}`
+						: `🟢 PROCEED — criteria met.${hint}`;
+				if (loop) {
+					loop = {
+						...loop,
+						checkpointEvidence: {
+							runId: loop.id,
+							round,
+							sources,
+							scoreState,
+							verdict,
 						},
-					],
-				};
+						updatedAt: Date.now(),
+					};
+					persist(pi, ctx);
+				}
+				return { content: [{ type: "text", text: verdictText }] };
 			}
 			if (issues.length > 0) {
 				return {
@@ -873,6 +960,21 @@ export default function piLoop(pi: ExtensionAPI) {
 						},
 					],
 				};
+			}
+			const proceedVerdict = "PROCEED" as const;
+			if (loop) {
+				loop = {
+					...loop,
+					checkpointEvidence: {
+						runId: loop.id,
+						round,
+						sources,
+						scoreState,
+						verdict: proceedVerdict,
+					},
+					updatedAt: Date.now(),
+				};
+				persist(pi, ctx);
 			}
 			return {
 				content: [

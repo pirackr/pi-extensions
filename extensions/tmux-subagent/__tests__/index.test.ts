@@ -80,9 +80,8 @@ vi.mock("node:os", () => ({
 // rejects by default (preserving the existing tests' expectations), and the
 // shared-session/lifecycle tests below override it with controlled results.
 vi.mock("../tmux.ts", async () => {
-	const actual = await vi.importActual<typeof import("../tmux.ts")>(
-		"../tmux.ts",
-	);
+	const actual =
+		await vi.importActual<typeof import("../tmux.ts")>("../tmux.ts");
 	return {
 		...actual,
 		launchBatch: vi.fn().mockRejectedValue(new Error("unexpected command")),
@@ -92,7 +91,6 @@ vi.mock("../tmux.ts", async () => {
 		closeParentWindow: vi.fn().mockResolvedValue(undefined),
 	};
 });
-
 
 import { execFile } from "node:child_process";
 import * as os from "node:os";
@@ -116,14 +114,10 @@ import {
 	renderResults,
 	delay,
 	validateAndExportSummaryResults,
-
 	type TaskStatus,
 	type PreparedTask,
 } from "../index.ts";
-import {
-	cancelPanes,
-	launchBatch,
-} from "../tmux.ts";
+import { cancelPanes, launchBatch } from "../tmux.ts";
 
 const mockExecFile = vi.mocked(execFile);
 const mockExistsSync = vi.mocked(fs.existsSync);
@@ -626,7 +620,12 @@ describe("renderProgress", () => {
 	});
 
 	it("shows 'starting' when no statuses", () => {
-		const result = renderProgress("pi-subagents", "w/g/pi-extensions", "@3", []);
+		const result = renderProgress(
+			"pi-subagents",
+			"w/g/pi-extensions",
+			"@3",
+			[],
+		);
 		expect(result).toContain("Progress: starting");
 	});
 
@@ -641,7 +640,12 @@ describe("renderProgress", () => {
 			},
 		];
 
-		const result = renderProgress("pi-subagents", "w/g/pi-extensions", "@3", statuses);
+		const result = renderProgress(
+			"pi-subagents",
+			"w/g/pi-extensions",
+			"@3",
+			statuses,
+		);
 		expect(result).toContain("1 running");
 		expect(result).toContain("task-1 (worker) [gpt-4o] running");
 	});
@@ -798,9 +802,7 @@ describe("validateAndExportSummaryResults", () => {
 		vi.restoreAllMocks();
 	});
 
-	function makeStatus(
-		overrides: Partial<TaskStatus> = {},
-	): TaskStatus {
+	function makeStatus(overrides: Partial<TaskStatus> = {}): TaskStatus {
 		return {
 			taskId: "task-1",
 			agent: "scout",
@@ -819,9 +821,7 @@ Recommended next action: proceed
 		};
 	}
 
-	function makePrepared(
-		overrides: Partial<PreparedTask> = {},
-	): PreparedTask {
+	function makePrepared(overrides: Partial<PreparedTask> = {}): PreparedTask {
 		return {
 			task: { agent: "scout", objective: "test" },
 			profile: {
@@ -876,15 +876,11 @@ Recommended next action: proceed
 		const prepared = [makePrepared()];
 		await validateAndExportSummaryResults(statuses, prepared);
 		expect(statuses[0].state).toBe("failed");
-		expect(statuses[0].errorMessage).toContain(
-			"invalid Status value",
-		);
+		expect(statuses[0].errorMessage).toContain("invalid Status value");
 	});
 
 	it("skips non-succeeded tasks", async () => {
-		const statuses = [
-			makeStatus({ state: "failed", errorMessage: "err" }),
-		];
+		const statuses = [makeStatus({ state: "failed", errorMessage: "err" })];
 		const prepared = [makePrepared()];
 		await validateAndExportSummaryResults(statuses, prepared);
 		expect(statuses[0].state).toBe("failed");
@@ -903,7 +899,13 @@ Recommended next action: proceed
 <artifact>artifact payload</artifact>`;
 		const statuses = [makeStatus({ result })];
 		const prepared = [
-			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+			makePrepared({
+				task: {
+					agent: "scout",
+					objective: "test",
+					result_path: "/data/out.org",
+				},
+			}),
 		];
 		mockWriteFile.mockResolvedValue(undefined as any);
 		mockMkdir.mockResolvedValue(undefined as any);
@@ -912,10 +914,7 @@ Recommended next action: proceed
 		await validateAndExportSummaryResults(statuses, prepared);
 
 		expect(statuses[0].state).toBe("succeeded");
-		expect(mockMkdir).toHaveBeenCalledWith(
-			"/data",
-			{ recursive: true },
-		);
+		expect(mockMkdir).toHaveBeenCalledWith("/data", { recursive: true });
 		expect(mockWriteFile).toHaveBeenCalled();
 		expect(mockRenameSync).toHaveBeenCalledWith(
 			expect.stringContaining(".tmp"),
@@ -950,13 +949,17 @@ Recommended next action: proceed
 </coordinator-summary>`;
 		const statuses = [makeStatus({ result })];
 		const prepared = [
-			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+			makePrepared({
+				task: {
+					agent: "scout",
+					objective: "test",
+					result_path: "/data/out.org",
+				},
+			}),
 		];
 		await validateAndExportSummaryResults(statuses, prepared);
 		expect(statuses[0].state).toBe("failed");
-		expect(statuses[0].errorMessage).toContain(
-			"Missing <artifact> block",
-		);
+		expect(statuses[0].errorMessage).toContain("Missing <artifact> block");
 	});
 
 	it("fails the task when export rename fails and cleans up temp", async () => {
@@ -971,7 +974,13 @@ Recommended next action: proceed
 <artifact>artifact payload</artifact>`;
 		const statuses = [makeStatus({ result })];
 		const prepared = [
-			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+			makePrepared({
+				task: {
+					agent: "scout",
+					objective: "test",
+					result_path: "/data/out.org",
+				},
+			}),
 		];
 		mockWriteFile.mockResolvedValue(undefined as any);
 		mockMkdir.mockResolvedValue(undefined as any);
@@ -1000,7 +1009,13 @@ Recommended next action: proceed
 <artifact>artifact payload</artifact>`;
 		const statuses = [makeStatus({ result })];
 		const prepared = [
-			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+			makePrepared({
+				task: {
+					agent: "scout",
+					objective: "test",
+					result_path: "/data/out.org",
+				},
+			}),
 		];
 		mockWriteFile.mockResolvedValue(undefined as any);
 		mockMkdir.mockResolvedValue(undefined as any);
@@ -1013,10 +1028,9 @@ Recommended next action: proceed
 
 		expect(statuses[0].state).toBe("failed");
 		// Target path should not have been touched by the cleanup.
-		expect(mockRm).toHaveBeenCalledWith(
-			expect.stringContaining(".tmp"),
-			{ force: true },
-		);
+		expect(mockRm).toHaveBeenCalledWith(expect.stringContaining(".tmp"), {
+			force: true,
+		});
 	});
 
 	it("includes parsed result and result_path on statuses", async () => {
@@ -1031,7 +1045,13 @@ Recommended next action: retry
 <artifact>org fragment content</artifact>`;
 		const statuses = [makeStatus({ result })];
 		const prepared = [
-			makePrepared({ task: { agent: "scout", objective: "test", result_path: "/data/out.org" } }),
+			makePrepared({
+				task: {
+					agent: "scout",
+					objective: "test",
+					result_path: "/data/out.org",
+				},
+			}),
 		];
 		await validateAndExportSummaryResults(statuses, prepared);
 		const s = statuses[0] as any;
@@ -1215,7 +1235,9 @@ Recommended next action: retry
 		const mockStat = vi.mocked(fs.promises.stat);
 		mockStat.mockResolvedValue({ isDirectory: () => true } as any);
 		vi.mocked(fs.promises.realpath).mockImplementation(async () => "/tmp");
-		vi.mocked(fs.promises.mkdtemp).mockImplementation(async () => "/tmp/pi-subagent-test");
+		vi.mocked(fs.promises.mkdtemp).mockImplementation(
+			async () => "/tmp/pi-subagent-test",
+		);
 		// vi.restoreAllMocks() in this describe's afterEach wipes module-mock
 		// implementations (os.tmpdir etc.) — re-establish what execute() needs.
 		vi.mocked(os.tmpdir).mockReturnValue("/tmp");
@@ -1288,7 +1310,10 @@ describe("active research session budget enforcement", () => {
 			// -V and new-session must succeed so execute() reaches the requests loop
 			// (request.json gets written there); new-window then rejects, which lets
 			// the test capture the request file and observe the rejection.
-			if (_cmd === "tmux" && (_args?.[0] === "-V" || _args?.[0] === "new-session")) {
+			if (
+				_cmd === "tmux" &&
+				(_args?.[0] === "-V" || _args?.[0] === "new-session")
+			) {
 				cb!(null, "3.4.0", "");
 			} else {
 				cb!(new Error("unexpected command"), "", "");
@@ -1296,9 +1321,13 @@ describe("active research session budget enforcement", () => {
 			return undefined as any;
 		});
 		vi.mocked(fs.promises.access).mockResolvedValue(undefined as any);
-		vi.mocked(fs.promises.stat).mockResolvedValue({ isDirectory: () => true } as any);
+		vi.mocked(fs.promises.stat).mockResolvedValue({
+			isDirectory: () => true,
+		} as any);
 		vi.mocked(fs.promises.realpath).mockImplementation(async () => "/tmp");
-		vi.mocked(fs.promises.mkdtemp).mockImplementation(async () => "/tmp/pi-subagent-test");
+		vi.mocked(fs.promises.mkdtemp).mockImplementation(
+			async () => "/tmp/pi-subagent-test",
+		);
 		vi.mocked(os.tmpdir).mockReturnValue("/tmp");
 		vi.mocked(os.homedir).mockReturnValue("/home/user");
 		// Terminal status so the finally-block shutdown poll exits immediately
@@ -1314,14 +1343,21 @@ describe("active research session budget enforcement", () => {
 		);
 	}
 
-	function captureRequest(): { webSearchMaxLookups: number; webSearchMaxFetches: number } | null {
+	function captureRequest(): {
+		webSearchMaxLookups: number;
+		webSearchMaxFetches: number;
+	} | null {
 		const writtenFiles = vi.mocked(fs.promises.writeFile).mock.calls;
 		const requestFile = writtenFiles.find(
 			(call: unknown[]) =>
-				String(call[0]).includes("request") && String(call[0]).endsWith(".json"),
+				String(call[0]).includes("request") &&
+				String(call[0]).endsWith(".json"),
 		);
 		if (!requestFile) return null;
-		return JSON.parse(requestFile[1] as string) as { webSearchMaxLookups: number; webSearchMaxFetches: number };
+		return JSON.parse(requestFile[1] as string) as {
+			webSearchMaxLookups: number;
+			webSearchMaxFetches: number;
+		};
 	}
 
 	beforeEach(() => {

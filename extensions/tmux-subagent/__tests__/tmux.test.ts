@@ -51,9 +51,9 @@ describe("shortenPath", () => {
 	});
 
 	it("normalizes trailing slashes and redundant segments", () => {
-		expect(shortenPath("/home/user/Working//grinder/pi-extensions/", HOME)).toBe(
-			"w/g/pi-extensions",
-		);
+		expect(
+			shortenPath("/home/user/Working//grinder/pi-extensions/", HOME),
+		).toBe("w/g/pi-extensions");
 	});
 
 	it("produces only lowercase alphanumerics, hyphens, and slashes", () => {
@@ -102,9 +102,9 @@ describe("slugifyTopic", () => {
 
 describe("topicFromFirstPrompt", () => {
 	it("slugs the first line of the prompt", () => {
-		expect(topicFromFirstPrompt("Fix the auth bug in the gateway\nmore text")).toBe(
-			"fix-the-auth-bug-in-the-gateway",
-		);
+		expect(
+			topicFromFirstPrompt("Fix the auth bug in the gateway\nmore text"),
+		).toBe("fix-the-auth-bug-in-the-gateway");
 	});
 
 	it("falls back to a later part when the first line is blank", () => {
@@ -280,7 +280,9 @@ describe("ensureSharedSession", () => {
 		expect(created).toContain(SHARED_SESSION);
 		expect(created).toContain("-n");
 		expect(created).toContain(BOOTSTRAP_WINDOW);
-		expect(created.join(" ")).toContain("node runner.mjs --control pi-subagents");
+		expect(created.join(" ")).toContain(
+			"node runner.mjs --control pi-subagents",
+		);
 	});
 
 	it("does nothing when the shared session already exists", async () => {
@@ -320,7 +322,8 @@ describe("ensureSharedSession", () => {
 		const calls: string[][] = [];
 		const exec = fakeExecutor(calls, (args) => {
 			if (args[0] === "has-session") throw new Error("no server running");
-			if (args[0] === "new-session") throw new Error("duplicate session: pi-subagents");
+			if (args[0] === "new-session")
+				throw new Error("duplicate session: pi-subagents");
 			throw new Error(`unexpected: ${args.join(" ")}`);
 		});
 		await expect(
@@ -506,7 +509,9 @@ describe("ensureParentWindow", () => {
 			isAlive: () => false,
 		});
 		expect(window.id).toBe("@8");
-		expect(calls.some((c) => c[0] === "kill-window" && c[2] === "@2")).toBe(true);
+		expect(calls.some((c) => c[0] === "kill-window" && c[2] === "@2")).toBe(
+			true,
+		);
 		expect(calls.some((c) => c[0] === "new-window")).toBe(true);
 	});
 });
@@ -537,9 +542,15 @@ describe("reclaimStaleWindows", () => {
 		const calls: string[][] = [];
 		const exec = fakeExecutor(
 			calls,
-			windowsHandler(["@4|orphan|sess-orphan||/home/user/Working/grinder/pi-extensions"]),
+			windowsHandler([
+				"@4|orphan|sess-orphan||/home/user/Working/grinder/pi-extensions",
+			]),
 		);
-		await reclaimStaleWindows(exec, "/home/user/Working/grinder/pi-extensions", () => false);
+		await reclaimStaleWindows(
+			exec,
+			"/home/user/Working/grinder/pi-extensions",
+			() => false,
+		);
 		expect(calls.some((c) => c[0] === "kill-window")).toBe(false);
 	});
 });
@@ -549,7 +560,12 @@ describe("renameWindow", () => {
 		const calls: string[][] = [];
 		const exec = fakeExecutor(calls, () => ({ stdout: "", stderr: "" }));
 		await renameWindow(exec, "@3", "w/g/pi-extensions-newtopic");
-		expect(calls[0]).toEqual(["rename-window", "-t", "@3", "w/g/pi-extensions-newtopic"]);
+		expect(calls[0]).toEqual([
+			"rename-window",
+			"-t",
+			"@3",
+			"w/g/pi-extensions-newtopic",
+		]);
 	});
 });
 
@@ -587,12 +603,14 @@ function makeFakePane(id: string, dead = false): FakePane {
 	return { id, dead, runId: "", taskId: "" };
 }
 
-function createFakeTmux(init: {
-	sessionExists?: boolean;
-	windows?: FakeWindow[];
-	failSplitAt?: number;
-	failLayout?: boolean;
-} = {}) {
+function createFakeTmux(
+	init: {
+		sessionExists?: boolean;
+		windows?: FakeWindow[];
+		failSplitAt?: number;
+		failLayout?: boolean;
+	} = {},
+) {
 	const calls: string[][] = [];
 	const windows: FakeWindow[] = init.windows ?? [];
 	let sessionExists = init.sessionExists ?? false;
@@ -602,8 +620,10 @@ function createFakeTmux(init: {
 	const seededWindowNumbers = windows
 		.map((w) => Number(w.id.slice(1)))
 		.filter((n) => Number.isInteger(n));
-	let nextPaneId = (seededPaneNumbers.length ? Math.max(...seededPaneNumbers) : 0) + 1;
-	let nextWindowId = (seededWindowNumbers.length ? Math.max(...seededWindowNumbers) : 0) + 1;
+	let nextPaneId =
+		(seededPaneNumbers.length ? Math.max(...seededPaneNumbers) : 0) + 1;
+	let nextWindowId =
+		(seededWindowNumbers.length ? Math.max(...seededWindowNumbers) : 0) + 1;
 	let splitCount = 0;
 
 	const findWindowByTarget = (target: string): FakeWindow | null => {
@@ -766,7 +786,13 @@ function batchOptions(overrides: Record<string, unknown> = {}) {
 function layoutLeaves(
 	layout: string,
 ): Array<{ id: number; x: number; y: number; w: number; h: number }> {
-	const leaves: Array<{ id: number; x: number; y: number; w: number; h: number }> = [];
+	const leaves: Array<{
+		id: number;
+		x: number;
+		y: number;
+		w: number;
+		h: number;
+	}> = [];
 	const re = /(\d+)x(\d+),(\d+),(\d+),(\d+)/g;
 	let m: RegExpExecArray | null;
 	while ((m = re.exec(layout))) {
@@ -857,7 +883,10 @@ describe("cancelPanes", () => {
 		const calls: string[][] = [];
 		const exec = fakeExecutor(calls, () => ({ stdout: "", stderr: "" }));
 		await cancelPanes(exec, ["%1", "%2"]);
-		expect(calls).toEqual([["kill-pane", "-t", "%1"], ["kill-pane", "-t", "%2"]]);
+		expect(calls).toEqual([
+			["kill-pane", "-t", "%1"],
+			["kill-pane", "-t", "%2"],
+		]);
 	});
 });
 
@@ -885,7 +914,9 @@ describe("launchBatch", () => {
 		const splits = fake.calls.filter((c) => c[0] === "split-window");
 		expect(splits).toHaveLength(2);
 		// Every created pane carries run/task metadata.
-		const meta = fake.calls.filter((c) => c[0] === "set-option" && c[1] === "-p");
+		const meta = fake.calls.filter(
+			(c) => c[0] === "set-option" && c[1] === "-p",
+		);
 		expect(meta.length).toBeGreaterThanOrEqual(3);
 	});
 
@@ -921,7 +952,9 @@ describe("launchBatch", () => {
 		expect(kills).toHaveLength(1);
 		expect(kills[0][2]).toBe("%3");
 		// No pane of the other parent window is ever touched.
-		expect(fake.calls.some((c) => c.includes("%1") || c.includes("%2"))).toBe(false);
+		expect(fake.calls.some((c) => c.includes("%1") || c.includes("%2"))).toBe(
+			false,
+		);
 	});
 
 	it("rolls over an all-dead window by anchoring the first new pane first", async () => {
@@ -970,9 +1003,13 @@ describe("launchBatch", () => {
 		);
 		expect(result2.window.id).toBe("@2");
 		// The first batch's live pane is preserved (no kill of %3).
-		expect(fake.calls.some((c) => c[0] === "kill-pane" && c[2] === "%3")).toBe(false);
+		expect(fake.calls.some((c) => c[0] === "kill-pane" && c[2] === "%3")).toBe(
+			false,
+		);
 		// Lock acquisition and release bracket every mutation.
-		const firstLock = fake.calls.findIndex((c) => c[0] === "wait-for" && c[1] === "-L");
+		const firstLock = fake.calls.findIndex(
+			(c) => c[0] === "wait-for" && c[1] === "-L",
+		);
 		const lastUnlock = fake.calls.findIndex(
 			(c, i, arr) =>
 				c[0] === "wait-for" && c[1] === "-U" && i === arr.length - 1,
@@ -1023,7 +1060,10 @@ describe("launchBatch", () => {
 	it("removes the bootstrap window it created, even on failure", async () => {
 		const fake = createFakeTmux({ failSplitAt: 1 });
 		await expect(
-			launchBatch(execFake(fake), batchOptions({ panes: [spec(), spec({ order: 1 })] })),
+			launchBatch(
+				execFake(fake),
+				batchOptions({ panes: [spec(), spec({ order: 1 })] }),
+			),
 		).rejects.toThrow("split failed");
 		const bootstrapKills = fake.calls.filter(
 			(c) => c[0] === "kill-window" && c.includes(BOOTSTRAP_WINDOW),
@@ -1034,9 +1074,14 @@ describe("launchBatch", () => {
 	it("releases the mutation lock after a failed batch", async () => {
 		const fake = createFakeTmux({ failSplitAt: 1 });
 		await expect(
-			launchBatch(execFake(fake), batchOptions({ panes: [spec(), spec({ order: 1 })] })),
+			launchBatch(
+				execFake(fake),
+				batchOptions({ panes: [spec(), spec({ order: 1 })] }),
+			),
 		).rejects.toThrow("split failed");
-		expect(fake.calls.some((c) => c[0] === "wait-for" && c[1] === "-U")).toBe(true);
+		expect(fake.calls.some((c) => c[0] === "wait-for" && c[1] === "-U")).toBe(
+			true,
+		);
 	});
 
 	it("passes the task command shell-safe as a single argument", async () => {

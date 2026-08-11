@@ -427,7 +427,9 @@ describe("runTaskMode", () => {
 		const stream = runWithTranscript();
 		expect(stream).toBeDefined();
 		const calls = vi.mocked(fs.createWriteStream).mock.calls;
-		const transcriptCall = calls.find((call) => String(call[0]).includes("transcript"));
+		const transcriptCall = calls.find((call) =>
+			String(call[0]).includes("transcript"),
+		);
 		expect(transcriptCall![1]).toMatchObject({ flags: "a", mode: 0o600 });
 	});
 
@@ -439,7 +441,9 @@ describe("runTaskMode", () => {
 				assistantMessageEvent: { type: "text_delta", delta: "Hello world" },
 			}) + "\n",
 		);
-		emitStdout(JSON.stringify({ type: "tool_execution_start", toolName: "read" }) + "\n");
+		emitStdout(
+			JSON.stringify({ type: "tool_execution_start", toolName: "read" }) + "\n",
+		);
 		emitStdout(
 			JSON.stringify({
 				type: "tool_execution_end",
@@ -460,7 +464,9 @@ describe("runTaskMode", () => {
 			}) + "\n",
 		);
 		emitClose(0);
-		const writes = stream.write.mock.calls.map((call: unknown[]) => String(call[0]));
+		const writes = stream.write.mock.calls.map((call: unknown[]) =>
+			String(call[0]),
+		);
 		const joined = writes.join("");
 		expect(joined).toContain("Hello world");
 		expect(joined).toContain("[read]");

@@ -90,7 +90,10 @@ export function shortenPath(cwd: string, homedir = osHomedir()): string {
  * trim edge hyphens, and bound the length without ending on a hyphen.
  * Returns "" when the input has no usable ASCII alphanumerics.
  */
-export function slugifyTopic(topic: string, maxLength = DEFAULT_MAX_TOPIC_LENGTH): string {
+export function slugifyTopic(
+	topic: string,
+	maxLength = DEFAULT_MAX_TOPIC_LENGTH,
+): string {
 	const slug = topic
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
@@ -144,7 +147,9 @@ export function buildWindowName(
 		const budget = Math.max(1, maxName - shortPath.length - 1);
 		topic = topic.slice(0, budget).replace(/-+$/, "");
 		const name = topic ? `${shortPath}-${topic}` : shortPath;
-		return name.length <= maxName ? name : name.slice(0, maxName).replace(/-+$/, "");
+		return name.length <= maxName
+			? name
+			: name.slice(0, maxName).replace(/-+$/, "");
 	}
 	if (shortPath) return shortPath;
 	if (topic) return topic;
@@ -305,7 +310,7 @@ export async function withMutationLock<T>(
 	}
 }
 
-const WINDOW_FORMAT = 
+const WINDOW_FORMAT =
 	"#{window_id}|#{window_name}|#{@pi_parent_session_id}|#{@pi_parent_pid}|#{@pi_parent_cwd}";
 
 function parseWindowLine(line: string): ParentWindow {
@@ -460,7 +465,13 @@ export async function ensureParentWindow(
 	await exec(["set-window-option", "-t", target, "automatic-rename", "off"]);
 
 	const id = await getWindowId(exec, target);
-	return { id, name: opts.name, sessionId: opts.sessionId, pid: String(opts.pid), cwd };
+	return {
+		id,
+		name: opts.name,
+		sessionId: opts.sessionId,
+		pid: String(opts.pid),
+		cwd,
+	};
 }
 
 /** Rename a parent window by immutable id; metadata is untouched. */
@@ -523,8 +534,7 @@ export interface PaneInfo {
 	taskId: string;
 }
 
-const PANE_FORMAT = 
-	"#{pane_id}|#{pane_dead}|#{@pi_run_id}|#{@pi_task_id}";
+const PANE_FORMAT = "#{pane_id}|#{pane_dead}|#{@pi_run_id}|#{@pi_task_id}";
 
 async function listPanes(
 	exec: TmuxExecutor,
@@ -542,7 +552,12 @@ async function listPanes(
 		.filter(Boolean)
 		.map((line) => {
 			const [id, dead, runId, taskId] = line.split("|");
-			return { id, dead: dead === "1", runId: runId ?? "", taskId: taskId ?? "" };
+			return {
+				id,
+				dead: dead === "1",
+				runId: runId ?? "",
+				taskId: taskId ?? "",
+			};
 		});
 }
 
@@ -558,7 +573,12 @@ async function getWindowSize(
 		"#{window_width}x#{window_height}",
 	]);
 	const [width, height] = stdout.trim().split("x").map(Number);
-	if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) {
+	if (
+		!Number.isInteger(width) ||
+		!Number.isInteger(height) ||
+		width < 1 ||
+		height < 1
+	) {
 		throw new Error(`could not read window size for ${windowId}: ${stdout}`);
 	}
 	return { width, height };
@@ -706,12 +726,7 @@ export async function launchBatch(
 				for (const pane of dead) await killPane(exec, pane.id);
 				const remaining = existingPanes.filter((pane) => !pane.dead);
 				const anchor = remaining.at(-1) ?? live[0];
-				await createRemainingPanes(
-					exec,
-					opts.panes,
-					anchor.id,
-					createdIds,
-				);
+				await createRemainingPanes(exec, opts.panes, anchor.id, createdIds);
 			} else {
 				// Every old pane is dead: create a replacement anchor from a dead
 				// pane before removing the final old pane so the window survives.
@@ -740,7 +755,8 @@ export async function launchBatch(
 					);
 					await exec(["select-layout", "-t", window.id, layout]);
 				} catch {
-					layoutWarning = "could not apply balanced layout; using tiled fallback";
+					layoutWarning =
+						"could not apply balanced layout; using tiled fallback";
 					try {
 						await exec(["select-layout", "-t", window.id, "tiled"]);
 					} catch {
@@ -762,7 +778,12 @@ export async function launchBatch(
 		}
 	});
 
-	return { session: SHARED_SESSION, window: window!, paneIds: createdIds, layoutWarning };
+	return {
+		session: SHARED_SESSION,
+		window: window!,
+		paneIds: createdIds,
+		layoutWarning,
+	};
 }
 
 function paneIdNumber(paneId: string): number {
@@ -842,7 +863,9 @@ export function buildLayoutString(
 		for (let row = 0; row < rows; row++) {
 			const height = rowBase + (rowRemainder > 0 ? 1 : 0);
 			if (rowRemainder > 0) rowRemainder--;
-			leaves.push(`${colWidth}x${height},${xoff},${yoff},${paneIds[paneIndex++]}`);
+			leaves.push(
+				`${colWidth}x${height},${xoff},${yoff},${paneIds[paneIndex++]}`,
+			);
 			yoff += height + 1;
 		}
 

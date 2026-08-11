@@ -77,9 +77,8 @@ vi.mock("node:os", () => ({
 // The tmux orchestration module is replaced: the tool must drive everything
 // through launchBatch/cancelPanes, never by issuing raw tmux session commands.
 vi.mock("../tmux.ts", async () => {
-	const actual = await vi.importActual<typeof import("../tmux.ts")>(
-		"../tmux.ts",
-	);
+	const actual =
+		await vi.importActual<typeof import("../tmux.ts")>("../tmux.ts");
 	return {
 		...actual,
 		launchBatch: vi.fn(),
@@ -149,9 +148,13 @@ describe("shared tmux integration", () => {
 
 	function stubBasicFs() {
 		vi.mocked(fs.promises.access).mockResolvedValue(undefined as any);
-		vi.mocked(fs.promises.stat).mockResolvedValue({ isDirectory: () => true } as any);
+		vi.mocked(fs.promises.stat).mockResolvedValue({
+			isDirectory: () => true,
+		} as any);
 		vi.mocked(fs.promises.realpath).mockImplementation(async () => "/tmp");
-		vi.mocked(fs.promises.mkdtemp).mockImplementation(async () => "/tmp/pi-subagent-test");
+		vi.mocked(fs.promises.mkdtemp).mockImplementation(
+			async () => "/tmp/pi-subagent-test",
+		);
 		vi.mocked(os.tmpdir).mockReturnValue("/tmp");
 		vi.mocked(os.homedir).mockReturnValue("/home/user");
 		vi.mocked(fs.promises.mkdir).mockResolvedValue(undefined as any);
@@ -242,7 +245,9 @@ describe("shared tmux integration", () => {
 		expect(launchCall.panes).toHaveLength(1);
 		expect(launchCall.panes[0].taskId).toBe("task-1");
 		// No per-batch session or per-agent window is ever created.
-		const tmuxCalls = vi.mocked(execFile).mock.calls.filter((c) => c[0] === "tmux");
+		const tmuxCalls = vi
+			.mocked(execFile)
+			.mock.calls.filter((c) => c[0] === "tmux");
 		expect(tmuxCalls.some((c) => c[1]?.includes("new-session"))).toBe(false);
 		expect(tmuxCalls.some((c) => c[1]?.includes("new-window"))).toBe(false);
 		// Compatibility fields survive in the details.
@@ -276,9 +281,9 @@ describe("shared tmux integration", () => {
 		for (const call of transcriptMkdirs) {
 			expect((call[1] as any).mode).toBe(0o700);
 		}
-		expect(transcriptMkdirs.some((c) => String(c[0]).includes("/sess-1/"))).toBe(
-			true,
-		);
+		expect(
+			transcriptMkdirs.some((c) => String(c[0]).includes("/sess-1/")),
+		).toBe(true);
 
 		const written = vi.mocked(fs.promises.writeFile).mock.calls;
 		const requestFile = written.find((call) =>
@@ -299,7 +304,10 @@ describe("shared tmux integration", () => {
 		// never: run artifacts are removed after the run.
 		await tool!.execute(
 			"call-id",
-			{ tasks: [{ agent: "worker", objective: "test" }], retain_artifacts: "never" },
+			{
+				tasks: [{ agent: "worker", objective: "test" }],
+				retain_artifacts: "never",
+			},
 			new AbortController().signal,
 			undefined,
 			sessionCtx(),
@@ -313,7 +321,10 @@ describe("shared tmux integration", () => {
 		mockRm.mockClear();
 		const ok = await tool!.execute(
 			"call-id",
-			{ tasks: [{ agent: "worker", objective: "test" }], retain_artifacts: "always" },
+			{
+				tasks: [{ agent: "worker", objective: "test" }],
+				retain_artifacts: "always",
+			},
 			new AbortController().signal,
 			undefined,
 			sessionCtx(),
@@ -340,10 +351,10 @@ describe("shared tmux integration", () => {
 				sessionCtx(),
 			),
 		).rejects.toThrow("Subagent run cancelled");
-		expect(vi.mocked(cancelPanes)).toHaveBeenCalledWith(
-			expect.anything(),
-			["%5", "%6"],
-		);
+		expect(vi.mocked(cancelPanes)).toHaveBeenCalledWith(expect.anything(), [
+			"%5",
+			"%6",
+		]);
 	});
 
 	it("supervisor timeout cancels only the panes launched by that call", async () => {
@@ -369,10 +380,10 @@ describe("shared tmux integration", () => {
 			// Profile timeout 600s + 15s supervisor margin.
 			await vi.advanceTimersByTimeAsync(620_000);
 			const result = await promise;
-			expect(vi.mocked(cancelPanes)).toHaveBeenCalledWith(
-				expect.anything(),
-				["%5", "%6"],
-			);
+			expect(vi.mocked(cancelPanes)).toHaveBeenCalledWith(expect.anything(), [
+				"%5",
+				"%6",
+			]);
 			const statuses = (result as any).details.results;
 			expect(statuses[0].state).toBe("timed_out");
 		} finally {
@@ -382,7 +393,9 @@ describe("shared tmux integration", () => {
 
 	it("session_info_changed renames the metadata-matched window", async () => {
 		const { onCalls } = setupSharedTool();
-		const handler = onCalls.find(([event]) => event === "session_info_changed")![1];
+		const handler = onCalls.find(
+			([event]) => event === "session_info_changed",
+		)![1];
 		vi.mocked(findParentWindow).mockResolvedValue({
 			id: "@3",
 			name: "tmp-observability",

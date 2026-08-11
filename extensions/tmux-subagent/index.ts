@@ -212,7 +212,7 @@ export function buildTaskPrompt(
 	if (returnMode === "summary") {
 		const resultFormatLines = [
 			"# Result Format",
-			"When return_mode is \"summary\", your output MUST include a <coordinator-summary> block with these exact fields:",
+			'When return_mode is "summary", your output MUST include a <coordinator-summary> block with these exact fields:',
 			"- Status: succeeded | partial | blocked | failed",
 			"- Outcome: one-sentence result",
 			"- Evidence added: count or none",
@@ -340,8 +340,10 @@ export function renderTmuxInfo(details: SubagentDetails): string {
 		`Window: ${details.windowName} (${details.windowId})`,
 		`Attach: ${details.attachCommand}`,
 	];
-	if (details.layoutWarning) lines.push(`Layout warning: ${details.layoutWarning}`);
-	if (details.transcriptDir) lines.push(`Transcripts: ${details.transcriptDir}`);
+	if (details.layoutWarning)
+		lines.push(`Layout warning: ${details.layoutWarning}`);
+	if (details.transcriptDir)
+		lines.push(`Transcripts: ${details.transcriptDir}`);
 	return lines.join("\n");
 }
 
@@ -452,16 +454,16 @@ export async function validateAndExportSummaryResults(
 				try {
 					fs.renameSync(tmpPath, task.result_path);
 				} catch (renameError) {
-					await fs.promises
-						.rm(tmpPath, { force: true })
-						.catch(() => undefined);
+					await fs.promises.rm(tmpPath, { force: true }).catch(() => undefined);
 					statuses[index].state = "failed";
-					statuses[index].errorMessage = `Result export failed: ${renameError instanceof Error ? renameError.message : String(renameError)}`;
+					statuses[index].errorMessage =
+						`Result export failed: ${renameError instanceof Error ? renameError.message : String(renameError)}`;
 				}
 			}
 		} catch (error) {
 			statuses[index].state = "failed";
-			statuses[index].errorMessage = `Structured result validation failed: ${error instanceof Error ? error.message : String(error)}`;
+			statuses[index].errorMessage =
+				`Structured result validation failed: ${error instanceof Error ? error.message : String(error)}`;
 		}
 	}
 }
@@ -692,7 +694,10 @@ export default function (pi: ExtensionAPI) {
 				transcriptRoot,
 				parentSessionId.replace(/[^A-Za-z0-9._-]/g, "_"),
 			);
-			const transcriptDir = path.join(transcriptParentDir, path.basename(runDir));
+			const transcriptDir = path.join(
+				transcriptParentDir,
+				path.basename(runDir),
+			);
 			await fs.promises.mkdir(transcriptParentDir, {
 				recursive: true,
 				mode: 0o700,
@@ -730,15 +735,11 @@ export default function (pi: ExtensionAPI) {
 					: `tmux attach -t ${session}`;
 
 			const emitUpdate = () => {
-				onUpdate?.({					content: [
+				onUpdate?.({
+					content: [
 						{
 							type: "text",
-							text: renderProgress(
-								session,
-								windowName,
-								windowId,
-								statuses,
-							),
+							text: renderProgress(session, windowName, windowId, statuses),
 						},
 					],
 					details: {
@@ -819,16 +820,16 @@ export default function (pi: ExtensionAPI) {
 								? Math.min(
 										item.task.webSearchMaxLookups ?? Infinity,
 										activeResearchBudgets.maxSearchesPerAgent,
-								  )
-								: item.task.webSearchMaxLookups ?? config.webSearchMaxLookups,
+									)
+								: (item.task.webSearchMaxLookups ?? config.webSearchMaxLookups),
 						webSearchMaxFetches:
 							activeResearchBudgets.maxFetchesPerAgent != null &&
 							activeResearchBudgets.maxFetchesPerAgent > 0
 								? Math.min(
 										item.task.webSearchMaxFetches ?? Infinity,
 										activeResearchBudgets.maxFetchesPerAgent,
-								  )
-								: item.task.webSearchMaxFetches ?? config.webSearchMaxFetches,
+									)
+								: (item.task.webSearchMaxFetches ?? config.webSearchMaxFetches),
 					};
 					requests.push(request);
 					const requestPath = path.join(

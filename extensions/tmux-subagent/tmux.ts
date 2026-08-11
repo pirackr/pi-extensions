@@ -81,7 +81,7 @@ export function shortenPath(cwd: string, homedir = osHomedir()): string {
 		.slice(0, -1)
 		.map((s) => firstAlphanumeric(s))
 		.join("/");
-	const finalSegment = slugifySegment(segments[segments.length - 1]);
+	const finalSegment = slugifySegment(segments.at(-1) ?? "");
 	return `${ancestors}/${finalSegment}`;
 }
 
@@ -198,4 +198,284 @@ export function paneGridPosition(
 		column++;
 	}
 	return { column, row: index - seen };
+}
+
+// ---------------------------------------------------------------------------
+// Shared session and window lifecycle (Task 2)
+// ---------------------------------------------------------------------------
+
+export const SHARED_SESSION = "pi-subagents";
+export const MUTATION_LOCK = "pi-subagents-mutation";
+export const BOOTSTRAP_WINDOW = "__bootstrap";
+
+export const META_SESSION_ID = "@pi_parent_session_id";
+export const META_PID = "@pi_parent_pid";
+export const META_CWD = "@pi_parent_cwd";
+
+export interface TmuxResult {
+	stdout: string;
+	stderr: string;
+}
+
+/** A tmux command executor; rejects with an Error on non-zero exit. */
+export type TmuxExecutor = (args: string[]) => Promise<TmuxResult>;
+
+export interface ParentWindow {
+	/** Immutable tmux window id, e.g. "@3". */
+	id: string;
+	/** Display name (may collide across parents). */
+	name: string;
+	/** Pi session id stored in window metadata. */
+	sessionId: string;
+	/** Owning Pi process id, when recorded. */
+	pid?: string;
+	/** Normalized owning project path, when recorded. */
+	cwd?: string;
+}
+
+export interface SharedSessionState {
+	created: boolean;
+	reused: boolean;
+}
+
+function isDuplicateSession(error: unknown): boolean {
+	return error instanceof Error && /duplicate session/i.test(error.message);
+}
+
+function normalizePath(cwd: string): string {
+	return path.resolve(cwd);
+}
+
+/** Whether the shared session exists (any tmux error means it does not). */
+export async function sessionExists(exec: TmuxExecutor): Promise<boolean> {
+	try {
+		await exec(["has-session", "-t", SHARED_SESSION]);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Ensure the shared `pi-subagents` session exists. When absent it is created
+ * with a transient `__bootstrap` window running the control-mode runner. A
+ * duplicate-session error from a concurrent creator is treated as reuse after
+ * re-checking the session.
+ */
+export async function ensureSharedSession(
+	exec: TmuxExecutor,
+	opts: { cwd: string; controlCommand: string },
+): Promise<SharedSessionState> {
+	if (await sessionExists(exec)) return { created: false, reused: true };
+	try {
+		await exec([
+			"new-session",
+			"-d",
+			"-s",
+			SHARED_SESSION,
+			"-n",
+			BOOTSTRAP_WINDOW,
+			"-c",
+			opts.cwd,
+			opts.controlCommand,
+		]);
+		return { created: true, reused: false };
+	} catch (error) {
+		if (isDuplicateSession(error) && (await sessionExists(exec))) {
+			return { created: false, reused: true };
+		}
+		throw error;
+	}
+}
+
+/**
+ * Serialize shared tmux mutations. The lock is released in a finally path so
+ * it is released after both success and failure. A crashed client releases the
+ * server-side lock automatically when its connection drops.
+ */
+export async function withMutationLock<T>(
+	exec: TmuxExecutor,
+	fn: () => Promise<T>,
+): Promise<T> {
+	await exec(["wait-for", "-L", MUTATION_LOCK]);
+	try {
+		return await fn();
+	} finally {
+		await exec(["wait-for", "-U", MUTATION_LOCK]).catch(() => undefined);
+	}
+}
+
+const WINDOW_FORMAT = 
+	"#{window_id}|#{window_name}|#{@pi_parent_session_id}|#{@pi_parent_pid}|#{@pi_parent_cwd}";
+
+function parseWindowLine(line: string): ParentWindow {
+	const [id, name, sessionId, pid, cwd] = line.split("|");
+	return {
+		id,
+		name,
+		sessionId: sessionId ?? "",
+		pid: pid || undefined,
+		cwd: cwd || undefined,
+	};
+}
+
+/**
+ * List parent windows (windows carrying a Pi session id). Returns [] when the
+ * shared session is missing entirely.
+ */
+export async function listParentWindows(
+	exec: TmuxExecutor,
+): Promise<ParentWindow[]> {
+	try {
+		const { stdout } = await exec([
+			"list-windows",
+			"-t",
+			SHARED_SESSION,
+			"-F",
+			WINDOW_FORMAT,
+		]);
+		return stdout
+			.split("\n")
+			.map(parseWindowLine)
+			.filter((window) => window.sessionId !== "");
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Find the parent window owned by a Pi session id. Windows are matched by the
+ * stored metadata, never by display name, so duplicate names are safe.
+ */
+export async function findParentWindow(
+	exec: TmuxExecutor,
+	sessionId: string,
+): Promise<ParentWindow | null> {
+	const windows = await listParentWindows(exec);
+	return windows.find((window) => window.sessionId === sessionId) ?? null;
+}
+
+/**
+ * Remove windows whose recorded owner process is no longer alive. Only
+ * windows whose normalized cwd matches the given project and whose owner pid is
+ * recorded are candidates; windows without owner metadata are never touched,
+ * and a live owner always protects its window.
+ */
+export async function reclaimStaleWindows(
+	exec: TmuxExecutor,
+	cwd: string,
+	isAlive: (pid: number) => boolean = defaultIsAlive,
+): Promise<void> {
+	const target = normalizePath(cwd);
+	for (const window of await listParentWindows(exec)) {
+		if (window.cwd !== target) continue;
+		if (!window.pid || !/^\d+$/.test(window.pid)) continue;
+		if (isAlive(Number(window.pid))) continue;
+		await closeParentWindow(exec, window.id).catch(() => undefined);
+	}
+}
+
+function defaultIsAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function setWindowMeta(
+	exec: TmuxExecutor,
+	target: string,
+	key: string,
+	value: string,
+): Promise<void> {
+	await exec(["set-option", "-w", "-t", target, key, value]);
+}
+
+/** Query the immutable window id for a target. */
+export async function getWindowId(
+	exec: TmuxExecutor,
+	target: string,
+): Promise<string> {
+	const { stdout } = await exec([
+		"display-message",
+		"-p",
+		"-t",
+		target,
+		"#{window_id}",
+	]);
+	return stdout.trim();
+}
+
+export interface EnsureParentWindowOptions {
+	sessionId: string;
+	pid: number;
+	cwd: string;
+	name: string;
+	/** Shell command for the first task pane that starts the window. */
+	firstCommand: string;
+	/** Owner-liveness probe for stale-window reclaim (testable). */
+	isAlive?: (pid: number) => boolean;
+}
+
+/**
+ * Find or create the parent window for a Pi session. Creation sets owner
+ * metadata (@pi_parent_session_id/@pi_parent_pid/@pi_parent_cwd), applies
+ * remain-on-exit and automatic-name suppression, and reclaims stale windows
+ * from crashed owners in the same project. Resume refreshes owner metadata so
+ * stale detection sees the live owner.
+ */
+export async function ensureParentWindow(
+	exec: TmuxExecutor,
+	opts: EnsureParentWindowOptions,
+): Promise<ParentWindow> {
+	const cwd = normalizePath(opts.cwd);
+	const existing = await findParentWindow(exec, opts.sessionId);
+	if (existing) {
+		await setWindowMeta(exec, existing.id, META_PID, String(opts.pid));
+		await setWindowMeta(exec, existing.id, META_CWD, cwd);
+		return { ...existing, pid: String(opts.pid), cwd };
+	}
+
+	await reclaimStaleWindows(exec, opts.cwd, opts.isAlive);
+
+	await exec([
+		"new-window",
+		"-d",
+		"-t",
+		SHARED_SESSION,
+		"-n",
+		opts.name,
+		"-c",
+		opts.cwd,
+		opts.firstCommand,
+	]);
+
+	const target = `${SHARED_SESSION}:${opts.name}`;
+	await setWindowMeta(exec, target, META_SESSION_ID, opts.sessionId);
+	await setWindowMeta(exec, target, META_PID, String(opts.pid));
+	await setWindowMeta(exec, target, META_CWD, cwd);
+	await exec(["set-window-option", "-t", target, "remain-on-exit", "on"]);
+	await exec(["set-window-option", "-t", target, "automatic-rename", "off"]);
+
+	const id = await getWindowId(exec, target);
+	return { id, name: opts.name, sessionId: opts.sessionId, pid: String(opts.pid), cwd };
+}
+
+/** Rename a parent window by immutable id; metadata is untouched. */
+export async function renameWindow(
+	exec: TmuxExecutor,
+	windowId: string,
+	name: string,
+): Promise<void> {
+	await exec(["rename-window", "-t", windowId, name]);
+}
+
+/** Close a parent window by immutable id, never the shared session. */
+export async function closeParentWindow(
+	exec: TmuxExecutor,
+	windowId: string,
+): Promise<void> {
+	await exec(["kill-window", "-t", windowId]);
 }

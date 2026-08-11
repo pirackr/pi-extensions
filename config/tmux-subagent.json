@@ -1,7 +1,7 @@
 {
   "models": {
     "strong": "Qwen3.6-35B-A3B-MTP-GGUF",
-    "eval": "Gemma-4-31B-it-MTP-GGUF",
+    "eval": "gemma-4-26B-A4B-it-GGUF-UD-Q4_K_XL",
     "light": "gpt-oss-20b-GGUF-Q4_K_M"
   },
   "childExtensions": [
@@ -13,7 +13,7 @@
   },
   "agentDirs": [],
   "loadContextFiles": true,
-  "maxTasks": 1,
+  "maxTasks": 4,
   "defaultTimeoutSeconds": 300,
   "webSearchMaxLookups": 0,
   "webSearchMaxFetches": 0,

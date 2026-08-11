@@ -52,7 +52,7 @@ Direct API calls — no `open-websearch`, no `npx`, no daemon. Architecture:
 ### SDK Ownership
 
 | Provider | SDK | Operation |
-|---|---|---|
+| --- | --- | --- |
 | TinyFish | `@tiny-fish/sdk` | Search, Fetch |
 | Exa | `exa-js` | Search |
 | Tavily | `@tavily/core` | Search |
@@ -92,18 +92,3 @@ lean-ctx is active — the MCP tools replace native equivalents.
 Full rules: LEAN-CTX.md (open on demand — do not auto-load).
 <!-- /lean-ctx -->
 <!-- /lean-ctx -->
-
-## watch-subagents
-
-- `tools/watch-subagents.mjs` — standalone TUI dashboard: watch all agents of a
-  `run_subagents` batch in one screen, live or replayed. Zero deps, `node` only.
-- Run it: `tools/watch-subagents` (or symlink:
-  `ln -s ~/Working/grinder/pi-extensions/tools/watch-subagents ~/.local/bin/`).
-- Usage: no args = most recent run (picker when several); `<suffix>` matches a
-  `pi-subagent-*` session; a directory path replays retained artifacts.
-  Keys: `j`/`k` select, `Enter` tmux-attach (live) / `less` pager (ended),
-  `r` pause, `q` quit.
-- Replay needs `retain_artifacts: "always"` (or `"on_failure"` for failed
-  runs); pass the retained dir as the argument. Artifacts under
-  `/tmp/pi-subagent-*` are deleted by the extension when a run completes
-  unless retained — live watch works while the run is in flight.

@@ -196,7 +196,7 @@ function validateConfig(
 ): ConfigLayer | null {
 	if (typeof raw !== "object" || Array.isArray(raw) || raw === null) {
 		warnings.push({
-			code: source === "packaged" ? "invalid-project-config" : "invalid-user-config",
+			code: source === "packaged" ? "invalid-packaged-config" : source === "project" ? "invalid-project-config" : "invalid-user-config",
 			message: `Invalid configuration in ${filePath}: root must be an object.`,
 		});
 		return null;
@@ -220,7 +220,7 @@ function validateConfig(
 	if ("enabled" in obj) {
 		if (typeof obj.enabled !== "boolean") {
 			warnings.push({
-				code: "invalid-user-config",
+				code: source === "packaged" ? "invalid-packaged-config" : source === "project" ? "invalid-project-config" : "invalid-user-config",
 				message: `Invalid 'enabled' field in ${filePath}: must be a boolean.`,
 			});
 			return null;

@@ -581,3 +581,185 @@ describe("untrusted project exclusion", () => {
 		expect(result.layers[1].default).toEqual({ percent: 70 });
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Additional coverage: enabled false, non-array rules, invalid defaults, etc.
+// ---------------------------------------------------------------------------
+
+describe("enabled false at top level", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+	});
+
+	it("accepts top-level enabled: false in user config", () => {
+		mockFileContents({
+			"/mock/package/config/auto-compact.json": JSON.stringify({
+				enabled: true,
+				default: { percent: 80 },
+				rules: [],
+			}),
+			"/mock/agent/auto-compact/config.json": JSON.stringify({
+				enabled: false,
+			}),
+		});
+
+		const result = loadAutoCompactConfiguration(baseOptions());
+
+		expect(result.layers).toHaveLength(2);
+		expect(result.layers[1].source).toBe("user");
+		expect(result.layers[1].enabled).toBe(false);
+		expect(result.warnings).toHaveLength(0);
+	});
+});
+
+describe("non-array rules rejected", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+	});
+
+	it("rejects non-array rules with invalid-rule", () => {
+		mockFileContents({
+			"/mock/package/config/auto-compact.json": JSON.stringify({
+				enabled: true,
+				default: { percent: 80 },
+				rules: [],
+			}),
+			"/mock/agent/auto-compact/config.json": JSON.stringify({
+				rules: "not-an-array",
+			}),
+		});
+
+		const result = loadAutoCompactConfiguration(baseOptions());
+
+		expect(result.layers).toHaveLength(1);
+		expect(result.ignoredPaths).toHaveLength(1);
+		expect(result.warnings).toHaveLength(1);
+		expect(result.warnings[0].code).toBe("invalid-rule");
+	});
+});
+
+describe("default with string percent or float tokens", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+	});
+
+	it("rejects default with string percent", () => {
+		mockFileContents({
+			"/mock/package/config/auto-compact.json": JSON.stringify({
+				enabled: true,
+				default: { percent: 80 },
+				rules: [],
+			}),
+			"/mock/agent/auto-compact/config.json": JSON.stringify({
+				default: { percent: "fifty" },
+			}),
+		});
+
+		const result = loadAutoCompactConfiguration(baseOptions());
+
+		expect(result.layers).toHaveLength(1);
+		expect(result.ignoredPaths).toHaveLength(1);
+		expect(result.warnings).toHaveLength(1);
+		expect(result.warnings[0].code).toBe("invalid-threshold");
+	});
+
+	it("rejects default with float tokens", () => {
+		mockFileContents({
+			"/mock/package/config/auto-compact.json": JSON.stringify({
+				enabled: true,
+				default: { percent: 80 },
+				rules: [],
+			}),
+			"/mock/agent/auto-compact/config.json": JSON.stringify({
+				default: { tokens: 3.14 },
+			}),
+		});
+
+		const result = loadAutoCompactConfiguration(baseOptions());
+
+		expect(result.layers).toHaveLength(1);
+		expect(result.ignoredPaths).toHaveLength(1);
+		expect(result.warnings).toHaveLength(1);
+		expect(result.warnings[0].code).toBe("invalid-threshold");
+	});
+});
+
+describe("explicit enabled true on a rule", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+	});
+
+	it("accepts explicit enabled: true with percent", () => {
+		mockFileContents({
+			"/mock/package/config/auto-compact.json": JSON.stringify({
+				enabled: true,
+				default: { percent: 80 },
+				rules: [],
+			}),
+			"/mock/agent/auto-compact/config.json": JSON.stringify({
+				rules: [{ match: "foo/bar", enabled: true, percent: 50 }],
+			}),
+		});
+
+		const result = loadAutoCompactConfiguration(baseOptions());
+
+		expect(result.layers).toHaveLength(2);
+		expect(result.layers[1].rules).toEqual([
+			{ match: "foo/bar", enabled: true, percent: 50 },
+		]);
+		expect(result.warnings).toHaveLength(0);
+	});
+});
+
+describe("rules array with non-object entries", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+	});
+
+	it("rejects rules array containing a string", () => {
+		mockFileContents({
+			"/mock/package/config/auto-compact.json": JSON.stringify({
+				enabled: true,
+				default: { percent: 80 },
+				rules: [],
+			}),
+			"/mock/agent/auto-compact/config.json": JSON.stringify({
+				rules: ["not-an-object"],
+			}),
+		});
+
+		const result = loadAutoCompactConfiguration(baseOptions());
+
+		expect(result.layers).toHaveLength(1);
+		expect(result.ignoredPaths).toHaveLength(1);
+		expect(result.warnings).toHaveLength(1);
+		expect(result.warnings[0].code).toBe("invalid-rule");
+	});
+});
+
+describe("default with extra unknown key", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+	});
+
+	it("rejects default with unknown extra key", () => {
+		mockFileContents({
+			"/mock/package/config/auto-compact.json": JSON.stringify({
+				enabled: true,
+				default: { percent: 80 },
+				rules: [],
+			}),
+			"/mock/agent/auto-compact/config.json": JSON.stringify({
+				default: { percent: 80, extra: 1 },
+			}),
+		});
+
+		const result = loadAutoCompactConfiguration(baseOptions());
+
+		expect(result.layers).toHaveLength(1);
+		expect(result.ignoredPaths).toHaveLength(1);
+		expect(result.warnings).toHaveLength(1);
+		expect(result.warnings[0].code).toBe("invalid-threshold");
+	});
+});
+

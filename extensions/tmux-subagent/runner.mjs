@@ -24,6 +24,29 @@ export function runTaskMode(requestPath) {
 	}
 	const startedAt = new Date().toISOString();
 	let child;
+
+	// Best-effort private transcript: mirrors the human-readable pane output
+	// (assistant text, tool markers, stderr, terminal summary) into a file the
+	// extension owns. Appends so a resumed/re-run task keeps its full history.
+	const transcript = request.transcriptPath
+		? fs.createWriteStream(request.transcriptPath, { flags: "a", mode: 0o600 })
+		: null;
+	if (transcript) {
+		// Async write errors (e.g. permission denied) must not crash the task.
+		transcript.on("error", () => {});
+	}
+	const mirror = (text) => {
+		if (!transcript) return;
+		try {
+			transcript.write(text);
+		} catch {
+			// Best-effort only.
+		}
+	};
+	const emit = (text) => {
+		process.stdout.write(text);
+		mirror(text);
+	};
 	let timeout;
 	let killTimer;
 	let timedOut = false;
@@ -141,8 +164,7 @@ export function runTaskMode(requestPath) {
 
 		if (event.type === "message_update") {
 			const update = event.assistantMessageEvent;
-			if (update?.type === "text_delta" && update.delta)
-				process.stdout.write(update.delta);
+			if (update?.type === "text_delta" && update.delta) emit(update.delta);
 		}
 
 		if (event.type === "tool_execution_start") {
@@ -150,12 +172,12 @@ export function runTaskMode(requestPath) {
 			toolCounts[name] = (toolCounts[name] ?? 0) + 1;
 			const args = event.args ?? event.toolCall?.arguments ?? {};
 			const summary = summarizeArgs(args);
-			process.stdout.write(`\n[${name}]${summary ? " " + summary : ""}\n`);
+			emit(`\n[${name}]${summary ? " " + summary : ""}\n`);
 		}
 
 		if (event.type === "tool_execution_end") {
 			const name = event.toolName || "tool";
-			process.stdout.write(`  ${summarizeResult(name, event)}\n`);
+			emit(`  ${summarizeResult(name, event)}\n`);
 		}
 
 		if (event.type === "message_end" && event.message?.role === "assistant") {
@@ -246,6 +268,7 @@ export function runTaskMode(requestPath) {
 	child.stderr.on("data", (chunk) => {
 		stderr.write(chunk);
 		process.stderr.write(chunk);
+		mirror(chunk.toString());
 	});
 
 	child.on("error", (error) => {
@@ -275,6 +298,7 @@ export function runTaskMode(requestPath) {
 		if (buffer.trim()) processEvent(buffer);
 		output.end();
 		stderr.end();
+		transcript?.end();
 
 		const stoppedNormally =
 			code === 0 &&
@@ -299,13 +323,13 @@ export function runTaskMode(requestPath) {
 			result: finalOutput,
 			usage,
 		});
-		process.stdout.write(`\n\n[${request.agent} ${state}]\n`);
+		emit(`\n\n[${request.agent} ${state}]\n`);
 		if (Object.keys(toolCounts).length) {
 			const summary = Object.entries(toolCounts)
 				.sort((a, b) => b[1] - a[1])
 				.map(([k, v]) => `${k}=${v}`)
 				.join(" ");
-			process.stdout.write(`tool calls: ${summary}\n`);
+			emit(`tool calls: ${summary}\n`);
 		}
 		process.exitCode = state === "succeeded" ? 0 : 1;
 	});

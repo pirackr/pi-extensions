@@ -163,6 +163,11 @@ describe("runTaskMode", () => {
 		for (const cb of cbs) cb(Buffer.from(data));
 	}
 
+	function emitStderr(data: string) {
+		const cbs = stderrCallbacks.get("data") ?? [];
+		for (const cb of cbs) cb(Buffer.from(data));
+	}
+
 	function emitClose(code: number) {
 		for (const cb of closeCallbacks) cb(code);
 	}
@@ -373,6 +378,123 @@ describe("runTaskMode", () => {
 		// The timeout should be set to 300000ms
 		// We verify by checking the spawn was called
 		expect(mockSpawn).toHaveBeenCalled();
+	});
+
+	// ----------------------------------------------------------------------
+	// Transcript mirroring (Task 4)
+	// ----------------------------------------------------------------------
+	function runWithTranscript(transcriptPath = "/tmp/transcript.log") {
+		const mockCreateWriteStream = vi.mocked(fs.createWriteStream);
+		let transcriptStream: any;
+		mockCreateWriteStream.mockImplementation((path: unknown, opts: unknown) => {
+			const stream = createMockWriteStream();
+			(stream as any).path = String(path);
+			(stream as any).opts = opts;
+			if (String(path).includes("transcript")) transcriptStream = stream;
+			return stream;
+		});
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			if (typeof path === "string" && path.includes("request")) {
+				return JSON.stringify({
+					taskId: "task-1",
+					agent: "worker",
+					model: "gpt-4o",
+					thinking: "medium",
+					tools: ["read", "edit"],
+					cwd: "/workspace",
+					timeoutMs: 300_000,
+					promptPath: "/tmp/prompt.md",
+					taskPath: "/tmp/task.md",
+					outputPath: "/tmp/output.jsonl",
+					stderrPath: "/tmp/stderr.log",
+					statusPath: "/tmp/status.json",
+					transcriptPath,
+					pi: { command: "pi", args: [] },
+					childExtensions: [],
+					loadContextFiles: true,
+				});
+			}
+			if (typeof path === "string" && path.includes("task.md")) {
+				return "Do the task";
+			}
+			return "";
+		});
+		runTaskMode("/tmp/request.json");
+		return transcriptStream;
+	}
+
+	it("creates the transcript stream with append flags and 0600 mode", () => {
+		const stream = runWithTranscript();
+		expect(stream).toBeDefined();
+		const calls = vi.mocked(fs.createWriteStream).mock.calls;
+		const transcriptCall = calls.find((call) => String(call[0]).includes("transcript"));
+		expect(transcriptCall![1]).toMatchObject({ flags: "a", mode: 0o600 });
+	});
+
+	it("mirrors assistant text, tool markers, stderr, and the completion summary", () => {
+		const stream = runWithTranscript();
+		emitStdout(
+			JSON.stringify({
+				type: "message_update",
+				assistantMessageEvent: { type: "text_delta", delta: "Hello world" },
+			}) + "\n",
+		);
+		emitStdout(JSON.stringify({ type: "tool_execution_start", toolName: "read" }) + "\n");
+		emitStdout(
+			JSON.stringify({
+				type: "tool_execution_end",
+				toolName: "read",
+				result: { content: [{ text: "file contents" }] },
+			}) + "\n",
+		);
+		emitStderr("warning: something\n");
+		emitStdout(
+			JSON.stringify({
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "Final" }],
+					usage: { input: 1 },
+					stopReason: "end_turn",
+				},
+			}) + "\n",
+		);
+		emitClose(0);
+		const writes = stream.write.mock.calls.map((call: unknown[]) => String(call[0]));
+		const joined = writes.join("");
+		expect(joined).toContain("Hello world");
+		expect(joined).toContain("[read]");
+		expect(joined).toContain("file contents");
+		expect(joined).toContain("warning: something");
+		expect(joined).toContain("[worker succeeded]");
+	});
+
+	it("closes the transcript stream when the child closes", () => {
+		const stream = runWithTranscript();
+		emitClose(0);
+		expect(stream.end).toHaveBeenCalled();
+	});
+
+	it("does not crash the task when transcript writes fail", () => {
+		const stream = runWithTranscript();
+		stream.write.mockImplementation(() => {
+			throw new Error("disk full");
+		});
+		emitStdout(
+			JSON.stringify({
+				type: "message_update",
+				assistantMessageEvent: { type: "text_delta", delta: "Hello" },
+			}) + "\n",
+		);
+		emitClose(0);
+		const statusCall = mockWriteFileSync.mock.calls.find((call) => {
+			try {
+				return JSON.parse(call[1] as string).state === "failed";
+			} catch {
+				return false;
+			}
+		});
+		expect(statusCall).toBeDefined();
 	});
 });
 

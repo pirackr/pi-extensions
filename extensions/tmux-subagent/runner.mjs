@@ -298,7 +298,6 @@ export function runTaskMode(requestPath) {
 		if (buffer.trim()) processEvent(buffer);
 		output.end();
 		stderr.end();
-		transcript?.end();
 
 		const stoppedNormally =
 			code === 0 &&
@@ -331,6 +330,8 @@ export function runTaskMode(requestPath) {
 				.join(" ");
 			emit(`tool calls: ${summary}\n`);
 		}
+		// Close the transcript only after the final summary has been mirrored.
+		transcript?.end();
 		process.exitCode = state === "succeeded" ? 0 : 1;
 	});
 

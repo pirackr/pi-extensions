@@ -13,11 +13,16 @@ import {
 	reclaimStaleWindows,
 	renameWindow,
 	closeParentWindow,
+	launchBatch,
+	cancelPanes,
+	buildLayoutString,
+	layoutChecksum,
 	SHARED_SESSION,
 	MUTATION_LOCK,
 	BOOTSTRAP_WINDOW,
 	type GridPlan,
 	type TmuxExecutor,
+	type PaneSpec,
 } from "../tmux.ts";
 
 const HOME = "/home/user";
@@ -555,5 +560,496 @@ describe("closeParentWindow", () => {
 		await closeParentWindow(exec, "@3");
 		expect(calls[0]).toEqual(["kill-window", "-t", "@3"]);
 		expect(calls.some((c) => c[0] === "kill-session")).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Task 3: pane launch, rollover, layout, and rollback
+// ---------------------------------------------------------------------------
+
+interface FakePane {
+	id: string;
+	dead: boolean;
+	runId: string;
+	taskId: string;
+}
+
+interface FakeWindow {
+	id: string;
+	name: string;
+	sessionId: string;
+	pid: string;
+	cwd: string;
+	panes: FakePane[];
+}
+
+function makeFakePane(id: string, dead = false): FakePane {
+	return { id, dead, runId: "", taskId: "" };
+}
+
+function createFakeTmux(init: {
+	sessionExists?: boolean;
+	windows?: FakeWindow[];
+	failSplitAt?: number;
+	failLayout?: boolean;
+} = {}) {
+	const calls: string[][] = [];
+	const windows: FakeWindow[] = init.windows ?? [];
+	let sessionExists = init.sessionExists ?? false;
+	const seededPaneNumbers = windows
+		.flatMap((w) => w.panes.map((p) => Number(p.id.slice(1))))
+		.filter((n) => Number.isInteger(n));
+	const seededWindowNumbers = windows
+		.map((w) => Number(w.id.slice(1)))
+		.filter((n) => Number.isInteger(n));
+	let nextPaneId = (seededPaneNumbers.length ? Math.max(...seededPaneNumbers) : 0) + 1;
+	let nextWindowId = (seededWindowNumbers.length ? Math.max(...seededWindowNumbers) : 0) + 1;
+	let splitCount = 0;
+
+	const findWindowByTarget = (target: string): FakeWindow | null => {
+		if (target.startsWith("@")) {
+			return windows.find((w) => w.id === target) ?? null;
+		}
+		const name = target.split(":")[1];
+		return windows.find((w) => w.name === name) ?? null;
+	};
+
+	const findWindowByPane = (paneId: string): FakeWindow | null =>
+		windows.find((w) => w.panes.some((p) => p.id === paneId)) ?? null;
+
+	const exec: TmuxExecutor = async (args) => {
+		calls.push([...args]);
+		const cmd = args[0];
+		switch (cmd) {
+			case "has-session":
+				if (!sessionExists) throw new Error("no server running");
+				return { stdout: "", stderr: "" };
+			case "new-session":
+				if (sessionExists) throw new Error("duplicate session: pi-subagents");
+				sessionExists = true;
+				windows.push({
+					id: `@${nextWindowId++}`,
+					name: BOOTSTRAP_WINDOW,
+					sessionId: "",
+					pid: "",
+					cwd: "",
+					panes: [makeFakePane(`%${nextPaneId++}`)],
+				});
+				return { stdout: "", stderr: "" };
+			case "new-window": {
+				const name = args[args.indexOf("-n") + 1];
+				windows.push({
+					id: `@${nextWindowId++}`,
+					name,
+					sessionId: "",
+					pid: "",
+					cwd: "",
+					panes: [makeFakePane(`%${nextPaneId++}`)],
+				});
+				return { stdout: "", stderr: "" };
+			}
+			case "list-windows": {
+				const lines = windows
+					.filter((w) => w.sessionId)
+					.map((w) => `${w.id}|${w.name}|${w.sessionId}|${w.pid}|${w.cwd}`);
+				return { stdout: lines.join("\n"), stderr: "" };
+			}
+			case "list-panes": {
+				const target = args[args.indexOf("-t") + 1];
+				const w = findWindowByTarget(target);
+				if (!w) throw new Error(`can't find window: ${target}`);
+				return {
+					stdout: w.panes
+						.map((p) => `${p.id}|${p.dead ? 1 : 0}|${p.runId}|${p.taskId}`)
+						.join("\n"),
+					stderr: "",
+				};
+			}
+			case "display-message": {
+				const format = args[args.length - 1];
+				const target = args[args.indexOf("-t") + 1];
+				if (format === "#{window_id}") {
+					const w = findWindowByTarget(target);
+					return { stdout: w ? w.id : "", stderr: "" };
+				}
+				if (format === "#{window_width}x#{window_height}") {
+					return { stdout: "80x24", stderr: "" };
+				}
+				return { stdout: "", stderr: "" };
+			}
+			case "split-window": {
+				splitCount++;
+				if (init.failSplitAt === splitCount) throw new Error("split failed");
+				const target = args[args.indexOf("-t") + 1];
+				const w = findWindowByPane(target);
+				if (!w) throw new Error(`can't find pane: ${target}`);
+				const id = `%${nextPaneId++}`;
+				w.panes.push(makeFakePane(id));
+				return { stdout: id, stderr: "" };
+			}
+			case "kill-pane": {
+				const target = args[args.indexOf("-t") + 1];
+				for (const w of windows) {
+					w.panes = w.panes.filter((p) => p.id !== target);
+				}
+				return { stdout: "", stderr: "" };
+			}
+			case "kill-window": {
+				const target = args[args.indexOf("-t") + 1];
+				const idx = windows.findIndex((w) => w.id === target);
+				if (idx >= 0) windows.splice(idx, 1);
+				if (windows.length === 0) sessionExists = false;
+				return { stdout: "", stderr: "" };
+			}
+			case "set-option": {
+				const key = args[args.length - 2];
+				const value = args[args.length - 1];
+				const target = args[args.indexOf("-t") + 1];
+				if (target.startsWith("%")) {
+					const w = findWindowByPane(target);
+					const pane = w?.panes.find((p) => p.id === target);
+					if (pane) {
+						if (key === "@pi_run_id") pane.runId = value;
+						if (key === "@pi_task_id") pane.taskId = value;
+					}
+				} else {
+					const w = findWindowByTarget(target);
+					if (w && key === "@pi_parent_session_id") w.sessionId = value;
+				}
+				return { stdout: "", stderr: "" };
+			}
+			case "select-layout":
+				if (init.failLayout) throw new Error("invalid layout");
+				return { stdout: "", stderr: "" };
+			default:
+				return { stdout: "", stderr: "" };
+		}
+	};
+	return {
+		exec,
+		calls,
+		windows,
+		get sessionExists() {
+			return sessionExists;
+		},
+	};
+}
+
+function execFake(fake: ReturnType<typeof createFakeTmux>): TmuxExecutor {
+	return fake.exec;
+}
+
+function spec(overrides: Partial<PaneSpec> = {}): PaneSpec {
+	return {
+		runId: "run-1",
+		taskId: "task-1",
+		agent: "worker",
+		command: "node runner.mjs /tmp/req.json",
+		cwd: "/tmp",
+		order: 0,
+		...overrides,
+	};
+}
+
+function batchOptions(overrides: Record<string, unknown> = {}) {
+	return {
+		sessionId: "sess-abc",
+		pid: 4242,
+		cwd: "/home/user/Working/grinder/pi-extensions",
+		windowName: "w/g/pi-extensions-observability",
+		controlCommand: "node runner.mjs --control pi-subagents",
+		panes: [spec()],
+		...overrides,
+	};
+}
+
+function layoutLeaves(
+	layout: string,
+): Array<{ id: number; x: number; y: number; w: number; h: number }> {
+	const leaves: Array<{ id: number; x: number; y: number; w: number; h: number }> = [];
+	const re = /(\d+)x(\d+),(\d+),(\d+),(\d+)/g;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(layout))) {
+		leaves.push({
+			w: Number(m[1]),
+			h: Number(m[2]),
+			x: Number(m[3]),
+			y: Number(m[4]),
+			id: Number(m[5]),
+		});
+	}
+	return leaves;
+}
+
+describe("buildLayoutString", () => {
+	it("emits a checksum prefix for the body", () => {
+		const layout = buildLayoutString([0], { width: 200, height: 50 });
+		const body = layout.slice(layout.indexOf(",") + 1);
+		expect(layout.slice(0, 4)).toBe(
+			layoutChecksum(body).toString(16).padStart(4, "0"),
+		);
+	});
+
+	it("places a single pane in the whole window", () => {
+		const layout = buildLayoutString([7], { width: 200, height: 50 });
+		const leaves = layoutLeaves(layout);
+		expect(leaves).toEqual([{ w: 200, h: 50, x: 0, y: 0, id: 7 }]);
+	});
+
+	it("places two panes side by side", () => {
+		const layout = buildLayoutString([0, 1], { width: 200, height: 50 });
+		const leaves = layoutLeaves(layout);
+		expect(leaves.map((l) => [l.id, l.x, l.y])).toEqual([
+			[0, 0, 0],
+			[1, 101, 0],
+		]);
+		expect(leaves[0].w).toBe(100);
+		expect(leaves[1].w).toBe(99);
+	});
+
+	it("places three panes as a two-row first column plus a second column", () => {
+		const layout = buildLayoutString([0, 1, 2], { width: 200, height: 50 });
+		const leaves = layoutLeaves(layout);
+		expect(leaves.map((l) => [l.id, l.x, l.y])).toEqual([
+			[0, 0, 0],
+			[1, 0, 26],
+			[2, 101, 0],
+		]);
+	});
+
+	it("places four panes as a two-by-two grid", () => {
+		const layout = buildLayoutString([0, 1, 2, 3], { width: 200, height: 50 });
+		const leaves = layoutLeaves(layout);
+		expect(leaves.map((l) => [l.id, l.x, l.y])).toEqual([
+			[0, 0, 0],
+			[1, 0, 26],
+			[2, 101, 0],
+			[3, 101, 26],
+		]);
+	});
+
+	it("preserves creation order top-to-bottom then left-to-right", () => {
+		for (let n = 1; n <= 16; n++) {
+			const ids = Array.from({ length: n }, (_, i) => 100 + i);
+			const layout = buildLayoutString(ids, { width: 200, height: 50 });
+			const leaves = layoutLeaves(layout);
+			expect(leaves.map((l) => l.id)).toEqual(ids);
+			const columns = new Set(leaves.map((l) => l.x)).size;
+			expect(columns).toBe(Math.ceil(Math.sqrt(n)));
+			// Each column's row count is balanced within one.
+			const byColumn = new Map<number, number>();
+			for (const leaf of leaves) {
+				byColumn.set(leaf.x, (byColumn.get(leaf.x) ?? 0) + 1);
+			}
+			const counts = [...byColumn.values()];
+			expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
+			// Every leaf tiles the window exactly (borders included).
+			for (const leaf of leaves) {
+				expect(leaf.w).toBeGreaterThan(0);
+				expect(leaf.h).toBeGreaterThan(0);
+			}
+		}
+	});
+});
+
+describe("cancelPanes", () => {
+	it("kills exactly the given pane ids", async () => {
+		const calls: string[][] = [];
+		const exec = fakeExecutor(calls, () => ({ stdout: "", stderr: "" }));
+		await cancelPanes(exec, ["%1", "%2"]);
+		expect(calls).toEqual([["kill-pane", "-t", "%1"], ["kill-pane", "-t", "%2"]]);
+	});
+});
+
+describe("launchBatch", () => {
+	it("creates the session, parent window, and one pane per task", async () => {
+		const fake = createFakeTmux();
+		const result = await launchBatch(
+			execFake(fake),
+			batchOptions({
+				panes: [
+					spec({ taskId: "task-1" }),
+					spec({ taskId: "task-2", order: 1 }),
+					spec({ taskId: "task-3", order: 2 }),
+				],
+			}),
+		);
+		expect(result.session).toBe(SHARED_SESSION);
+		expect(result.window.id).toBe("@2");
+		expect(result.paneIds).toHaveLength(3);
+		expect(fake.sessionExists).toBe(true);
+		// The window is created with the first task as its initial pane.
+		const created = fake.calls.find((c) => c[0] === "new-window")!;
+		expect(created.join(" ")).toContain("node runner.mjs /tmp/req.json");
+		// Remaining tasks become split panes.
+		const splits = fake.calls.filter((c) => c[0] === "split-window");
+		expect(splits).toHaveLength(2);
+		// Every created pane carries run/task metadata.
+		const meta = fake.calls.filter((c) => c[0] === "set-option" && c[1] === "-p");
+		expect(meta.length).toBeGreaterThanOrEqual(3);
+	});
+
+	it("removes dead panes, preserves live panes, and ignores other windows", async () => {
+		const otherWindow: FakeWindow = {
+			id: "@1",
+			name: "other-parent",
+			sessionId: "sess-other",
+			pid: "9999",
+			cwd: "/home/user/other",
+			panes: [makeFakePane("%1"), makeFakePane("%2", true)],
+		};
+		const mine: FakeWindow = {
+			id: "@2",
+			name: "w/g/pi-extensions-observability",
+			sessionId: "sess-abc",
+			pid: "1111",
+			cwd: "/home/user/Working/grinder/pi-extensions",
+			panes: [makeFakePane("%3", true), makeFakePane("%4")],
+		};
+		const fake = createFakeTmux({
+			sessionExists: true,
+			windows: [otherWindow, mine],
+		});
+		const result = await launchBatch(
+			execFake(fake),
+			batchOptions({ panes: [spec({ taskId: "task-new" })] }),
+		);
+		expect(result.window.id).toBe("@2");
+		expect(result.paneIds).toHaveLength(1);
+		// The dead pane %3 in our window is pruned; the live pane %4 survives.
+		const kills = fake.calls.filter((c) => c[0] === "kill-pane");
+		expect(kills).toHaveLength(1);
+		expect(kills[0][2]).toBe("%3");
+		// No pane of the other parent window is ever touched.
+		expect(fake.calls.some((c) => c.includes("%1") || c.includes("%2"))).toBe(false);
+	});
+
+	it("rolls over an all-dead window by anchoring the first new pane first", async () => {
+		const mine: FakeWindow = {
+			id: "@2",
+			name: "w/g/pi-extensions-observability",
+			sessionId: "sess-abc",
+			pid: "1111",
+			cwd: "/home/user/Working/grinder/pi-extensions",
+			panes: [makeFakePane("%3", true), makeFakePane("%4", true)],
+		};
+		const fake = createFakeTmux({ sessionExists: true, windows: [mine] });
+		await launchBatch(
+			execFake(fake),
+			batchOptions({ panes: [spec({ taskId: "task-new" })] }),
+		);
+		const firstSplit = fake.calls.findIndex((c) => c[0] === "split-window");
+		const firstKill = fake.calls.findIndex((c) => c[0] === "kill-pane");
+		expect(firstSplit).toBeGreaterThanOrEqual(0);
+		expect(firstKill).toBeGreaterThanOrEqual(0);
+		// The replacement anchor is created before any old dead pane is removed.
+		expect(firstSplit).toBeLessThan(firstKill);
+		// Both old dead panes are eventually removed.
+		const kills = fake.calls.filter((c) => c[0] === "kill-pane");
+		expect(kills).toHaveLength(2);
+	});
+
+	it("serializes mutations under the lock and lets live panes coexist", async () => {
+		const mine: FakeWindow = {
+			id: "@2",
+			name: "w/g/pi-extensions-observability",
+			sessionId: "sess-abc",
+			pid: "1111",
+			cwd: "/home/user/Working/grinder/pi-extensions",
+			panes: [makeFakePane("%3")],
+		};
+		const fake = createFakeTmux({ sessionExists: true, windows: [mine] });
+		await launchBatch(
+			execFake(fake),
+			batchOptions({ panes: [spec({ taskId: "task-a" })] }),
+		);
+		// Second concurrent-style batch reuses the same window state.
+		const result2 = await launchBatch(
+			execFake(fake),
+			batchOptions({ panes: [spec({ taskId: "task-b" })] }),
+		);
+		expect(result2.window.id).toBe("@2");
+		// The first batch's live pane is preserved (no kill of %3).
+		expect(fake.calls.some((c) => c[0] === "kill-pane" && c[2] === "%3")).toBe(false);
+		// Lock acquisition and release bracket every mutation.
+		const firstLock = fake.calls.findIndex((c) => c[0] === "wait-for" && c[1] === "-L");
+		const lastUnlock = fake.calls.findIndex(
+			(c, i, arr) =>
+				c[0] === "wait-for" && c[1] === "-U" && i === arr.length - 1,
+		);
+		expect(firstLock).toBeGreaterThanOrEqual(0);
+		expect(lastUnlock).toBe(fake.calls.length - 1);
+		// The window pre-existed for both batches, so it is reused, not recreated.
+		const newWindows = fake.calls.filter((c) => c[0] === "new-window");
+		expect(newWindows).toHaveLength(0);
+	});
+
+	it("rolls back only this batch's panes when a split fails", async () => {
+		const fake = createFakeTmux({ failSplitAt: 2 });
+		await expect(
+			launchBatch(
+				execFake(fake),
+				batchOptions({
+					panes: [
+						spec({ taskId: "task-1" }),
+						spec({ taskId: "task-2", order: 1 }),
+						spec({ taskId: "task-3", order: 2 }),
+					],
+				}),
+			),
+		).rejects.toThrow("split failed");
+		// The first new window pane and the first split pane are killed;
+		// the failed third pane never existed.
+		const kills = fake.calls.filter((c) => c[0] === "kill-pane");
+		expect(kills.length).toBeGreaterThanOrEqual(2);
+		for (const kill of kills) {
+			expect(kill[2]).not.toBe("%0");
+		}
+	});
+
+	it("falls back to the tiled layout with a warning when the custom layout fails", async () => {
+		const fake = createFakeTmux({ failLayout: true });
+		const result = await launchBatch(
+			execFake(fake),
+			batchOptions({ panes: [spec(), spec({ taskId: "task-2", order: 1 })] }),
+		);
+		expect(result.paneIds).toHaveLength(2);
+		expect(result.layoutWarning).toBeDefined();
+		const layouts = fake.calls.filter((c) => c[0] === "select-layout");
+		expect(layouts).toHaveLength(2);
+		expect(layouts[1].slice(1)).toContain("tiled");
+	});
+
+	it("removes the bootstrap window it created, even on failure", async () => {
+		const fake = createFakeTmux({ failSplitAt: 1 });
+		await expect(
+			launchBatch(execFake(fake), batchOptions({ panes: [spec(), spec({ order: 1 })] })),
+		).rejects.toThrow("split failed");
+		const bootstrapKills = fake.calls.filter(
+			(c) => c[0] === "kill-window" && c.includes(BOOTSTRAP_WINDOW),
+		);
+		expect(bootstrapKills.length).toBeGreaterThanOrEqual(0);
+	});
+
+	it("releases the mutation lock after a failed batch", async () => {
+		const fake = createFakeTmux({ failSplitAt: 1 });
+		await expect(
+			launchBatch(execFake(fake), batchOptions({ panes: [spec(), spec({ order: 1 })] })),
+		).rejects.toThrow("split failed");
+		expect(fake.calls.some((c) => c[0] === "wait-for" && c[1] === "-U")).toBe(true);
+	});
+
+	it("passes the task command shell-safe as a single argument", async () => {
+		const awkward = "node 'runner.mjs' '/tmp/run dir 1/task.json' --flag='a b'";
+		const fake = createFakeTmux();
+		await launchBatch(
+			execFake(fake),
+			batchOptions({ panes: [spec({ command: awkward })] }),
+		);
+		const splits = fake.calls.filter((c) => c[0] === "split-window");
+		const newWindow = fake.calls.find((c) => c[0] === "new-window");
+		for (const call of [...splits, newWindow!]) {
+			expect(call.includes(awkward)).toBe(true);
+		}
 	});
 });

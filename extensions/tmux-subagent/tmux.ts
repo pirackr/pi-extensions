@@ -479,3 +479,381 @@ export async function closeParentWindow(
 ): Promise<void> {
 	await exec(["kill-window", "-t", windowId]);
 }
+
+// ---------------------------------------------------------------------------
+// Pane launch, rollover, layout, and rollback (Task 3)
+// ---------------------------------------------------------------------------
+
+export interface PaneSpec {
+	runId: string;
+	taskId: string;
+	agent: string;
+	/** Shell command that launches the runner for this task. */
+	command: string;
+	cwd: string;
+	/** Creation order within the batch (0-based). */
+	order: number;
+}
+
+export interface BatchLaunchOptions {
+	sessionId: string;
+	pid: number;
+	cwd: string;
+	windowName: string;
+	/** Control-mode runner command for the transient bootstrap window. */
+	controlCommand: string;
+	/** Prepared task panes in creation order. */
+	panes: PaneSpec[];
+	isAlive?: (pid: number) => boolean;
+}
+
+export interface BatchLaunchResult {
+	session: string;
+	window: ParentWindow;
+	/** Pane ids created by this batch (rollback scope). */
+	paneIds: string[];
+	/** Non-fatal layout warning, when the custom layout could not be applied. */
+	layoutWarning?: string;
+}
+
+export interface PaneInfo {
+	id: string;
+	dead: boolean;
+	runId: string;
+	taskId: string;
+}
+
+const PANE_FORMAT = 
+	"#{pane_id}|#{pane_dead}|#{@pi_run_id}|#{@pi_task_id}";
+
+async function listPanes(
+	exec: TmuxExecutor,
+	windowId: string,
+): Promise<PaneInfo[]> {
+	const { stdout } = await exec([
+		"list-panes",
+		"-t",
+		windowId,
+		"-F",
+		PANE_FORMAT,
+	]);
+	return stdout
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => {
+			const [id, dead, runId, taskId] = line.split("|");
+			return { id, dead: dead === "1", runId: runId ?? "", taskId: taskId ?? "" };
+		});
+}
+
+async function getWindowSize(
+	exec: TmuxExecutor,
+	windowId: string,
+): Promise<{ width: number; height: number }> {
+	const { stdout } = await exec([
+		"display-message",
+		"-p",
+		"-t",
+		windowId,
+		"#{window_width}x#{window_height}",
+	]);
+	const [width, height] = stdout.trim().split("x").map(Number);
+	if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) {
+		throw new Error(`could not read window size for ${windowId}: ${stdout}`);
+	}
+	return { width, height };
+}
+
+async function setPaneMeta(
+	exec: TmuxExecutor,
+	paneId: string,
+	spec: PaneSpec,
+): Promise<void> {
+	await exec(["set-option", "-p", "-t", paneId, "@pi_run_id", spec.runId]);
+	await exec(["set-option", "-p", "-t", paneId, "@pi_task_id", spec.taskId]);
+}
+
+async function splitPane(
+	exec: TmuxExecutor,
+	anchorId: string,
+	spec: PaneSpec,
+): Promise<string> {
+	const { stdout } = await exec([
+		"split-window",
+		"-P",
+		"-F",
+		"#{pane_id}",
+		"-t",
+		anchorId,
+		"-c",
+		spec.cwd,
+		spec.command,
+	]);
+	const paneId = stdout.trim();
+	if (!paneId.startsWith("%")) {
+		throw new Error(`unexpected pane id from split-window: ${paneId}`);
+	}
+	await setPaneMeta(exec, paneId, spec);
+	return paneId;
+}
+
+async function killPane(exec: TmuxExecutor, paneId: string): Promise<void> {
+	await exec(["kill-pane", "-t", paneId]);
+}
+
+/** Kill exactly the given pane ids (batch-local cancellation / rollback). */
+export async function cancelPanes(
+	exec: TmuxExecutor,
+	paneIds: string[],
+): Promise<void> {
+	for (const paneId of paneIds) {
+		await killPane(exec, paneId).catch(() => undefined);
+	}
+}
+
+/**
+ * Remove the transient bootstrap window if the shared session still hosts it.
+ * Removing the last window of the session lets the session disappear naturally.
+ */
+async function removeBootstrapWindow(exec: TmuxExecutor): Promise<void> {
+	const { stdout } = await exec([
+		"list-windows",
+		"-t",
+		SHARED_SESSION,
+		"-F",
+		"#{window_id}|#{window_name}",
+	]);
+	for (const line of stdout.split("\n")) {
+		const [windowId, name] = line.split("|");
+		if (name === BOOTSTRAP_WINDOW) {
+			await exec(["kill-window", "-t", windowId]).catch(() => undefined);
+			return;
+		}
+	}
+}
+
+async function createRemainingPanes(
+	exec: TmuxExecutor,
+	specs: PaneSpec[],
+	anchorId: string,
+	createdIds: string[],
+): Promise<void> {
+	for (const spec of specs) {
+		const paneId = await splitPane(exec, anchorId, spec);
+		createdIds.push(paneId);
+		anchorId = paneId;
+	}
+}
+
+/**
+ * Launch a batch of task panes in the shared session:
+ * - ensures the shared session exists (race-tolerant);
+ * - serializes all mutations under `pi-subagents-mutation`;
+ * - finds or creates the parent window (first task pane initializes it);
+ * - prunes dead panes while preserving live panes;
+ * - rolls over an all-dead window by creating a replacement anchor first;
+ * - applies the deterministic balanced layout (tiled fallback on failure);
+ * - removes the bootstrap window it created.
+ *
+ * On failure, only the pane ids created by this call are killed and the
+ * failure is rethrown; pre-existing live panes are never cancelled.
+ */
+export async function launchBatch(
+	exec: TmuxExecutor,
+	opts: BatchLaunchOptions,
+): Promise<BatchLaunchResult> {
+	const sessionState = await ensureSharedSession(exec, {
+		cwd: opts.cwd,
+		controlCommand: opts.controlCommand,
+	});
+	const createdIds: string[] = [];
+	let window: ParentWindow | null = null;
+	let layoutWarning: string | undefined;
+
+	await withMutationLock(exec, async () => {
+		try {
+			const preexisting = await findParentWindow(exec, opts.sessionId);
+			window = await ensureParentWindow(exec, {
+				sessionId: opts.sessionId,
+				pid: opts.pid,
+				cwd: opts.cwd,
+				name: opts.windowName,
+				firstCommand: opts.panes[0]?.command ?? "",
+				isAlive: opts.isAlive,
+			});
+
+			const existingPanes = await listPanes(exec, window.id);
+			const live = existingPanes.filter((pane) => !pane.dead);
+			const dead = existingPanes.filter((pane) => pane.dead);
+			const firstSpec = opts.panes[0];
+
+			if (!preexisting) {
+				// The window's initial pane is our first task pane.
+				const anchor = existingPanes[0];
+				if (!anchor) throw new Error(`parent window ${window.id} has no panes`);
+				createdIds.push(anchor.id);
+				await setPaneMeta(exec, anchor.id, firstSpec);
+				await createRemainingPanes(
+					exec,
+					opts.panes.slice(1),
+					anchor.id,
+					createdIds,
+				);
+			} else if (live.length > 0) {
+				// Prune dead panes, then split every new pane from the last pane so
+				// the window pane list (and thus tmux's layout assignment order)
+				// stays in creation order: old live panes first, new panes appended.
+				for (const pane of dead) await killPane(exec, pane.id);
+				const remaining = existingPanes.filter((pane) => !pane.dead);
+				const anchor = remaining.at(-1) ?? live[0];
+				await createRemainingPanes(
+					exec,
+					opts.panes,
+					anchor.id,
+					createdIds,
+				);
+			} else {
+				// Every old pane is dead: create a replacement anchor from a dead
+				// pane before removing the final old pane so the window survives.
+				const anchorId = await splitPane(exec, dead[0].id, firstSpec);
+				createdIds.push(anchorId);
+				for (const pane of dead) await killPane(exec, pane.id);
+				await createRemainingPanes(
+					exec,
+					opts.panes.slice(1),
+					anchorId,
+					createdIds,
+				);
+			}
+
+			const allPanes = await listPanes(exec, window.id);
+			if (allPanes.length > 1) {
+				try {
+					const size = await getWindowSize(exec, window.id);
+					// tmux assigns panes to layout cells in window pane-list order
+					// (the ids inside a layout string are parsed but not used for
+					// assignment), so the split anchors above keep the list in
+					// creation order: old live panes first, new panes appended.
+					const layout = buildLayoutString(
+						allPanes.map((pane) => paneIdNumber(pane.id)),
+						size,
+					);
+					await exec(["select-layout", "-t", window.id, layout]);
+				} catch {
+					layoutWarning = "could not apply balanced layout; using tiled fallback";
+					try {
+						await exec(["select-layout", "-t", window.id, "tiled"]);
+					} catch {
+						// Agents keep running; the layout warning is reported.
+					}
+				}
+			}
+
+			if (sessionState.created) {
+				await removeBootstrapWindow(exec).catch(() => undefined);
+			}
+		} catch (error) {
+			// Batch-local rollback: kill only panes created by this call.
+			await cancelPanes(exec, createdIds).catch(() => undefined);
+			if (sessionState.created) {
+				await removeBootstrapWindow(exec).catch(() => undefined);
+			}
+			throw error;
+		}
+	});
+
+	return { session: SHARED_SESSION, window: window!, paneIds: createdIds, layoutWarning };
+}
+
+function paneIdNumber(paneId: string): number {
+	const number = Number(paneId.replace(/^%/, ""));
+	if (!Number.isInteger(number)) {
+		throw new Error(`invalid pane id: ${paneId}`);
+	}
+	return number;
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic layout strings (pure)
+// ---------------------------------------------------------------------------
+
+/**
+ * tmux layout-string checksum: the 4-hex prefix of a layout string is the
+ * checksum of the body, matching layout_checksum() in tmux's layout-custom.c.
+ */
+export function layoutChecksum(body: string): number {
+	let csum = 0;
+	for (let i = 0; i < body.length; i++) {
+		csum = (csum >> 1) + ((csum & 1) << 15);
+		csum = (csum + body.charCodeAt(i)) & 0xffff;
+	}
+	return csum;
+}
+
+function checksumHex(body: string): string {
+	return layoutChecksum(body).toString(16).padStart(4, "0");
+}
+
+/**
+ * Build a tmux custom layout string for a balanced columns-first grid:
+ * `columns = ceil(sqrt(n))`, panes fill columns top to bottom then left to
+ * right, and every cell tiles the window exactly (tmux validates the sums).
+ * Leaves reference panes by bare pane-id number.
+ */
+export function buildLayoutString(
+	paneIds: number[],
+	size: { width: number; height: number },
+): string {
+	const n = paneIds.length;
+	if (n < 1) throw new Error("layout requires at least one pane");
+	if (size.width < 1 || size.height < 1) {
+		throw new Error(`invalid window size: ${size.width}x${size.height}`);
+	}
+	if (n === 1) {
+		const body = `${size.width}x${size.height},0,0,${paneIds[0]}`;
+		return `${checksumHex(body)},${body}`;
+	}
+
+	const { columns, rowsPerColumn } = planGrid(n);
+
+	// Column widths: sum + (columns - 1) borders must equal the window width.
+	const totalWidth = size.width - columns + 1;
+	const colBase = Math.floor(totalWidth / columns);
+	let colRemainder = totalWidth - colBase * columns;
+	const colWidths = Array.from({ length: columns }, () => {
+		const width = colBase + (colRemainder > 0 ? 1 : 0);
+		if (colRemainder > 0) colRemainder--;
+		return width;
+	});
+
+	let paneIndex = 0;
+	let xoff = 0;
+	const columnsStr: string[] = [];
+	for (let col = 0; col < columns; col++) {
+		const rows = rowsPerColumn[col];
+		const colWidth = colWidths[col];
+
+		// Row heights: sum + (rows - 1) borders must equal the window height.
+		const totalHeight = size.height - rows + 1;
+		const rowBase = Math.floor(totalHeight / rows);
+		let rowRemainder = totalHeight - rowBase * rows;
+		let yoff = 0;
+		const leaves: string[] = [];
+		for (let row = 0; row < rows; row++) {
+			const height = rowBase + (rowRemainder > 0 ? 1 : 0);
+			if (rowRemainder > 0) rowRemainder--;
+			leaves.push(`${colWidth}x${height},${xoff},${yoff},${paneIds[paneIndex++]}`);
+			yoff += height + 1;
+		}
+
+		const columnCell =
+			rows === 1
+				? leaves[0]
+				: `${colWidth}x${size.height},${xoff},0[${leaves.join(",")}]`;
+		columnsStr.push(columnCell);
+		xoff += colWidth + 1;
+	}
+
+	const body = `${size.width}x${size.height},0,0{${columnsStr.join(",")}}`;
+	return `${checksumHex(body)},${body}`;
+}

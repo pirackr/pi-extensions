@@ -125,4 +125,6 @@ declare module "@earendil-works/pi-coding-agent" {
 		frontmatter: T;
 		body: string;
 	};
+
+	export const CONFIG_DIR_NAME: string;
 }

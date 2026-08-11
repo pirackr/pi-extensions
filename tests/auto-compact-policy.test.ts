@@ -317,6 +317,36 @@ describe("warnings", () => {
 		expect(result.warnings[0].message).toContain("200");
 		expect(result.warnings[0].message).toContain("100");
 	});
+
+	it("emits a warning when a rule defines both percent and tokens (percent wins)", () => {
+		const layer = {
+			source: "project" as const,
+			enabled: true,
+			default: { percent: 80 },
+			rules: [{ match: "some/model", percent: 50, tokens: 100000 }],
+		};
+		const result = resolveModelPolicy([layer], "some/model", 200000);
+		expect(result.enabled).toBe(true);
+		expect(result.effectiveThresholdTokens).toBe(100000); // 50% of 200000
+		expect(result.warnings).toHaveLength(1);
+		expect(result.warnings[0].code).toBe("both-percent-and-tokens-defined");
+		expect(result.warnings[0].message).toContain("some/model");
+	});
+
+	it("emits a warning and null threshold when a rule defines neither percent nor tokens", () => {
+		const layer = {
+			source: "project" as const,
+			enabled: true,
+			default: { percent: 80 },
+			rules: [{ match: "some/model" }],
+		};
+		const result = resolveModelPolicy([layer], "some/model", 200000);
+		expect(result.enabled).toBe(true);
+		expect(result.effectiveThresholdTokens).toBeNull();
+		expect(result.warnings).toHaveLength(1);
+		expect(result.warnings[0].code).toBe("neither-percent-nor-tokens-defined");
+		expect(result.warnings[0].message).toContain("some/model");
+	});
 });
 
 // ---------------------------------------------------------------------------

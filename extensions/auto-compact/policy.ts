@@ -1,4 +1,4 @@
-import { Minimatch } from "minimatch";
+import { minimatch } from "minimatch";
 
 // ---------------------------------------------------------------------------
 // Types (aligned with the design doc Configuration Schema)
@@ -75,11 +75,11 @@ export function resolveModelPolicy(
 	}
 
 	// No rule matched — fall back to the highest-precedence specified default.
-	const defaultValue = resolveDefault(layers);
-	if (defaultValue) {
+	const defaultResult = resolveDefault(layers);
+	if (defaultResult) {
 		return resolveDefaultAsPolicy(
-			reversed[0].source,
-			defaultValue,
+			defaultResult.source,
+			defaultResult.value,
 			contextWindow,
 			warnings,
 			enabled,
@@ -101,22 +101,24 @@ export function resolveModelPolicy(
 // ---------------------------------------------------------------------------
 
 function matchesPattern(modelKey: string, pattern: string): boolean {
-	return new Minimatch(pattern, { nonegate: true, nobrace: true }).match(modelKey);
+	return minimatch(modelKey, pattern, { nonegate: true, nobrace: true });
 }
 
 function resolveGlobalEnablement(layers: ConfigLayer[]): boolean {
 	for (let i = layers.length - 1; i >= 0; i--) {
 		if (layers[i].enabled !== undefined) {
-			return layers[i].enabled;
+			return layers[i].enabled!;
 		}
 	}
 	return false;
 }
 
-function resolveDefault(layers: ConfigLayer[]): ModelRuleDefault | undefined {
+function resolveDefault(
+	layers: ConfigLayer[],
+): { source: ConfigLayerSource; value: ModelRuleDefault } | undefined {
 	for (let i = layers.length - 1; i >= 0; i--) {
 		if (layers[i].default !== undefined) {
-			return layers[i].default;
+			return { source: layers[i].source, value: layers[i].default! };
 		}
 	}
 	return undefined;
@@ -135,10 +137,23 @@ function resolveRule(
 	let thresholdTokens: number | null = null;
 
 	if (ruleEnabled) {
-		if (rule.percent !== undefined) {
-			thresholdTokens = Math.floor((contextWindow * rule.percent) / 100);
-		} else if (rule.tokens !== undefined) {
-			thresholdTokens = rule.tokens;
+		const hasPercent = rule.percent !== undefined;
+		const hasTokens = rule.tokens !== undefined;
+		if (hasPercent && hasTokens) {
+			warnings.push({
+				code: "both-percent-and-tokens-defined",
+				message: `Rule matches '${rule.match}': both percent and tokens defined; percent takes priority.`,
+			});
+		} else if (!hasPercent && !hasTokens) {
+			warnings.push({
+				code: "neither-percent-nor-tokens-defined",
+				message: `Rule matches '${rule.match}': neither percent nor tokens defined; threshold is null.`,
+			});
+		}
+		if (hasPercent) {
+			thresholdTokens = Math.floor((contextWindow * rule.percent!) / 100);
+		} else if (hasTokens) {
+			thresholdTokens = rule.tokens!;
 			if (thresholdTokens > contextWindow) {
 				warnings.push({
 					code: "oversized-absolute-threshold",

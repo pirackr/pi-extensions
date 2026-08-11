@@ -8,6 +8,17 @@ import { Type } from "typebox";
 import { loadSubagentConfiguration } from "./config.ts";
 import { parseCoordinatorResult, renderSummaryResults } from "./render.ts";
 import { getActiveResearchBudgets } from "../deep-research/session.ts";
+import {
+	buildWindowName,
+	cancelPanes,
+	closeParentWindow,
+	findParentWindow,
+	launchBatch,
+	renameWindow,
+	SHARED_SESSION,
+	type PaneSpec,
+	type TmuxExecutor,
+} from "./tmux.ts";
 
 const MAX_RESULT_BYTES = 50 * 1024;
 const POLL_INTERVAL_MS = 250;
@@ -39,6 +50,8 @@ export interface RunnerRequest {
 	pi: PiInvocation;
 	childExtensions: string[];
 	loadContextFiles: boolean;
+	/** Best-effort private human-readable transcript file (0600). */
+	transcriptPath?: string;
 	/** Hard cap on web_lookup calls for this subagent process (0 = unlimited). */
 	webSearchMaxLookups?: number;
 	/** Hard cap on fetch_web calls for this subagent process (0 = unlimited). */
@@ -107,7 +120,16 @@ export interface TaskStatus {
 
 export interface SubagentDetails {
 	session: string;
+	/** Attach command that selects the parent window. */
 	attachCommand: string;
+	/** Immutable tmux window id ("@N") of the parent Pi session's window. */
+	windowId: string;
+	/** Readable display name of the parent window. */
+	windowName: string;
+	/** Private transcript directory for this run. */
+	transcriptDir: string;
+	/** Non-fatal layout warning from the tmux orchestration, if any. */
+	layoutWarning?: string;
 	artifactsPath: string | null;
 	results: TaskStatus[];
 }
@@ -281,8 +303,52 @@ export function truncateResult(text: string): string {
 	return `${truncated}\n\n[Output truncated.]`;
 }
 
+/**
+ * Deterministic topic source: the first user message of the session. No model
+ * call is made; the text is slugified by the naming helper in tmux.ts.
+ */
+export function firstUserPrompt(
+	sessionManager: { getEntries?: () => unknown[] } | undefined,
+): string | undefined {
+	const entries = sessionManager?.getEntries?.() ?? [];
+	for (const entry of entries) {
+		const candidate = entry as {
+			type?: string;
+			message?: { role?: string; content?: unknown };
+		};
+		if (candidate.type !== "message" || candidate.message?.role !== "user") {
+			continue;
+		}
+		const content = candidate.message.content;
+		if (typeof content === "string" && content.trim()) return content;
+		if (Array.isArray(content)) {
+			const text = (content as Array<{ type?: string; text?: string }>)
+				.filter((part) => part.type === "text" && typeof part.text === "string")
+				.map((part) => part.text as string)
+				.join(" ")
+				.trim();
+			if (text) return text;
+		}
+	}
+	return undefined;
+}
+
+/** Human-readable window/attach/transcript info appended to results. */
+export function renderTmuxInfo(details: SubagentDetails): string {
+	const lines = [
+		`Tmux session: ${details.session}`,
+		`Window: ${details.windowName} (${details.windowId})`,
+		`Attach: ${details.attachCommand}`,
+	];
+	if (details.layoutWarning) lines.push(`Layout warning: ${details.layoutWarning}`);
+	if (details.transcriptDir) lines.push(`Transcripts: ${details.transcriptDir}`);
+	return lines.join("\n");
+}
+
 export function renderProgress(
 	session: string,
+	windowName: string,
+	windowId: string,
 	statuses: TaskStatus[],
 ): string {
 	const counts = statuses.reduce<Record<string, number>>((acc, status) => {
@@ -298,7 +364,10 @@ export function renderProgress(
 				`  ${status.taskId} (${status.agent}) [${status.model}] ${status.state}`,
 		)
 		.join("\n");
-	return `Tmux session: ${session}\nAttach: tmux attach -t ${session}\nProgress: ${summary || "starting"}\n${detail}`;
+	const attach = windowId
+		? `tmux attach -t ${session}:${windowId}`
+		: `tmux attach -t ${session}`;
+	return `Tmux session: ${session}\nWindow: ${windowName} (${windowId})\nAttach: ${attach}\nProgress: ${summary || "starting"}\n${detail}`;
 }
 
 export function renderResults(
@@ -606,8 +675,35 @@ export default function (pi: ExtensionAPI) {
 				await fs.promises.mkdir(path.join(runDir, child), { mode: 0o700 });
 			}
 
-			const session = `pi-subagent-${path.basename(runDir).replace(/^pi-subagent-/, "")}`;
-			const attachCommand = `tmux attach -t ${session}`;
+			// Parent identity: the immutable Pi session id owns one window in the
+			// shared tmux session; display names are derived and may be renamed.
+			const parentSessionId = ctx?.sessionManager?.getSessionId() ?? "unknown";
+			const parentCwd = ctx?.cwd ?? process.cwd();
+			const windowName = buildWindowName(parentCwd, {
+				homedir: os.homedir(),
+				topic: ctx?.sessionManager?.getSessionName(),
+				firstPrompt: firstUserPrompt(ctx?.sessionManager),
+			});
+
+			// Private transcripts live outside the per-call artifact directory so
+			// artifact cleanup can never remove them (design: 0700 dirs, 0600 files).
+			const transcriptRoot = "/tmp/pi-subagent-transcripts";
+			const transcriptParentDir = path.join(
+				transcriptRoot,
+				parentSessionId.replace(/[^A-Za-z0-9._-]/g, "_"),
+			);
+			const transcriptDir = path.join(transcriptParentDir, path.basename(runDir));
+			await fs.promises.mkdir(transcriptParentDir, {
+				recursive: true,
+				mode: 0o700,
+			});
+			await fs.promises.mkdir(transcriptDir, { recursive: true, mode: 0o700 });
+			await fs.promises.chmod(transcriptParentDir, 0o700);
+			await fs.promises.chmod(transcriptDir, 0o700);
+
+			const session = SHARED_SESSION;
+			let windowId = "";
+			let layoutWarning: string | undefined;
 			const runner = getRunnerInvocation();
 			const piInvocation = getPiInvocation();
 			const requests: RunnerRequest[] = [];
@@ -624,15 +720,34 @@ export default function (pi: ExtensionAPI) {
 					model: item.profile.model,
 				}),
 			);
-			let sessionCreated = false;
 			let keepArtifacts = true;
+			let launchedPaneIds: string[] = [];
+			const tmuxExec: TmuxExecutor = (args) => runCommand("tmux", args);
+
+			const getAttachCommand = () =>
+				windowId
+					? `tmux attach -t ${session}:${windowId}`
+					: `tmux attach -t ${session}`;
 
 			const emitUpdate = () => {
-				onUpdate?.({
-					content: [{ type: "text", text: renderProgress(session, statuses) }],
+				onUpdate?.({					content: [
+						{
+							type: "text",
+							text: renderProgress(
+								session,
+								windowName,
+								windowId,
+								statuses,
+							),
+						},
+					],
 					details: {
 						session,
-						attachCommand,
+						attachCommand: getAttachCommand(),
+						windowId,
+						windowName,
+						transcriptDir,
+						layoutWarning,
 						artifactsPath: runDir,
 						results: [...statuses],
 					} satisfies SubagentDetails,
@@ -640,6 +755,12 @@ export default function (pi: ExtensionAPI) {
 			};
 
 			try {
+				// Defensive: the research-session module may be absent (e.g. not
+				// registered in tests); treat it as no active budgets.
+				const activeResearchBudgets = getActiveResearchBudgets() ?? {
+					maxSearchesPerAgent: null,
+					maxFetchesPerAgent: null,
+				};
 				const controlCommand = [
 					runner.command,
 					...runner.args,
@@ -648,22 +769,9 @@ export default function (pi: ExtensionAPI) {
 				]
 					.map(shellQuote)
 					.join(" ");
-				await runCommand("tmux", [
-					"new-session",
-					"-d",
-					"-s",
-					session,
-					"-n",
-					"control",
-					"-c",
-					ctx!.cwd,
-					controlCommand,
-				]);
-				sessionCreated = true;
-				emitUpdate();
+				const panes: PaneSpec[] = [];
 
-				const activeResearchBudgets = getActiveResearchBudgets();
-			for (let index = 0; index < prepared.length; index++) {
+				for (let index = 0; index < prepared.length; index++) {
 					const item = prepared[index];
 					const promptPath = path.join(
 						runDir,
@@ -699,6 +807,7 @@ export default function (pi: ExtensionAPI) {
 						outputPath: path.join(runDir, "output", `${item.taskId}.jsonl`),
 						stderrPath: path.join(runDir, "stderr", `${item.taskId}.log`),
 						statusPath: path.join(runDir, "status", `${item.taskId}.json`),
+						transcriptPath: path.join(transcriptDir, `${item.taskId}.log`),
 						pi: piInvocation,
 						childExtensions: config.childExtensions,
 						loadContextFiles: config.loadContextFiles,
@@ -735,21 +844,34 @@ export default function (pi: ExtensionAPI) {
 					const taskCommand = [runner.command, ...runner.args, requestPath]
 						.map(shellQuote)
 						.join(" ");
-					const windowName = `${item.task.agent}-${index + 1}`;
-					await runCommand("tmux", [
-						"new-window",
-						"-d",
-						"-t",
-						session,
-						"-n",
-						windowName,
-						"-c",
-						item.cwd,
-						taskCommand,
-					]);
+					panes.push({
+						runId: path.basename(runDir),
+						taskId: item.taskId,
+						agent: item.task.agent,
+						command: taskCommand,
+						cwd: item.cwd,
+						order: index,
+					});
 				}
 
+				// Launch everything through the shared session orchestrator: the
+				// session is created once, the parent window holds one pane per task,
+				// and completed panes stay visible via remain-on-exit.
+				const launchResult = await launchBatch(tmuxExec, {
+					sessionId: parentSessionId,
+					pid: process.pid,
+					cwd: parentCwd,
+					windowName,
+					controlCommand,
+					panes,
+				});
+				windowId = launchResult.window.id;
+				layoutWarning = launchResult.layoutWarning;
+				launchedPaneIds = launchResult.paneIds;
+				emitUpdate();
+
 				let lastProgress = "";
+				let deadlineHit = false;
 				const overallDeadline =
 					Date.now() +
 					Math.max(...prepared.map((item) => item.timeoutSeconds)) * 1000 +
@@ -773,6 +895,7 @@ export default function (pi: ExtensionAPI) {
 					if (statuses.every((status) => TERMINAL_STATES.has(status.state)))
 						break;
 					if (Date.now() > overallDeadline) {
+						deadlineHit = true;
 						for (let index = 0; index < statuses.length; index++) {
 							if (TERMINAL_STATES.has(statuses[index].state)) continue;
 							statuses[index] = {
@@ -786,6 +909,15 @@ export default function (pi: ExtensionAPI) {
 						break;
 					}
 					await delay(POLL_INTERVAL_MS, signal);
+				}
+				// A supervisor timeout means the runners are still live: kill only the
+				// panes this call launched so their process groups terminate.
+				if (deadlineHit) {
+					try {
+						await cancelPanes(tmuxExec, launchedPaneIds);
+					} catch {
+						// Best-effort: never mask the timeout result.
+					}
 				}
 
 				for (let index = 0; index < statuses.length; index++) {
@@ -807,28 +939,40 @@ export default function (pi: ExtensionAPI) {
 					(retainArtifacts === "on_failure" && failed);
 				const details: SubagentDetails = {
 					session,
-					attachCommand,
+					attachCommand: getAttachCommand(),
+					windowId,
+					windowName,
+					transcriptDir,
+					layoutWarning,
 					artifactsPath: keepArtifacts ? runDir : null,
 					results: statuses,
 				};
+				const rendered =
+					returnMode === "summary"
+						? renderSummaryResults(statuses, details.artifactsPath)
+						: renderResults(
+								statuses,
+								details.artifactsPath,
+								Object.fromEntries(promptContents),
+							);
 				return {
 					content: [
 						{
 							type: "text",
-							text:
-								returnMode === "summary"
-									? renderSummaryResults(statuses, details.artifactsPath)
-									: renderResults(
-											statuses,
-											details.artifactsPath,
-											Object.fromEntries(promptContents),
-										),
+							text: `${rendered}\n\n${renderTmuxInfo(details)}`,
 						},
 					],
 					details,
 					usage: aggregateUsage(statuses),
 				};
 			} catch (error) {
+				// Batch-local cancellation: aborts, supervisor timeouts, and launch
+				// failures kill only the panes this call created (idempotent).
+				try {
+					await cancelPanes(tmuxExec, launchedPaneIds);
+				} catch {
+					// Best-effort; the original error is the reportable one.
+				}
 				keepArtifacts = retainArtifacts !== "never";
 				const message = error instanceof Error ? error.message : String(error);
 				const artifactNote = keepArtifacts
@@ -836,29 +980,50 @@ export default function (pi: ExtensionAPI) {
 					: "";
 				throw new Error(`${message}${artifactNote}`);
 			} finally {
-				if (sessionCreated) {
-					await runCommand("tmux", ["kill-session", "-t", session]).catch(
-						() => undefined,
-					);
-					const shutdownDeadline = Date.now() + 6_000;
-					while (requests.length > 0 && Date.now() < shutdownDeadline) {
-						let allTerminal = true;
-						for (let index = 0; index < requests.length; index++) {
-							const latest = await readStatus(requests[index].statusPath);
-							if (latest) statuses[index] = latest;
-							if (!latest || !TERMINAL_STATES.has(latest.state))
-								allTerminal = false;
-						}
-						if (allTerminal) break;
-						await new Promise((resolve) => setTimeout(resolve, 100));
-					}
-				}
 				if (!keepArtifacts || retainArtifacts === "never") {
-					await fs.promises
-						.rm(runDir, { recursive: true, force: true })
-						.catch(() => undefined);
+					try {
+						await fs.promises.rm(runDir, { recursive: true, force: true });
+					} catch {
+						// Best-effort cleanup.
+					}
 				}
 			}
 		},
+	});
+
+	// Parent window lifecycle: keep the window's display name in sync with
+	// /name changes and close only this parent's window on shutdown. Both are
+	// best-effort: a tmux failure must never take down the parent Pi session.
+	const lifecycleExec: TmuxExecutor = (args) => runCommand("tmux", args);
+	pi.on("session_info_changed", (event, ctx) => {
+		void (async () => {
+			try {
+				const sessionId = ctx.sessionManager.getSessionId();
+				const parentWindow = await findParentWindow(lifecycleExec, sessionId);
+				if (!parentWindow) return;
+				const name = buildWindowName(ctx.cwd, {
+					homedir: os.homedir(),
+					topic: (event as { name?: string }).name,
+					firstPrompt: firstUserPrompt(ctx.sessionManager),
+				});
+				await renameWindow(lifecycleExec, parentWindow.id, name);
+			} catch {
+				// Non-fatal.
+			}
+		})();
+	});
+	pi.on("session_shutdown", (_event, ctx) => {
+		void (async () => {
+			try {
+				const sessionId = ctx.sessionManager.getSessionId();
+				const parentWindow = await findParentWindow(lifecycleExec, sessionId);
+				if (!parentWindow) return;
+				// Killing the window terminates active runner process groups; the
+				// shared session and other parents' windows stay untouched.
+				await closeParentWindow(lifecycleExec, parentWindow.id);
+			} catch {
+				// Best-effort cleanup.
+			}
+		})();
 	});
 }

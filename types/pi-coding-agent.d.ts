@@ -22,6 +22,7 @@ declare module "@earendil-works/pi-coding-agent" {
 		timestamp: string;
 		customType?: string;
 		data?: unknown;
+		message?: { role?: string; content?: unknown };
 	}
 
 	export interface ExtensionContext {
@@ -32,6 +33,8 @@ declare module "@earendil-works/pi-coding-agent" {
 		sessionManager: {
 			getEntries(): SessionEntry[];
 			getBranch(fromId?: string): SessionEntry[];
+			getSessionId(): string;
+			getSessionName(): string | undefined;
 		};
 		isIdle(): boolean;
 		hasPendingMessages(): boolean;
@@ -100,7 +103,13 @@ declare module "@earendil-works/pi-coding-agent" {
 		): void;
 		appendEntry<T = unknown>(customType: string, data?: T): void;
 		on(
-			event: "session_start" | "turn_start" | "turn_end" | "agent_end",
+			event:
+				| "session_start"
+				| "turn_start"
+				| "turn_end"
+				| "agent_end"
+				| "session_info_changed"
+				| "session_shutdown",
 			handler: (
 				event: unknown,
 				ctx: ExtensionContext,

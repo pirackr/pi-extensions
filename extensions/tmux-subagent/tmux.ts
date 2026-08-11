@@ -61,7 +61,7 @@ function slugifySegment(segment: string): string {
  */
 export function shortenPath(cwd: string, homedir = osHomedir()): string {
 	const normalized = path.normalize(cwd);
-	const home = path.normalize(homedir);
+	const home = path.normalize(homedir || osHomedir());
 
 	let rel: string;
 	if (normalized === home) return "";

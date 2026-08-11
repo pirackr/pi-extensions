@@ -76,6 +76,23 @@ vi.mock("node:os", () => ({
 	tmpdir: vi.fn().mockReturnValue("/tmp"),
 }));
 
+// The tmux orchestration module is replaced for integration tests: launch
+// rejects by default (preserving the existing tests' expectations), and the
+// shared-session/lifecycle tests below override it with controlled results.
+vi.mock("../tmux.ts", async () => {
+	const actual = await vi.importActual<typeof import("../tmux.ts")>(
+		"../tmux.ts",
+	);
+	return {
+		...actual,
+		launchBatch: vi.fn().mockRejectedValue(new Error("unexpected command")),
+		cancelPanes: vi.fn().mockResolvedValue(undefined),
+		findParentWindow: vi.fn().mockResolvedValue(null),
+		renameWindow: vi.fn().mockResolvedValue(undefined),
+		closeParentWindow: vi.fn().mockResolvedValue(undefined),
+	};
+});
+
 
 import { execFile } from "node:child_process";
 import * as os from "node:os";
@@ -103,11 +120,22 @@ import {
 	type TaskStatus,
 	type PreparedTask,
 } from "../index.ts";
+import {
+	cancelPanes,
+	launchBatch,
+} from "../tmux.ts";
 
 const mockExecFile = vi.mocked(execFile);
 const mockExistsSync = vi.mocked(fs.existsSync);
 const mockReadFile = vi.mocked(fs.promises.readFile);
 const mockRealpath = vi.mocked(fs.promises.realpath);
+
+// restoreAllMocks() in nested describes wipes module-mock implementations;
+// re-establish the tmux orchestrator's default rejection before every test.
+beforeEach(() => {
+	vi.mocked(launchBatch).mockRejectedValue(new Error("unexpected command"));
+	vi.mocked(cancelPanes).mockResolvedValue(undefined);
+});
 
 describe("runCommand", () => {
 	beforeEach(() => {
@@ -578,9 +606,15 @@ describe("renderProgress", () => {
 			},
 		];
 
-		const result = renderProgress("pi-subagent-abc123", statuses);
-		expect(result).toContain("Tmux session: pi-subagent-abc123");
-		expect(result).toContain("Attach: tmux attach -t pi-subagent-abc123");
+		const result = renderProgress(
+			"pi-subagents",
+			"w/g/pi-extensions-observability",
+			"@3",
+			statuses,
+		);
+		expect(result).toContain("Tmux session: pi-subagents");
+		expect(result).toContain("Window: w/g/pi-extensions-observability (@3)");
+		expect(result).toContain("Attach: tmux attach -t pi-subagents:@3");
 		expect(result).toContain("1 succeeded");
 		expect(result).toContain("1 running");
 		expect(result).toContain("1 failed");
@@ -592,7 +626,7 @@ describe("renderProgress", () => {
 	});
 
 	it("shows 'starting' when no statuses", () => {
-		const result = renderProgress("pi-subagent-abc123", []);
+		const result = renderProgress("pi-subagents", "w/g/pi-extensions", "@3", []);
 		expect(result).toContain("Progress: starting");
 	});
 
@@ -607,7 +641,7 @@ describe("renderProgress", () => {
 			},
 		];
 
-		const result = renderProgress("session", statuses);
+		const result = renderProgress("pi-subagents", "w/g/pi-extensions", "@3", statuses);
 		expect(result).toContain("1 running");
 		expect(result).toContain("task-1 (worker) [gpt-4o] running");
 	});
@@ -1041,6 +1075,7 @@ Recommended next action: retry
 		const registered: any[] = [];
 		const mockPi = {
 			registerTool: (tool: any) => registered.push(tool),
+			on: vi.fn(),
 		};
 		piTmuxSubagent(mockPi as any);
 		const tool = registered.find((t: any) => t.name === "run_subagents");
@@ -1088,6 +1123,7 @@ Recommended next action: retry
 		const registered: any[] = [];
 		const mockPi = {
 			registerTool: (tool: any) => registered.push(tool),
+			on: vi.fn(),
 		};
 		piTmuxSubagent(mockPi as any);
 		const tool = registered.find((t: any) => t.name === "run_subagents");
@@ -1159,6 +1195,7 @@ Recommended next action: retry
 		const registered: any[] = [];
 		const mockPi = {
 			registerTool: (tool: any) => registered.push(tool),
+			on: vi.fn(),
 		};
 		piTmuxSubagent(mockPi as any);
 		const tool = registered.find((t: any) => t.name === "run_subagents");
@@ -1182,6 +1219,7 @@ Recommended next action: retry
 		// vi.restoreAllMocks() in this describe's afterEach wipes module-mock
 		// implementations (os.tmpdir etc.) — re-establish what execute() needs.
 		vi.mocked(os.tmpdir).mockReturnValue("/tmp");
+		vi.mocked(os.homedir).mockReturnValue("/home/user");
 
 		// Should not throw the absolute-path error; any later error is expected.
 		await expect(
@@ -1238,6 +1276,7 @@ describe("active research session budget enforcement", () => {
 		const registered: any[] = [];
 		const mockPi = {
 			registerTool: (tool: any) => registered.push(tool),
+			on: vi.fn(),
 		};
 		piTmuxSubagent(mockPi as any);
 		return registered.find((t: any) => t.name === "run_subagents");
@@ -1261,6 +1300,7 @@ describe("active research session budget enforcement", () => {
 		vi.mocked(fs.promises.realpath).mockImplementation(async () => "/tmp");
 		vi.mocked(fs.promises.mkdtemp).mockImplementation(async () => "/tmp/pi-subagent-test");
 		vi.mocked(os.tmpdir).mockReturnValue("/tmp");
+		vi.mocked(os.homedir).mockReturnValue("/home/user");
 		// Terminal status so the finally-block shutdown poll exits immediately
 		// instead of burning its 6s deadline (which exceeds the 5s test timeout).
 		vi.mocked(fs.promises.readFile).mockResolvedValue(

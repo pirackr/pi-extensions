@@ -25,11 +25,49 @@ declare module "@earendil-works/pi-coding-agent" {
 		message?: { role?: string; content?: unknown };
 	}
 
+	// ------------------------------------------------------------------
+	// Model
+	// ------------------------------------------------------------------
+
+	export interface Model<TApi = unknown> {
+		id: string;
+		provider: string;
+		contextWindow: number;
+	}
+
+	// ------------------------------------------------------------------
+	// Context usage and compaction
+	// ------------------------------------------------------------------
+
+	export interface ContextUsage {
+		tokens: number | null;
+		contextWindow: number;
+		percent: number | null;
+	}
+
+	export interface CompactionResult {
+		summary: string;
+		firstKeptEntryId: string;
+		tokensBefore: number;
+		estimatedTokensAfter?: number;
+	}
+
+	export interface CompactOptions {
+		customInstructions?: string;
+		onComplete?: (result: CompactionResult) => void;
+		onError?: (error: Error) => void;
+	}
+
+	// ------------------------------------------------------------------
+	// Extension context (extended)
+	// ------------------------------------------------------------------
+
 	export interface ExtensionContext {
 		ui: ExtensionUIContext;
 		mode: "tui" | "rpc" | "json" | "print";
 		hasUI: boolean;
 		cwd: string;
+		model: Model<any> | undefined;
 		sessionManager: {
 			getEntries(): SessionEntry[];
 			getBranch(fromId?: string): SessionEntry[];
@@ -37,7 +75,10 @@ declare module "@earendil-works/pi-coding-agent" {
 			getSessionName(): string | undefined;
 		};
 		isIdle(): boolean;
+		isProjectTrusted(): boolean;
 		hasPendingMessages(): boolean;
+		getContextUsage(): ContextUsage | undefined;
+		compact(options?: CompactOptions): void;
 	}
 
 	export interface ExtensionCommandContext extends ExtensionContext {}
@@ -52,6 +93,61 @@ declare module "@earendil-works/pi-coding-agent" {
 			| Promise<Array<{ value: string; label?: string }> | null>;
 		handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 	}
+
+	// ------------------------------------------------------------------
+	// Events
+	// ------------------------------------------------------------------
+
+	export interface SessionStartEvent {
+		type: "session_start";
+		reason: "startup" | "reload" | "new" | "resume" | "fork";
+		previousSessionFile?: string;
+	}
+
+	export interface ModelSelectEvent {
+		type: "model_select";
+		model: Model<any>;
+		previousModel: Model<any> | undefined;
+		source: string;
+	}
+
+	export interface TurnEndEvent {
+		type: "turn_end";
+		turnIndex: number;
+		message: unknown;
+		toolResults: unknown[];
+	}
+
+	export interface CompactionPreparation {
+		firstKeptEntryId: string;
+		tokensBefore: number;
+	}
+
+	export interface SessionBeforeCompactEvent {
+		type: "session_before_compact";
+		preparation: CompactionPreparation;
+		branchEntries: SessionEntry[];
+		customInstructions?: string;
+		reason: "manual" | "threshold" | "overflow";
+		willRetry: boolean;
+		signal: AbortSignal;
+	}
+
+	export interface SessionBeforeCompactResult {
+		cancel?: boolean;
+	}
+
+	export interface SessionCompactEvent {
+		type: "session_compact";
+		compactionEntry: unknown;
+		fromExtension: boolean;
+		reason: "manual" | "threshold" | "overflow";
+		willRetry: boolean;
+	}
+
+	// ------------------------------------------------------------------
+	// ExtensionAPI
+	// ------------------------------------------------------------------
 
 	export interface ExtensionAPI {
 		registerTool(tool: {
@@ -103,10 +199,43 @@ declare module "@earendil-works/pi-coding-agent" {
 		): void;
 		appendEntry<T = unknown>(customType: string, data?: T): void;
 		on(
+			event: "session_start",
+			handler: (
+				event: SessionStartEvent,
+				ctx: ExtensionContext,
+			) => void | Promise<void>,
+		): void;
+		on(
+			event: "model_select",
+			handler: (
+				event: ModelSelectEvent,
+				ctx: ExtensionContext,
+			) => void | Promise<void>,
+		): void;
+		on(
+			event: "turn_end",
+			handler: (
+				event: TurnEndEvent,
+				ctx: ExtensionContext,
+			) => void | Promise<void>,
+		): void;
+		on(
+			event: "session_before_compact",
+			handler: (
+				event: SessionBeforeCompactEvent,
+				ctx: ExtensionContext,
+			) => void | SessionBeforeCompactResult | Promise<void | SessionBeforeCompactResult>,
+		): void;
+		on(
+			event: "session_compact",
+			handler: (
+				event: SessionCompactEvent,
+				ctx: ExtensionContext,
+			) => void | Promise<void>,
+		): void;
+		on(
 			event:
-				| "session_start"
 				| "turn_start"
-				| "turn_end"
 				| "agent_end"
 				| "session_info_changed"
 				| "session_shutdown",

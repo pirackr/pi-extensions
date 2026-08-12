@@ -1,6 +1,37 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+import createExtension, { resetExtensionState } from "../extensions/auto-compact/index.ts";
+import * as fs from "node:fs";
 import { AutoCompactController } from "../extensions/auto-compact/controller.ts";
 import type { ResolvedPolicy } from "../extensions/auto-compact/policy.ts";
+
+// ---------------------------------------------------------------------------
+// Mock node:fs before importing config
+// ---------------------------------------------------------------------------
+vi.mock("node:fs", async () => {
+	const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+	return {
+		...actual,
+		default: {
+			...actual,
+			readFileSync: vi.fn(),
+		},
+		readFileSync: vi.fn(),
+	};
+});
+
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+	CONFIG_DIR_NAME: ".pi",
+	getAgentDir: () => "/mock/agent",
+}));
+
+import * as fsReal from "node:fs";
+const mockReadFileSync = vi.mocked(fsReal.readFileSync);
+
+// Resolve the actual package root so mocks match real path resolution in index.ts
+const __testDir = dirname(fileURLToPath(import.meta.url));
+const PACKAGE_ROOT = resolve(__testDir, "../");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -17,482 +48,827 @@ function makePolicy(overrides: Partial<ResolvedPolicy> = {}): ResolvedPolicy {
 	};
 }
 
-function makeSnapshot(overrides: {
-	modelKey?: string;
-	contextWindow?: number;
-	usageTokens?: number | null;
-	policy?: ResolvedPolicy;
-} = {}): Parameters<
-	ReturnType<typeof makeController>["evaluate"]
->[0] {
+function mockFileContents(contents: Record<string, string>): void {
+	mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+		const p = typeof path === "string" ? path : String(path);
+		if (p in contents) {
+			return contents[p];
+		}
+		const err = new Error(
+			`ENOENT: no such file or directory, open '${p}'`,
+		) as NodeJS.ErrnoException;
+		err.code = "ENOENT";
+		throw err;
+	});
+}
+
+function makeFakePi(overrides: Partial<FakePi> = {}): FakePi {
 	return {
-		modelKey: "anthropic/claude-3-opus",
-		contextWindow: 200000,
-		usageTokens: null,
-		policy: makePolicy(),
+		registerTool: vi.fn(),
+		registerCommand: vi.fn(),
+		registerFlag: vi.fn(),
+		getFlag: vi.fn(),
+		sendMessage: vi.fn(),
+		appendEntry: vi.fn(),
+		on: vi.fn(),
+		getActiveTools: vi.fn(),
+		setActiveTools: vi.fn(),
 		...overrides,
 	};
 }
 
-function makeController(): AutoCompactController {
-	return new AutoCompactController();
+interface FakePi {
+	registerTool: ReturnType<typeof vi.fn>;
+	registerCommand: ReturnType<typeof vi.fn>;
+	registerFlag: ReturnType<typeof vi.fn>;
+	getFlag: ReturnType<typeof vi.fn>;
+	sendMessage: ReturnType<typeof vi.fn>;
+	appendEntry: ReturnType<typeof vi.fn>;
+	on: ReturnType<typeof vi.fn>;
+	getActiveTools: ReturnType<typeof vi.fn>;
+	setActiveTools: ReturnType<typeof vi.fn>;
+}
+
+function getHandler(pi: FakePi, event: string) {
+	const call = pi.on.mock.calls.find((c) => c[0] === event);
+	return call?.[1] as ((event: unknown, ctx: unknown) => unknown) | undefined;
+}
+
+function makeCtx(overrides: {
+	hasUI?: boolean;
+	model?: { provider: string; id: string; contextWindow: number };
+	usage?: { tokens: number | null; contextWindow: number; percent: number | null };
+	trusted?: boolean;
+} = {}): Record<string, unknown> {
+	return {
+		hasUI: overrides.hasUI ?? false,
+		ui: {
+			notify: vi.fn(),
+		},
+		model: overrides.model,
+		getContextUsage: () => overrides.usage,
+		isProjectTrusted: () => overrides.trusted ?? false,
+		compact: vi.fn(),
+		cwd: "/mock/project",
+		mode: "tui",
+		sessionManager: {
+			getEntries: () => [],
+			getBranch: () => [],
+			getSessionId: () => "sess-1",
+			getSessionName: () => "test",
+		},
+		isIdle: () => true,
+		hasPendingMessages: () => false,
+	};
+}
+
+function makeModel(provider: string, id: string, contextWindow: number) {
+	return { provider, id, contextWindow };
 }
 
 // ---------------------------------------------------------------------------
-// 1. Initial/resumed evaluation
+// 1. Registration
 // ---------------------------------------------------------------------------
 
-describe("initial/resumed evaluation", () => {
-	it("arms when usage is below threshold on initial evaluate", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
+beforeEach(() => {
+	resetExtensionState();
+});
 
-		ctrl.resetSession("anthropic/claude-3-opus");
-		const result = ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 50000,
-			policy,
-		});
-
-		expect(result.triggered).toBe(false);
-		expect(ctrl.status().armed).toBe(true);
-		expect(ctrl.status().inFlight).toBe(false);
+describe("registration", () => {
+	it("registers /auto-compact command", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		expect(pi.registerCommand).toHaveBeenCalledWith("auto-compact", expect.objectContaining({
+			description: expect.stringContaining("auto-compaction status"),
+		}));
 	});
 
-	it("triggers immediately on resumed session already above threshold", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		// Simulate resumed session: usage already above threshold
-		const result = ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 90000,
-			policy,
-		});
-
-		expect(result.triggered).toBe(true);
-		expect(ctrl.status().armed).toBe(false);
-		expect(ctrl.status().inFlight).toBe(true);
+	it("registers all five events", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		const eventCalls = pi.on.mock.calls.map((c) => c[0]);
+		expect(eventCalls).toContain("session_start");
+		expect(eventCalls).toContain("model_select");
+		expect(eventCalls).toContain("turn_end");
+		expect(eventCalls).toContain("session_before_compact");
+		expect(eventCalls).toContain("session_compact");
 	});
 });
 
 // ---------------------------------------------------------------------------
-// 2. Model-change reset
+// 2. session_start
 // ---------------------------------------------------------------------------
 
-describe("model-change reset", () => {
-	it("clears armed/in-flight state on model change", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 90000,
-			policy,
+describe("session_start", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			const p = typeof path === "string" ? path : String(path);
+			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+			}
+			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
 		});
-		expect(ctrl.status().inFlight).toBe(true);
-
-		// Switch model — should clear state
-		ctrl.resetSession("openai/gpt-4o");
-		expect(ctrl.status().armed).toBe(false);
-		expect(ctrl.status().inFlight).toBe(false);
-		expect(ctrl.status().modelKey).toBe("openai/gpt-4o");
 	});
 
-	it("resets lastPolicy and lastError on model change", () => {
-		const ctrl = makeController();
-		ctrl.resetSession("old/model");
-		ctrl.evaluate({
-			modelKey: "old/model",
-			contextWindow: 100000,
-			usageTokens: 50000,
-			policy: makePolicy({ matchedPattern: "old/pattern" }),
-		});
-		ctrl.recordFailure(new Error("oops"));
-		expect(ctrl.status().lastError).toBe("oops");
-
-		ctrl.resetSession("new/model");
-		expect(ctrl.status().lastPolicy).toBeNull();
-		expect(ctrl.status().lastError).toBeNull();
-		expect(ctrl.status().modelKey).toBe("new/model");
-	});
-});
-
-// ---------------------------------------------------------------------------
-// 3. Unknown usage skipped
-// ---------------------------------------------------------------------------
-
-describe("unknown usage skipped", () => {
-	it("skips evaluation when usageTokens is null", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		const result = ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: null,
-			policy,
+	it("loads packaged + user config on startup", () => {
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			const p = typeof path === "string" ? path : String(path);
+			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+			}
+			if (p === "/mock/agent/auto-compact/config.json") {
+				return JSON.stringify({ default: { percent: 70 } });
+			}
+			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
 		});
 
-		expect(result.triggered).toBe(false);
-		expect(ctrl.status().armed).toBe(false);
+		const pi = makeFakePi();
+		createExtension(pi);
+		const handler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+
+		handler!(
+			{ type: "session_start", reason: "startup" },
+			ctx as any,
+		);
+
+		// Controller should have been reset and evaluate called
+		const compactCalls = (ctx as any).compact.mock.calls;
+		// Not triggered since 50000 < 80% of 200000 = 160000
+		expect(compactCalls).toHaveLength(0);
 	});
 
-	it("skips evaluation when usageTokens is undefined", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		const result = ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: undefined as unknown as number | null,
-			policy,
+	it("skips project config when untrusted", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		const handler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+			trusted: false,
 		});
 
-		expect(result.triggered).toBe(false);
+		handler!(
+			{ type: "session_start", reason: "resume" },
+			ctx as any,
+		);
+
+		const compactCalls = (ctx as any).compact.mock.calls;
+		expect(compactCalls).toHaveLength(0);
 	});
 });
 
 // ---------------------------------------------------------------------------
-// 4. >= boundary behavior
+// 3. model_select
 // ---------------------------------------------------------------------------
 
-describe(">= boundary behavior", () => {
-	it("triggers when usage equals threshold exactly", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		const result = ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 80000,
-			policy,
+describe("model_select", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			const p = typeof path === "string" ? path : String(path);
+			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+			}
+			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
 		});
-
-		expect(result.triggered).toBe(true);
-		expect(ctrl.status().inFlight).toBe(true);
 	});
 
-	it("does not trigger when usage is one below threshold", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		const result = ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 79999,
-			policy,
+	it("resets controller for new model", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		const handler = getHandler(pi, "model_select");
+		const ctx = makeCtx({
+			model: makeModel("openai", "gpt-4o", 128000),
+			usage: { tokens: null, contextWindow: 128000, percent: null },
 		});
 
-		expect(result.triggered).toBe(false);
-		expect(ctrl.status().armed).toBe(true);
-	});
-});
+		handler!(
+			{
+				type: "model_select",
+				model: makeModel("openai", "gpt-4o", 128000),
+				previousModel: makeModel("anthropic", "claude-3-opus", 200000),
+				source: "set",
+			},
+			ctx as any,
+		);
 
-// ---------------------------------------------------------------------------
-// 5. One-shot threshold crossing
-// ---------------------------------------------------------------------------
-
-describe("one-shot threshold crossing", () => {
-	it("fires once and does not re-trigger while above threshold", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		const first = ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 80000,
-			policy,
-		});
-		expect(first.triggered).toBe(true);
-
-		// Second evaluate with same/above usage should not fire again
-		const second = ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 90000,
-			policy,
-		});
-		expect(second.triggered).toBe(false);
-	});
-
-	it("rearms after usage falls below threshold", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		// Fire
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 80000,
-			policy,
-		});
-		expect(ctrl.status().inFlight).toBe(true);
-
-		// Complete and below threshold
-		ctrl.recordComplete();
-		expect(ctrl.status().armed).toBe(false);
-
-		// Usage below threshold should arm
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 50000,
-			policy,
-		});
-		expect(ctrl.status().armed).toBe(true);
+		// No compact since usage is unknown (null)
+		const compactCalls = (ctx as any).compact.mock.calls;
+		expect(compactCalls).toHaveLength(0);
 	});
 });
 
 // ---------------------------------------------------------------------------
-// 6. In-flight deduplication
+// 4. turn_end — threshold crossing triggers compact
 // ---------------------------------------------------------------------------
 
-describe("in-flight deduplication", () => {
-	it("evaluate returns triggered=false while already in flight", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 80000,
-			policy,
+describe("turn_end threshold crossing", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			const p = typeof path === "string" ? path : String(path);
+			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+			}
+			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
 		});
-		expect(ctrl.status().inFlight).toBe(true);
+	});
 
-		const duplicate = ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 90000,
-			policy,
+	it("calls ctx.compact when usage crosses threshold", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		// First: session_start to load config
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
 		});
-		expect(duplicate.triggered).toBe(false);
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		// Then: turn_end with usage above threshold (80% of 200000 = 160000)
+		const turnHandler = getHandler(pi, "turn_end");
+		const ctx2 = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		turnHandler!(
+			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
+			ctx2 as any,
+		);
+
+		expect(ctx2.compact).toHaveBeenCalledTimes(1);
+		const compactOpts = ctx2.compact.mock.calls[0][0];
+		expect(compactOpts).toHaveProperty("onComplete");
+		expect(compactOpts).toHaveProperty("onError");
+	});
+
+	it("does not call compact when usage is below threshold", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		const turnHandler = getHandler(pi, "turn_end");
+		const ctx2 = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 100000, contextWindow: 200000, percent: 50 },
+		});
+		turnHandler!(
+			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
+			ctx2 as any,
+		);
+
+		expect(ctx2.compact).not.toHaveBeenCalled();
+	});
+
+	it("skips compact when usage is unknown (null)", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: null, contextWindow: 200000, percent: null },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		const turnHandler = getHandler(pi, "turn_end");
+		const ctx2 = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: null, contextWindow: 200000, percent: null },
+		});
+		turnHandler!(
+			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
+			ctx2 as any,
+		);
+
+		expect(ctx2.compact).not.toHaveBeenCalled();
 	});
 });
 
 // ---------------------------------------------------------------------------
-// 7. Rearming below threshold
+// 5. session_before_compact — gate
 // ---------------------------------------------------------------------------
 
-describe("rearming below threshold", () => {
-	it("arms after seeing usage below threshold when previously disarmed", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		// Start disarmed (reset state)
-		expect(ctrl.status().armed).toBe(false);
-
-		// See usage below threshold → should arm
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 50000,
-			policy,
+describe("session_before_compact gate", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			const p = typeof path === "string" ? path : String(path);
+			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+			}
+			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
 		});
-		expect(ctrl.status().armed).toBe(true);
-
-		// Stay armed while still below
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 60000,
-			policy,
-		});
-		expect(ctrl.status().armed).toBe(true);
 	});
 
-	it("does not arm while above threshold when disarmed", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		// Already above threshold but disarmed (e.g., after a failure)
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 90000,
-			policy,
+	it("allows manual compaction", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		const handler = getHandler(pi, "session_before_compact");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
 		});
-		// Should trigger because we're in disarmed state and above threshold
-		expect(ctrl.status().inFlight).toBe(true);
+		const result = handler!(
+			{
+				type: "session_before_compact",
+				preparation: { firstKeptEntryId: "e1", tokensBefore: 50000 },
+				branchEntries: [],
+				reason: "manual",
+				willRetry: false,
+				signal: new AbortController().signal,
+			},
+			ctx as any,
+		);
+		expect(result).toEqual({});
+	});
+
+	it("allows overflow compaction", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		const handler = getHandler(pi, "session_before_compact");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		const result = handler!(
+			{
+				type: "session_before_compact",
+				preparation: { firstKeptEntryId: "e1", tokensBefore: 190000 },
+				branchEntries: [],
+				reason: "overflow",
+				willRetry: true,
+				signal: new AbortController().signal,
+			},
+			ctx as any,
+		);
+		expect(result).toEqual({});
+	});
+
+	it("cancels premature threshold compaction", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		// Load config so currentPolicy is resolved
+		const startHandler = getHandler(pi, "session_start");
+		const ctx0 = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx0 as any);
+
+		const handler = getHandler(pi, "session_before_compact");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		const result = handler!(
+			{
+				type: "session_before_compact",
+				preparation: { firstKeptEntryId: "e1", tokensBefore: 70000 },
+				branchEntries: [],
+				reason: "threshold",
+				willRetry: false,
+				signal: new AbortController().signal,
+			},
+			ctx as any,
+		);
+		expect(result).toEqual({ cancel: true });
+	});
+
+	it("allows threshold compaction at or above custom threshold", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		const handler = getHandler(pi, "session_before_compact");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		const result = handler!(
+			{
+				type: "session_before_compact",
+				preparation: { firstKeptEntryId: "e1", tokensBefore: 170000 },
+				branchEntries: [],
+				reason: "threshold",
+				willRetry: false,
+				signal: new AbortController().signal,
+			},
+			ctx as any,
+		);
+		expect(result).toEqual({});
+	});
+
+	it("cancels duplicate threshold when already in flight", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		// session_start to load config and arm
+		const startHandler = getHandler(pi, "session_start");
+		const ctx1 = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx1 as any);
+
+		// turn_end triggers compact (sets inFlight)
+		const turnHandler = getHandler(pi, "turn_end");
+		const ctx2 = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		turnHandler!(
+			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
+			ctx2 as any,
+		);
+
+		// Pi also tries threshold compaction — should be cancelled
+		const beforeHandler = getHandler(pi, "session_before_compact");
+		const ctx3 = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		const result = beforeHandler!(
+			{
+				type: "session_before_compact",
+				preparation: { firstKeptEntryId: "e1", tokensBefore: 170000 },
+				branchEntries: [],
+				reason: "threshold",
+				willRetry: false,
+				signal: new AbortController().signal,
+			},
+			ctx3 as any,
+		);
+		expect(result).toEqual({ cancel: true });
 	});
 });
 
 // ---------------------------------------------------------------------------
-// 8. Successful completion leaves disarmed until below-threshold usage
+// 6. session_compact — sync
 // ---------------------------------------------------------------------------
 
-describe("successful completion", () => {
-	it("leaves controller disarmed after successful completion", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 80000,
-			policy,
+describe("session_compact sync", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			const p = typeof path === "string" ? path : String(path);
+			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+			}
+			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
 		});
-		expect(ctrl.status().inFlight).toBe(true);
-
-		ctrl.recordComplete();
-		expect(ctrl.status().inFlight).toBe(false);
-		expect(ctrl.status().armed).toBe(false);
 	});
 
-	it("does not re-trigger after completion if usage is still above threshold", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 80000,
-			policy,
+	it("calls recordComplete after successful compaction", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		const handler = getHandler(pi, "session_compact");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
 		});
-		ctrl.recordComplete();
-		expect(ctrl.status().armed).toBe(false);
 
-		// Even though usage is still above threshold, should not re-trigger
-		const result = ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 85000,
-			policy,
+		// First trigger a compact so controller is in-flight
+		const startHandler = getHandler(pi, "session_start");
+		const ctx1 = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		expect(result.triggered).toBe(false);
-		expect(ctrl.status().armed).toBe(false);
+		startHandler!({ type: "session_start", reason: "startup" }, ctx1 as any);
+
+		const turnHandler = getHandler(pi, "turn_end");
+		const ctx2 = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		turnHandler!(
+			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
+			ctx2 as any,
+		);
+
+		// Now session_compact fires
+		handler!(
+			{
+				type: "session_compact",
+				compactionEntry: { id: "c1" },
+				fromExtension: true,
+				reason: "threshold",
+				willRetry: false,
+			},
+			ctx as any,
+		);
+
+		// After completion, evaluate should not re-trigger
+		const ctx3 = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		turnHandler!(
+			{ type: "turn_end", turnIndex: 4, message: {}, toolResults: [] },
+			ctx3 as any,
+		);
+		expect(ctx3.compact).not.toHaveBeenCalled();
 	});
 });
 
 // ---------------------------------------------------------------------------
-// 9. Failure disarms (no retry loop)
+// 7. UI-guarded notifications
 // ---------------------------------------------------------------------------
 
-describe("failure disarms", () => {
-	it("clears in-flight and disarms on failure", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 80000,
-			policy,
+describe("UI notifications", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			const p = typeof path === "string" ? path : String(path);
+			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+			}
+			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
 		});
-		expect(ctrl.status().inFlight).toBe(true);
-
-		ctrl.recordFailure(new Error("compaction failed"));
-		expect(ctrl.status().inFlight).toBe(false);
-		expect(ctrl.status().armed).toBe(false);
-		expect(ctrl.status().lastError).toBe("compaction failed");
 	});
 
-	it("does not immediately re-trigger after failure even if still above threshold", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
+	it("sends notification on compact completion when UI available", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
 
-		ctrl.resetSession("anthropic/claude-3-opus");
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 80000,
-			policy,
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			hasUI: true,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
 		});
-		ctrl.recordFailure(new Error("failed"));
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
 
-		// Still above threshold but disarmed — should not re-trigger immediately
-		const result = ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 85000,
-			policy,
+		const turnHandler = getHandler(pi, "turn_end");
+		const ctx2 = makeCtx({
+			hasUI: true,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		expect(result.triggered).toBe(false);
-		expect(ctrl.status().armed).toBe(false);
+		turnHandler!(
+			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
+			ctx2 as any,
+		);
+
+		// Invoke onComplete callback from compact
+		const compactOpts = ctx2.compact.mock.calls[0][0] as { onComplete?: () => void };
+		compactOpts.onComplete!({
+			summary: "summarized",
+			firstKeptEntryId: "e1",
+			tokensBefore: 170000,
+		});
+
+		expect(ctx2.ui.notify).toHaveBeenCalledWith("Auto-compaction completed", "info");
 	});
 
-	it("re-arms after failure once usage falls below threshold", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
+	it("sends notification on compact failure when UI available", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
 
-		ctrl.resetSession("anthropic/claude-3-opus");
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 80000,
-			policy,
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			hasUI: true,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
 		});
-		ctrl.recordFailure(new Error("failed"));
-		expect(ctrl.status().armed).toBe(false);
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
 
-		// Now usage is below threshold → should arm
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 50000,
-			policy,
+		const turnHandler = getHandler(pi, "turn_end");
+		const ctx2 = makeCtx({
+			hasUI: true,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		expect(ctrl.status().armed).toBe(true);
+		turnHandler!(
+			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
+			ctx2 as any,
+		);
+
+		const compactOpts = ctx2.compact.mock.calls[0][0] as { onError?: (e: Error) => void };
+		compactOpts.onError!(new Error("compaction failed"));
+
+		expect(ctx2.ui.notify).toHaveBeenCalledWith(
+			"Auto-compaction failed: compaction failed",
+			"error",
+		);
+	});
+
+	it("does not call ui.notify when UI is not available", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			hasUI: false,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		const turnHandler = getHandler(pi, "turn_end");
+		const ctx2 = makeCtx({
+			hasUI: false,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		turnHandler!(
+			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
+			ctx2 as any,
+		);
+
+		const compactOpts = ctx2.compact.mock.calls[0][0] as { onComplete?: () => void };
+		compactOpts.onComplete!({
+			summary: "summarized",
+			firstKeptEntryId: "e1",
+			tokensBefore: 170000,
+		});
+
+		expect(ctx2.ui.notify).not.toHaveBeenCalled();
 	});
 });
 
 // ---------------------------------------------------------------------------
-// 10. Disabled model rules
+// 8. /auto-compact status command
 // ---------------------------------------------------------------------------
 
-describe("disabled model rules", () => {
-	it("evaluate skips disabled rules", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({
-			enabled: false,
-			matchedPattern: "google/gemini-*",
-			effectiveThresholdTokens: null,
+describe("/auto-compact command", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			const p = typeof path === "string" ? path : String(path);
+			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+			}
+			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
 		});
-
-		ctrl.resetSession("google/gemini-1.5-pro");
-		const result = ctrl.evaluate({
-			modelKey: "google/gemini-1.5-pro",
-			contextWindow: 200000,
-			usageTokens: 90000,
-			policy,
-		});
-
-		expect(result.triggered).toBe(false);
-		expect(ctrl.status().armed).toBe(false);
 	});
 
-	it("gate cancels threshold when matched rule is disabled", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({
-			enabled: false,
-			matchedPattern: "google/gemini-*",
-			effectiveThresholdTokens: null,
+	it("emits report via ui.notify when UI available, never via sendMessage", async () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		const cmdCall = pi.registerCommand.mock.calls.find(
+			(c) => c[0] === "auto-compact",
+		);
+		const handler = cmdCall![1].handler;
+		const ctx = makeCtx({
+			hasUI: true,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
 		});
 
-		const allowed = ctrl.gate({
-			reason: "threshold",
-			tokens: 90000,
-			policy,
+		await handler!("", ctx as any);
+
+		expect(ctx.ui.notify).toHaveBeenCalled();
+		const report = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+		expect(report).toContain("Auto-compact");
+		expect(pi.sendMessage).not.toHaveBeenCalled();
+	});
+
+	it("does not call ui.notify when UI not available", async () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		const cmdCall = pi.registerCommand.mock.calls.find(
+			(c) => c[0] === "auto-compact",
+		);
+		const handler = cmdCall![1].handler;
+		const ctx = makeCtx({
+			hasUI: false,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
 		});
-		expect(allowed).toBe(false);
+
+		await handler!("", ctx as any);
+
+		expect(ctx.ui.notify).not.toHaveBeenCalled();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 9. Config warnings in status
+// ---------------------------------------------------------------------------
+
+describe("config warnings in status", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+	});
+
+	it("reports warnings from configuration in status output", async () => {
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			const p = typeof path === "string" ? path : String(path);
+			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+			}
+			if (p === "/mock/agent/auto-compact/config.json") {
+				return JSON.stringify({
+					default: { percent: 70 },
+					rules: [{ match: "foo/bar", percent: -1 }],
+				});
+			}
+			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
+		});
+
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			hasUI: true,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		await startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		const cmdCall = pi.registerCommand.mock.calls.find(
+			(c) => c[0] === "auto-compact",
+		);
+		const handler = cmdCall![1].handler;
+		await handler!("", ctx as any);
+
+		const report = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+		expect(report).toContain("Warning");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 10. Disabled model rule cancels threshold
+// ---------------------------------------------------------------------------
+
+describe("disabled model rule", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			const p = typeof path === "string" ? path : String(path);
+			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+				return JSON.stringify({
+					enabled: true,
+					default: { percent: 80 },
+					rules: [{ match: "google/gemini-*", enabled: false }],
+				});
+			}
+			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
+		});
+	});
+
+	it("cancels threshold compaction for disabled model rule", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		// Load config first so currentPolicy is resolved
+		const startHandler = getHandler(pi, "session_start");
+		const ctx0 = makeCtx({
+			model: makeModel("google", "gemini-1.5-pro", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx0 as any);
+
+		const handler = getHandler(pi, "session_before_compact");
+		const ctx = makeCtx({
+			model: makeModel("google", "gemini-1.5-pro", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		const result = handler!(
+			{
+				type: "session_before_compact",
+				preparation: { firstKeptEntryId: "e1", tokensBefore: 170000 },
+				branchEntries: [],
+				reason: "threshold",
+				willRetry: false,
+				signal: new AbortController().signal,
+			},
+			ctx as any,
+		);
+		expect(result).toEqual({ cancel: true });
 	});
 });
 
@@ -501,225 +877,62 @@ describe("disabled model rules", () => {
 // ---------------------------------------------------------------------------
 
 describe("global disablement", () => {
-	it("evaluate skips when globally disabled", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({
-			enabled: false,
-			matchedPattern: "default",
-			effectiveThresholdTokens: null,
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			const p = typeof path === "string" ? path : String(path);
+			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+				return JSON.stringify({ enabled: false, default: { percent: 80 }, rules: [] });
+			}
+			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
 		});
+	});
 
-		ctrl.resetSession("some/model");
-		const result = ctrl.evaluate({
-			modelKey: "some/model",
-			contextWindow: 200000,
-			usageTokens: 90000,
-			policy,
+	it("allows threshold compaction when globally disabled (unchanged Pi behavior)", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		const handler = getHandler(pi, "session_before_compact");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-
-		expect(result.triggered).toBe(false);
+		const result = handler!(
+			{
+				type: "session_before_compact",
+				preparation: { firstKeptEntryId: "e1", tokensBefore: 170000 },
+				branchEntries: [],
+				reason: "threshold",
+				willRetry: false,
+				signal: new AbortController().signal,
+			},
+			ctx as any,
+		);
+		expect(result).toEqual({});
 	});
 
-	it("gate allows threshold when globally disabled", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({
-			enabled: false,
-			matchedPattern: "default",
-			effectiveThresholdTokens: null,
+	it("does not trigger auto-compact when globally disabled", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
 
-		const allowed = ctrl.gate({
-			reason: "threshold",
-			tokens: 90000,
-			policy,
+		const turnHandler = getHandler(pi, "turn_end");
+		const ctx2 = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		expect(allowed).toBe(true);
-	});
-});
+		turnHandler!(
+			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
+			ctx2 as any,
+		);
 
-// ---------------------------------------------------------------------------
-// 12. Manual/overflow pass-through
-// ---------------------------------------------------------------------------
-
-describe("manual/overflow pass-through", () => {
-	it("manual reason always allows", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({
-			enabled: false,
-			matchedPattern: "google/gemini-*",
-			effectiveThresholdTokens: null,
-		});
-
-		expect(
-			ctrl.gate({ reason: "manual", tokens: null, policy }),
-		).toBe(true);
-	});
-
-	it("overflow reason always allows", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({
-			enabled: false,
-			matchedPattern: "google/gemini-*",
-			effectiveThresholdTokens: null,
-		});
-
-		expect(
-			ctrl.gate({ reason: "overflow", tokens: null, policy }),
-		).toBe(true);
-	});
-
-	it("manual allows even when in flight", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 80000,
-			policy,
-		});
-		expect(ctrl.status().inFlight).toBe(true);
-
-		expect(
-			ctrl.gate({ reason: "manual", tokens: null, policy }),
-		).toBe(true);
-	});
-});
-
-// ---------------------------------------------------------------------------
-// 13. Fail-open when context unresolvable
-// ---------------------------------------------------------------------------
-
-describe("fail-open when context unresolvable", () => {
-	it("gate allows when policy is null", () => {
-		const ctrl = makeController();
-		expect(
-			ctrl.gate({ reason: "threshold", tokens: 90000, policy: null }),
-		).toBe(true);
-	});
-
-	it("gate allows when threshold is null", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({
-			effectiveThresholdTokens: null,
-		});
-		expect(
-			ctrl.gate({ reason: "threshold", tokens: 90000, policy }),
-		).toBe(true);
-	});
-
-	it("evaluate skips when policy is null", () => {
-		const ctrl = makeController();
-		ctrl.resetSession("some/model");
-		const result = ctrl.evaluate({
-			modelKey: "some/model",
-			contextWindow: 200000,
-			usageTokens: 90000,
-			policy: null as unknown as ResolvedPolicy,
-		});
-		expect(result.triggered).toBe(false);
-	});
-
-	it("evaluate skips when threshold is null", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: null });
-		ctrl.resetSession("some/model");
-		const result = ctrl.evaluate({
-			modelKey: "some/model",
-			contextWindow: 200000,
-			usageTokens: 90000,
-			policy,
-		});
-		expect(result.triggered).toBe(false);
-	});
-});
-
-// ---------------------------------------------------------------------------
-// Gate: threshold below / at / above
-// ---------------------------------------------------------------------------
-
-describe("gate threshold comparison", () => {
-	it("cancels threshold when tokens are below effective threshold", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		expect(
-			ctrl.gate({ reason: "threshold", tokens: 70000, policy }),
-		).toBe(false);
-	});
-
-	it("allows threshold when tokens equal effective threshold", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		expect(
-			ctrl.gate({ reason: "threshold", tokens: 80000, policy }),
-		).toBe(true);
-	});
-
-	it("allows threshold when tokens exceed effective threshold", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		expect(
-			ctrl.gate({ reason: "threshold", tokens: 90000, policy }),
-		).toBe(true);
-	});
-
-	it("cancels threshold when already in flight", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-
-		ctrl.resetSession("anthropic/claude-3-opus");
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 80000,
-			policy,
-		});
-		expect(ctrl.status().inFlight).toBe(true);
-
-		// Pi also tries to compact — should be cancelled (dedup)
-		expect(
-			ctrl.gate({ reason: "threshold", tokens: 85000, policy }),
-		).toBe(false);
-	});
-});
-
-// ---------------------------------------------------------------------------
-// Status
-// ---------------------------------------------------------------------------
-
-describe("status", () => {
-	it("returns correct initial state", () => {
-		const ctrl = makeController();
-		const st = ctrl.status();
-		expect(st.armed).toBe(false);
-		expect(st.inFlight).toBe(false);
-		expect(st.modelKey).toBeNull();
-		expect(st.lastPolicy).toBeNull();
-		expect(st.lastError).toBeNull();
-		expect(st.lastUsageTokens).toBeNull();
-	});
-
-	it("tracks model key after reset", () => {
-		const ctrl = makeController();
-		ctrl.resetSession("anthropic/claude-3-opus");
-		expect(ctrl.status().modelKey).toBe("anthropic/claude-3-opus");
-	});
-
-	it("tracks last policy and usage after evaluate", () => {
-		const ctrl = makeController();
-		const policy = makePolicy({ effectiveThresholdTokens: 80000 });
-		ctrl.resetSession("anthropic/claude-3-opus");
-		ctrl.evaluate({
-			modelKey: "anthropic/claude-3-opus",
-			contextWindow: 200000,
-			usageTokens: 50000,
-			policy,
-		});
-		expect(ctrl.status().lastPolicy).toBe(policy);
-		expect(ctrl.status().lastUsageTokens).toBe(50000);
+		expect(ctx2.compact).not.toHaveBeenCalled();
 	});
 });

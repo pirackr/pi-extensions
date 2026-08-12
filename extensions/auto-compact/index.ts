@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAgentDir, CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -25,6 +25,7 @@ const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(extensionDir, "../..");
 
 const controller = new AutoCompactController();
+export { controller };
 let loadedConfig: ReturnType<typeof loadAutoCompactConfiguration> | null = null;
 let currentPolicy: ResolvedPolicy | null = null;
 
@@ -162,7 +163,7 @@ function formatStatus(ctx: ExtensionContext): string {
 
 export default function (pi: ExtensionAPI) {
 	// session_start
-	pi.on("session_start", (event: SessionStartEvent, ctx: ExtensionContext) => {
+	pi.on("session_start", (_event: SessionStartEvent, ctx: ExtensionContext) => {
 		try {
 		const trusted = ctx.isProjectTrusted();
 		loadConfiguration(trusted);
@@ -195,7 +196,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// turn_end
-	pi.on("turn_end", (event: TurnEndEvent, ctx: ExtensionContext) => {
+	pi.on("turn_end", (_event: TurnEndEvent, ctx: ExtensionContext) => {
 		try {
 		// Re-resolve policy in case model changed without model_select.
 		const model = ctx.model;
@@ -262,7 +263,7 @@ export default function (pi: ExtensionAPI) {
 	);
 
 	// session_compact
-	pi.on("session_compact", (_event: SessionCompactEvent) => {
+	pi.on("session_compact", (_event: SessionCompactEvent, _ctx: ExtensionContext) => {
 		try {
 		controller.recordComplete();
 		} catch {

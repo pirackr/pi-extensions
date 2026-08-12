@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import createExtension, { resetExtensionState } from "../extensions/auto-compact/index.ts";
+import createExtension, { resetExtensionState, controller } from "../extensions/auto-compact/index.ts";
 import * as fs from "node:fs";
 import { AutoCompactController } from "../extensions/auto-compact/controller.ts";
 import type { ResolvedPolicy } from "../extensions/auto-compact/policy.ts";
@@ -206,6 +206,24 @@ describe("session_start", () => {
 		expect(compactCalls).toHaveLength(0);
 	});
 
+	it("evaluates usage immediately on resumed session with above-threshold usage", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		const handler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		handler!(
+			{ type: "session_start", reason: "resume" },
+			ctx as any,
+		);
+		// session_start evaluates usage but does not call compact directly;
+		// the controller should be in-flight because the resumed session
+		// already exceeds the effective threshold.
+		expect(controller.status().inFlight).toBe(true);
+	});
+
 	it("skips project config when untrusted", () => {
 		const pi = makeFakePi();
 		createExtension(pi);
@@ -406,6 +424,28 @@ describe("session_before_compact gate", () => {
 	});
 
 	it("allows overflow compaction", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		const handler = getHandler(pi, "session_before_compact");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		const result = handler!(
+			{
+				type: "session_before_compact",
+				preparation: { firstKeptEntryId: "e1", tokensBefore: 190000 },
+				branchEntries: [],
+				reason: "overflow",
+				willRetry: true,
+				signal: new AbortController().signal,
+			},
+			ctx as any,
+		);
+		expect(result).toEqual({});
+	});
+
+	it("allows overflow compaction with willRetry true", () => {
 		const pi = makeFakePi();
 		createExtension(pi);
 		const handler = getHandler(pi, "session_before_compact");

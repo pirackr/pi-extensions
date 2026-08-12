@@ -135,6 +135,7 @@ declare module "@earendil-works/pi-coding-agent" {
 
 	export interface SessionBeforeCompactResult {
 		cancel?: boolean;
+		compaction?: CompactionResult;
 	}
 
 	export interface SessionCompactEvent {

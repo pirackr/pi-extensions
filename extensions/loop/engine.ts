@@ -6,10 +6,10 @@
  * is kept OUT of this module.
  */
 
-import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { LoopState, LoopStatus, LoopUsage } from "./state.ts";
 import type { CompletionPolicy, CompletionFailure } from "./completion.ts";
+import { addCoordinatorUsage } from "./state.ts";
 import { programBlockFor, extractAssistantText, assistantFingerprint } from "./program.ts";
 
 const CUSTOM_TYPE = "pi-loop";
@@ -97,23 +97,21 @@ export class LoopEngine {
 		if (!this.loop || !this._activeThisTurn) return;
 		let state = this.loop;
 		const usage = (event as { message?: { usage?: unknown } }).message?.usage;
-		const delta = this.tokenDelta(usage);
 
-		// Token accounting
-		if (delta > 0) {
-			const tokensUsed = state.tokensUsed + delta;
-			state = { ...state, tokensUsed, updatedAt: Date.now() };
-			if (state.tokenBudget != null && tokensUsed >= state.tokenBudget) {
-				state = {
-					...state,
-					status: "budget_limited" as LoopStatus,
-					reason: "tokens",
-					updatedAt: Date.now(),
-				};
-				this.loop = state;
-				await this.persistAndEmit(pi, ctx, state, "budget_limited");
-				return;
-			}
+		// F3: Wire addCoordinatorUsage for assistant-turn usage
+		state = addCoordinatorUsage(state, usage);
+
+		// Token budget check (tokensUsed already updated by addCoordinatorUsage)
+		if (state.tokenBudget != null && state.tokensUsed >= state.tokenBudget) {
+			state = {
+				...state,
+				status: "budget_limited" as LoopStatus,
+				reason: "tokens",
+				updatedAt: Date.now(),
+			};
+			this.loop = state;
+			await this.persistAndEmit(pi, ctx, state, "budget_limited");
+			return;
 		}
 
 		// No-progress guard (continuation rounds only)
@@ -173,7 +171,7 @@ export class LoopEngine {
 	 */
 	resumeState(now: number): LoopState {
 		if (!this.loop) throw new Error("No active loop to resume");
-		return {
+		const state = {
 			...this.loop,
 			status: "active" as LoopStatus,
 			guardId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -181,6 +179,8 @@ export class LoopEngine {
 			lastFingerprint: null,
 			updatedAt: now,
 		};
+		this.loop = state;
+		return state;
 	}
 
 	/**
@@ -188,11 +188,13 @@ export class LoopEngine {
 	 */
 	pauseState(now: number): LoopState {
 		if (!this.loop) throw new Error("No active loop to pause");
-		return {
+		const state = {
 			...this.loop,
 			status: "paused" as LoopStatus,
 			updatedAt: now,
 		};
+		this.loop = state;
+		return state;
 	}
 
 	/**
@@ -334,10 +336,26 @@ export class LoopEngine {
 			case "budget_limited":
 				return this.wrapUpContent(state);
 			case "no_progress":
-				return `The active /${state.commandName} paused: ${state.noProgressTurns} consecutive rounds with no new output and no tool calls — this loop looks stalled.\n\n			<mission>\n			${state.mission}\n			</mission>\n\n			Review what happened: check the working files and the program's protocol. If the stall is real, this run cannot make progress as-is — the program may need steering (the human edits it live) or the loop should be cleared. Do not start new work now.`;
+				return `The active /${state.commandName} paused: ${state.noProgressTurns} consecutive rounds with no new output and no tool calls — this loop looks stalled.\n\n<mission>\n${state.mission}\n</mission>\n\nReview what happened: check the working files and the program's protocol. If the stall is real, this run cannot make progress as-is — the program may need steering (the human edits it live) or the loop should be cleared. Do not start new work now.`;
 			default:
 				return this.continuationContent(state);
 		}
+	}
+
+	private getProgramBlock(): { block: string; sig: string | null } {
+		if (!this.loop) return { block: "", sig: null };
+		// F5: Use snapshot if available — source is never reread during a run
+		if (this.loop.programSnapshot) {
+			return { block: this.loop.programSnapshot, sig: this.loop.programSig ?? null };
+		}
+		// First read: capture snapshot from disk for future rounds
+		const result = programBlockFor(
+			this.loop.programPath,
+			this.loop.programInjected,
+			this.loop.programSig,
+		);
+		this.loop = { ...this.loop, programSnapshot: result.block };
+		return result;
 	}
 
 	private continuationContent(state: LoopState): string {
@@ -346,11 +364,7 @@ export class LoopEngine {
 			state.tokenBudget == null
 				? "n/a"
 				: String(Math.max(0, state.tokenBudget - state.tokensUsed));
-		const { block: programBlock } = programBlockFor(
-			state.programPath,
-			state.programInjected,
-			state.programSig,
-		);
+		const { block: programBlock } = this.getProgramBlock();
 		const wdBlock = state.workingDir
 			? `Research working directory: ${state.workingDir}\nAll research artifacts (score.md, notes.md, report.org) must be written inside this directory — never in the project cwd. When passing these files to subagents, use their absolute paths under it.`
 			: "";
@@ -403,11 +417,8 @@ Wrap up this turn: summarize progress, write partial findings to disk if the pro
 			if (self.options.onRoundIncrement && self.loop) {
 				self.loop = self.options.onRoundIncrement(self.loop);
 			}
-			const prog = programBlockFor(
-				self.loop.programPath,
-				self.loop.programInjected,
-				self.loop.programSig,
-			);
+			// F5: Use snapshot instead of rereading from disk
+			const prog = self.getProgramBlock();
 			self.updateProgramBlock(prog.sig);
 			self.persist(pi, ctx);
 			self.emit(pi, "continuation", "followUp");
@@ -444,15 +455,4 @@ Wrap up this turn: summarize progress, write partial findings to disk if the pro
 		}
 	}
 
-	private tokenDelta(usage: unknown): number {
-		if (!usage || typeof usage !== "object") return 0;
-		const u = usage as Record<string, unknown>;
-		if (typeof u.totalTokens === "number") return Math.max(0, u.totalTokens);
-		const num = (k: string) =>
-			typeof u[k] === "number" ? (u[k] as number) : 0;
-		return Math.max(
-			0,
-			num("input") + num("output") + num("cacheRead") + num("cacheWrite"),
-		);
-	}
 }

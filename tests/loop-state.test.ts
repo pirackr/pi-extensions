@@ -161,3 +161,77 @@ describe("normalizeState", () => {
 		expect(result.profile).toBe("deep");
 	});
 });
+
+// ---- F2: processedToolCallIds deduplication ----
+
+describe("addCoordinatorUsage — F2: processedToolCallIds deduplication", () => {
+	it("skips usage when toolCallId already in processedToolCallIds", () => {
+		const state = makeBaseState({
+			coordinatorUsage: 100,
+			tokensUsed: 100,
+			processedToolCallIds: ["abc123"],
+		});
+		const result = addCoordinatorUsage(state, { totalTokens: 500 }, "abc123");
+		// Dedup: should return unchanged
+		expect(result.coordinatorUsage).toBe(100);
+		expect(result.tokensUsed).toBe(100);
+	});
+
+	it("adds usage and records toolCallId when not yet processed", () => {
+		const state = makeBaseState({
+			coordinatorUsage: 100,
+			tokensUsed: 100,
+			processedToolCallIds: ["tool-1"],
+		});
+		const result = addCoordinatorUsage(state, { totalTokens: 500 }, "tool-2");
+		expect(result.coordinatorUsage).toBe(600);
+		expect(result.tokensUsed).toBe(600);
+		expect(result.processedToolCallIds).toEqual(["tool-1", "tool-2"]);
+	});
+
+	it("adds usage even without toolCallId (normal assistant-turn)", () => {
+		const state = makeBaseState({ coordinatorUsage: 100, tokensUsed: 100 });
+		const result = addCoordinatorUsage(state, { totalTokens: 500 });
+		expect(result.coordinatorUsage).toBe(600);
+		expect(result.tokensUsed).toBe(600);
+	});
+});
+
+describe("addNestedUsage — F2: processedToolCallIds deduplication", () => {
+	it("skips usage when toolCallId already in processedToolCallIds", () => {
+		const state = makeBaseState({
+			nestedUsage: 200,
+			tokensUsed: 200,
+			processedToolCallIds: ["sub-1"],
+		});
+		const result = addNestedUsage(state, { totalTokens: 800 }, "sub-1");
+		expect(result.nestedUsage).toBe(200);
+		expect(result.tokensUsed).toBe(200);
+	});
+
+	it("adds usage and records toolCallId when not yet processed", () => {
+		const state = makeBaseState({
+			nestedUsage: 100,
+			tokensUsed: 100,
+			processedToolCallIds: ["tool-1"],
+		});
+		const result = addNestedUsage(state, { totalTokens: 300 }, "tool-2");
+		expect(result.nestedUsage).toBe(400);
+		expect(result.tokensUsed).toBe(400);
+		expect(result.processedToolCallIds).toEqual(["tool-1", "tool-2"]);
+	});
+
+	it("dedup works across coordinator + nested calls", () => {
+		let state = makeBaseState();
+		state = addCoordinatorUsage(state, { totalTokens: 100 }, "tc-1");
+		expect(state.processedToolCallIds).toEqual(["tc-1"]);
+		// Same ID as nested should be skipped
+		state = addNestedUsage(state, { totalTokens: 50 }, "tc-1");
+		expect(state.nestedUsage).toBe(0); // deduped
+		expect(state.coordinatorUsage).toBe(100);
+		// Different ID should be added
+		state = addNestedUsage(state, { totalTokens: 50 }, "tc-2");
+		expect(state.nestedUsage).toBe(50);
+		expect(state.processedToolCallIds).toEqual(["tc-1", "tc-2"]);
+	});
+});

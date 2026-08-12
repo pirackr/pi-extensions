@@ -57,28 +57,58 @@ export interface LoopState {
 /**
  * Add coordinator-turn token usage to the loop state.
  * Called from the assistant turn's `turn_end` event handler.
+ * When a toolCallId is provided, it is checked against processedToolCallIds
+ * for replay deduplication: already-processed IDs are silently skipped.
  */
-export function addCoordinatorUsage(state: LoopState, usage: unknown): LoopState {
+export function addCoordinatorUsage(
+	state: LoopState,
+	usage: unknown,
+	toolCallId?: string,
+): LoopState {
+	// Dedup: skip if toolCallId already processed
+	if (toolCallId && state.processedToolCallIds?.includes(toolCallId)) {
+		return state;
+	}
 	const delta = tokenDelta(usage);
+	const processedIds = state.processedToolCallIds ? [...state.processedToolCallIds] : [];
+	if (toolCallId && !processedIds.includes(toolCallId)) {
+		processedIds.push(toolCallId);
+	}
 	return {
 		...state,
 		coordinatorUsage: state.coordinatorUsage + delta,
 		tokensUsed: state.tokensUsed + delta,
 		updatedAt: Date.now(),
+		processedToolCallIds: processedIds,
 	};
 }
 
 /**
  * Add nested (subagent) token usage to the loop state.
  * Called from finalized `run_subagents` tool-result events.
+ * When a toolCallId is provided, it is checked against processedToolCallIds
+ * for replay deduplication: already-processed IDs are silently skipped.
  */
-export function addNestedUsage(state: LoopState, usage: unknown): LoopState {
+export function addNestedUsage(
+	state: LoopState,
+	usage: unknown,
+	toolCallId?: string,
+): LoopState {
+	// Dedup: skip if toolCallId already processed
+	if (toolCallId && state.processedToolCallIds?.includes(toolCallId)) {
+		return state;
+	}
 	const delta = tokenDelta(usage);
+	const processedIds = state.processedToolCallIds ? [...state.processedToolCallIds] : [];
+	if (toolCallId && !processedIds.includes(toolCallId)) {
+		processedIds.push(toolCallId);
+	}
 	return {
 		...state,
 		nestedUsage: state.nestedUsage + delta,
 		tokensUsed: state.tokensUsed + delta,
 		updatedAt: Date.now(),
+		processedToolCallIds: processedIds,
 	};
 }
 

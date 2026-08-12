@@ -4,6 +4,7 @@
  * logic where needed).
  */
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { LoopEngine } from "./engine.ts";
@@ -67,7 +68,7 @@ export function registerLoopCommand(
 				if (trimmed === "resume") {
 					const resumed = engine.resumeState(now);
 					engine.persist(pi, ctx);
-					engine.emit(pi, "resumed");
+					engine.emit(pi, "resumed", "steer");
 					if (status === "active" && ctx.isIdle()) {
 						// Re-queue continuation from agent_end, not here.
 					}
@@ -214,7 +215,7 @@ export function registerLoopCommand(
 				ctx.cwd,
 				flags.program ?? opts.defaultProgram,
 			);
-			if (!require("node:fs").existsSync(programPath)) {
+			if (!fs.existsSync(programPath)) {
 				ctx.ui.notify(
 					`program file not found at ${programPath} — running on mission alone.`,
 					"warning",
@@ -374,6 +375,6 @@ function createResearchWorkingDir(cwd: string, mission: string): string {
 		"research",
 		`${id}-${slugify(mission)}`,
 	);
-	require("node:fs").mkdirSync(dir, { recursive: true });
+	fs.mkdirSync(dir, { recursive: true });
 	return dir;
 }

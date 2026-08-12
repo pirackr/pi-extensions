@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { LoopEngine } from "../extensions/loop/engine.ts";
 import type { LoopState, LoopUsage } from "../extensions/loop/state.ts";
 import type { CompletionFailure, CompletionPolicy } from "../extensions/loop/completion.ts";
+import { addCoordinatorUsage } from "../extensions/loop/state.ts";
 
 // --- Mock helpers ----------------------------------------------------------
 
@@ -487,6 +490,155 @@ describe("LoopEngine — resume and pause state management", () => {
 		expect(engine.state?.status).toBe("complete");
 	});
 });
+
+// ---- F1 regression: resume/pause persist state ----
+
+describe("LoopEngine — F1: resume persists state into this.loop", () => {
+	it("resumeState assigns to this.loop and persisted state reflects the resume", () => {
+		const { engine, pi, ctx } = makeEngine();
+		const beforeGuard = "original-guard";
+		engine.startState({
+			commandName: "loop",
+			programPath: "/fake.md",
+			mission: "resume-persist test",
+			maxRounds: 5,
+			tokenBudget: null,
+			noProgressTurns: 3,
+		});
+		// Pretend it was paused so we can resume
+		engine.state = { ...engine.state!, status: "paused" as const, updatedAt: 1000 };
+		const resumed = engine.resumeState(Date.now());
+		expect(resumed.status).toBe("active");
+		expect(engine.state).toBe(resumed); // F1: this.loop was mutated
+		expect(engine.state?.status).toBe("active");
+		expect(engine.state?.noProgressCount).toBe(0);
+		expect(engine.state?.guardId).not.toBe(beforeGuard);
+		// Persist and verify the persisted state is the resumed state
+		engine.persist(pi, ctx);
+		const call = (pi.appendEntry as ReturnType<typeof vi.fn>).mock
+			.calls[0][1] as { loop?: LoopState };
+		expect(call.loop?.status).toBe("active");
+		expect(call.loop?.noProgressCount).toBe(0);
+	});
+
+	it("pauseState assigns to this.loop and persisted state reflects the pause", () => {
+		const { engine, pi, ctx } = makeEngine();
+		engine.startState({
+			commandName: "loop",
+			programPath: "/fake.md",
+			mission: "pause-persist test",
+			maxRounds: 5,
+			tokenBudget: null,
+			noProgressTurns: 3,
+		});
+		const paused = engine.pauseState(Date.now());
+		expect(paused.status).toBe("paused");
+		expect(engine.state).toBe(paused); // F1: this.loop was mutated
+		expect(engine.state?.status).toBe("paused");
+		engine.persist(pi, ctx);
+		const call = (pi.appendEntry as ReturnType<typeof vi.fn>).mock
+			.calls[0][1] as { loop?: LoopState };
+		expect(call.loop?.status).toBe("paused");
+	});
+});
+
+// ---- F3: addCoordinatorUsage wired into endTurn ----
+
+describe("LoopEngine — F3: addCoordinatorUsage wired into endTurn", () => {
+	it("endTurn calls addCoordinatorUsage and tracks coordinatorUsage", async () => {
+		const { engine, pi, ctx } = makeEngine();
+		engine.startState({
+			commandName: "loop",
+			programPath: "/fake.md",
+			mission: "coord-usage test",
+			maxRounds: 5,
+			tokenBudget: null,
+			noProgressTurns: 3,
+		});
+		engine.startTurn();
+		await engine.endTurn(pi, ctx, {
+			message: { usage: { totalTokens: 1200 } },
+		});
+		expect(engine.state?.coordinatorUsage).toBe(1200);
+		expect(engine.state?.tokensUsed).toBe(1200);
+		expect(engine.state?.status).toBe("active");
+	});
+
+	it("endTurn respects token budget with addCoordinatorUsage", async () => {
+		const { engine, pi, ctx } = makeEngine();
+		engine.startState({
+			commandName: "loop",
+			programPath: "/fake.md",
+			mission: "budget-coord test",
+			maxRounds: 5,
+			tokenBudget: 1000,
+			noProgressTurns: 3,
+		});
+		engine.startTurn();
+		await engine.endTurn(pi, ctx, {
+			message: { usage: { totalTokens: 1000 } },
+		});
+		expect(engine.state?.status).toBe("budget_limited");
+		expect(engine.state?.reason).toBe("tokens");
+		expect(engine.state?.coordinatorUsage).toBe(1000);
+	});
+
+	it("endTurn with no usage leaves coordinatorUsage at 0", async () => {
+		const { engine, pi, ctx } = makeEngine();
+		engine.startState({
+			commandName: "loop",
+			programPath: "/fake.md",
+			mission: "no-usage test",
+			maxRounds: 5,
+			tokenBudget: null,
+			noProgressTurns: 3,
+		});
+		engine.startTurn();
+		await engine.endTurn(pi, ctx, { message: { usage: {} } });
+		expect(engine.state?.coordinatorUsage).toBe(0);
+		expect(engine.state?.tokensUsed).toBe(0);
+	});
+});
+
+// ---- F5: snapshotProgram integration ----
+
+describe("LoopEngine — F5: programSnapshot prevents disk reread", () => {
+	it("first getProgramBlock captures snapshot from disk", () => {
+		const { engine, pi, ctx } = makeEngine();
+		const programPath = path.resolve(__dirname, "../skills/deep-research/program.v2.md");
+		const realProgram = fs.readFileSync(programPath, "utf8");
+		engine.startState({
+			commandName: "loop",
+			programPath,
+			mission: "snapshot test",
+			maxRounds: 5,
+			tokenBudget: null,
+			noProgressTurns: 3,
+		});
+		engine.state = { ...engine.state!, programInjected: false };
+		(engine as never).getProgramBlock?.();
+		expect(engine.state?.programSnapshot).toBeDefined();
+		expect(engine.state?.programSnapshot).toContain("<program>");
+		expect(engine.state?.programSnapshot).toContain("Deep Research Program");
+	});
+
+	it("onAgentEnd uses snapshot for program block instead of reading disk", () => {
+		const { engine, pi, ctx } = makeEngine();
+		engine.startState({
+			commandName: "loop",
+			programPath: path.resolve(__dirname, "../skills/deep-research/program.v2.md"),
+			mission: "queue-snapshot test",
+			maxRounds: 5,
+			tokenBudget: null,
+			noProgressTurns: 3,
+		});
+		engine.state = { ...engine.state!, programSnapshot: "<program>cached</program>" };
+		engine.onAgentEnd(pi, ctx);
+		const microtask = Promise.resolve();
+		expect(engine.state?.programSnapshot).toBe("<program>cached</program>");
+	});
+});
+
 
 describe("LoopEngine — onRoundIncrement callback", () => {
 	it("calls onRoundIncrement after round is incremented", async () => {

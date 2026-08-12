@@ -118,7 +118,7 @@ function matchesPattern(modelKey: string, pattern: string): boolean {
 	return minimatch(modelKey, pattern, { nonegate: true, nobrace: true });
 }
 
-function resolveGlobalEnablement(layers: ConfigLayer[]): { enabled: boolean; source: ConfigLayerSource } {
+export function resolveGlobalEnablement(layers: ConfigLayer[]): { enabled: boolean; source: ConfigLayerSource } {
 	for (let i = layers.length - 1; i >= 0; i--) {
 		if (layers[i].enabled !== undefined) {
 			return { enabled: layers[i].enabled!, source: layers[i].source };

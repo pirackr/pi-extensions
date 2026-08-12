@@ -12,7 +12,7 @@ import type {
 	CompactOptions,
 } from "@earendil-works/pi-coding-agent";
 import { loadAutoCompactConfiguration } from "./config.ts";
-import { resolveModelPolicy } from "./policy.ts";
+import { resolveModelPolicy, resolveGlobalEnablement } from "./policy.ts";
 import { AutoCompactController } from "./controller.ts";
 import type { ResolvedPolicy } from "./policy.ts";
 
@@ -86,12 +86,11 @@ function formatStatus(ctx: ExtensionContext): string {
 	const status = controller.status();
 	const config = loadedConfig;
 
-	// Global enablement
+	// Global enablement — use precedence-based resolution (highest-precedence
+	// layer that *specifies* `enabled` wins, matching resolveModelPolicy).
 	if (config) {
-		const globalEnabled = config.layers.some((l) => l.enabled === true)
-		? "enabled"
-		: "disabled";
-		lines.push(`Auto-compact: ${globalEnabled}`);
+		const { enabled: globalEnabled } = resolveGlobalEnablement(config.layers);
+		lines.push(`Auto-compact: ${globalEnabled ? "enabled" : "disabled"}`);
 	} else {
 		lines.push("Auto-compact: no configuration loaded");
 	}

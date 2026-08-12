@@ -965,3 +965,80 @@ describe("global disablement", () => {
 		expect(result).toEqual({});
 	});
 });
+
+// ---------------------------------------------------------------------------
+// 12. Precedence-based global enablement in status
+// ---------------------------------------------------------------------------
+
+describe("precedence-based global enablement in status", () => {
+	beforeEach(() => {
+		mockReadFileSync.mockReset();
+	});
+
+	it("reports enabled when only packaged layer specifies enabled:true", async () => {
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			const p = typeof path === "string" ? path : String(path);
+			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+			}
+			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
+		});
+
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			hasUI: true,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		await startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		const cmdCall = pi.registerCommand.mock.calls.find(
+			(c) => c[0] === "auto-compact",
+		);
+		const handler = cmdCall![1].handler;
+		await handler!("", ctx as any);
+
+		const report = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+		expect(report).toContain("Auto-compact: enabled");
+	});
+
+	it("reports disabled when user layer overrides packaged enabled:true", async () => {
+		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+			const p = typeof path === "string" ? path : String(path);
+			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+			}
+			if (p === "/mock/agent/auto-compact/config.json") {
+				return JSON.stringify({ enabled: false });
+			}
+			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
+		});
+
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			hasUI: true,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		await startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		const cmdCall = pi.registerCommand.mock.calls.find(
+			(c) => c[0] === "auto-compact",
+		);
+		const handler = cmdCall![1].handler;
+		await handler!("", ctx as any);
+
+		const report = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+		expect(report).toContain("Auto-compact: disabled");
+	});
+});

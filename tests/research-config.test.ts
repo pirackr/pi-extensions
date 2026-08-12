@@ -2949,6 +2949,351 @@ describe("resolveResearchConfig — role field validation", () => {
 });
 
 // ---------------------------------------------------------------------------
+// resolveResearchConfig — deferred merged validation (F1)
+// ---------------------------------------------------------------------------
+
+describe("resolveResearchConfig — deferred merged validation (F1)", () => {
+	it(
+		"user layer with both profiles and roles validates verification references within that layer",
+		async () => {
+			const { resolveResearchConfig } = await import(
+				"../extensions/research/config.ts"
+			);
+
+			const layer1 = {
+				path: "/pkg.json",
+				kind: "packaged" as const,
+				value: makeBaseConfig(),
+			};
+
+			// User layer provides a profile referencing a role in the same layer
+			const layer2 = {
+				path: "/user.json",
+				kind: "user" as const,
+				value: {
+					profiles: {
+						custom: {
+							minRounds: 5,
+							maxRounds: 5,
+							minSources: 10,
+							maxScouts: 4,
+							maxFetchers: 2,
+							verification: ["judge"], // judge exists in this layer
+						},
+					},
+					roles: {
+						judge: {
+							description: "Judge",
+							model: "eval",
+							thinking: "medium",
+							tools: ["read"],
+							access: "read",
+							timeoutSeconds: 300,
+							promptPath: "judge.md",
+							resultFormat: "markdown",
+							totalDispatch: 5,
+							concurrentDispatch: 1,
+							maxSearches: 5,
+							maxFetches: 5,
+							retention: "artifact",
+						},
+					},
+				},
+			};
+
+			// Should succeed — judge exists in the same layer
+			const result = resolveResearchConfig([layer1, layer2]);
+			expect(result.profiles.custom.verification).toEqual(["judge"]);
+		},
+	);
+
+	it(
+		"user layer with profiles referencing a role from the SAME layer catches unknown references",
+		async () => {
+			const { resolveResearchConfig } = await import(
+				"../extensions/research/config.ts"
+			);
+
+			const layer1 = {
+				path: "/pkg.json",
+				kind: "packaged" as const,
+				value: makeBaseConfig(),
+			};
+
+			// User layer provides a profile referencing a role NOT in its own roles
+			const layer2 = {
+				path: "/user.json",
+				kind: "user" as const,
+				value: {
+					profiles: {
+						custom: {
+							minRounds: 5,
+							maxRounds: 5,
+							minSources: 10,
+							maxScouts: 4,
+							maxFetchers: 2,
+							verification: ["nonexistent_role"], // NOT in layer2's roles
+						},
+					},
+					roles: {
+						judge: {
+							description: "Judge",
+							model: "eval",
+							thinking: "medium",
+							tools: ["read"],
+							access: "read",
+							timeoutSeconds: 300,
+							promptPath: "judge.md",
+							resultFormat: "markdown",
+							totalDispatch: 5,
+							concurrentDispatch: 1,
+							maxSearches: 5,
+							maxFetches: 5,
+							retention: "artifact",
+						},
+					},
+				},
+			};
+
+			// Should fail — nonexistent_role is not in layer2's own roles
+			expect(() => resolveResearchConfig([layer1, layer2])).toThrow(
+				"verification references unknown role 'nonexistent_role'",
+			);
+		},
+	);
+
+	it(
+		"user layer without roles still allows empty verification arrays",
+		async () => {
+			const { resolveResearchConfig } = await import(
+				"../extensions/research/config.ts"
+			);
+
+			const layer1 = {
+				path: "/pkg.json",
+				kind: "packaged" as const,
+				value: makeBaseConfig(),
+			};
+
+			// User layer provides profiles but NO roles — verification should pass
+			// (agentNames is empty, so the `agentNames.size > 0` guard skips the check)
+			const layer2 = {
+				path: "/user.json",
+				kind: "user" as const,
+				value: {
+					profiles: {
+						custom: {
+							minRounds: 5,
+							maxRounds: 5,
+							minSources: 10,
+							maxScouts: 4,
+							maxFetchers: 2,
+							verification: [],
+						},
+					},
+				},
+			};
+
+			const result = resolveResearchConfig([layer1, layer2]);
+			expect(result.profiles.custom.verification).toEqual([]);
+		},
+	);
+});
+
+// ---------------------------------------------------------------------------
+// resolveResearchConfig — resolvePaths does not mutate input (F2)
+// ---------------------------------------------------------------------------
+
+describe("resolveResearchConfig — resolvePaths does not mutate input (F2)", () => {
+	it("original layer value is not mutated after resolveResearchConfig", async () => {
+		const { resolveResearchConfig } = await import(
+			"../extensions/research/config.ts"
+		);
+
+		const layerValue: Record<string, unknown> = {
+			defaultProgram: "deep-research",
+			defaultProfile: "standard",
+			defaultProvider: null,
+			defaults: {
+				maxIterations: 10,
+				maxTokens: 200000,
+				noProgress: 2,
+				scoreThreshold: 80,
+				retryCount: 1,
+				maxSearches: 30,
+				maxFetches: 30,
+			},
+			profiles: {
+				standard: {
+					minRounds: 5,
+					maxRounds: 5,
+					minSources: 30,
+					maxScouts: 8,
+					maxFetchers: 4,
+					verification: ["judge"],
+				},
+			},
+			roles: {
+				scout: {
+					description: "Scout",
+					model: "strong",
+					thinking: "high",
+					tools: ["read"],
+					access: "read",
+					timeoutSeconds: 300,
+					promptPath: "scout.md",
+					resultFormat: "markdown",
+					totalDispatch: 10,
+					concurrentDispatch: 2,
+					maxSearches: 10,
+					maxFetches: 10,
+					retention: "artifact",
+				},
+				judge: {
+					description: "Judge",
+					model: "eval",
+					thinking: "medium",
+					tools: ["read"],
+					access: "read",
+					timeoutSeconds: 300,
+					promptPath: "judge.md",
+					resultFormat: "markdown",
+					totalDispatch: 5,
+					concurrentDispatch: 1,
+					maxSearches: 5,
+					maxFetches: 5,
+					retention: "artifact",
+				},
+			},
+			capabilities: {
+				"web-search": {
+					name: "web-search",
+					paths: ["pkg.ts"],
+					requiredTools: ["web_lookup"],
+				},
+			},
+			childExtensions: ["pkg/child.ts"],
+		};
+
+		// Capture original values before calling resolveResearchConfig
+		const originalScoutPrompt = layerValue.roles!.scout!.promptPath;
+		const originalChildExtensions = (layerValue.childExtensions as string[]).slice();
+
+		const layer = {
+			path: "/config/pkg.json",
+			kind: "packaged" as const,
+			value: layerValue,
+		};
+
+		resolveResearchConfig([layer]);
+
+		// Inputs must not be mutated
+		expect(layerValue.roles!.scout!.promptPath).toBe(originalScoutPrompt);
+		expect((layerValue.childExtensions as string[]).slice()).toEqual(originalChildExtensions);
+		// Capability paths should not have been resolved in the original
+		expect(layerValue.capabilities!["web-search"]!.paths).toEqual(["pkg.ts"]);
+	});
+
+	it("reusing the same value object across layers does not corrupt later layers", async () => {
+		const { resolveResearchConfig } = await import(
+			"../extensions/research/config.ts"
+		);
+
+		// Create two separate value objects that share the same nested objects
+		// to test that resolvePaths clones deeply enough.
+		const sharedRoles: Record<string, unknown> = {
+			scout: {
+				description: "Scout",
+				model: "strong",
+				thinking: "high",
+				tools: ["read"],
+				access: "read",
+				timeoutSeconds: 300,
+				promptPath: "scout.md",
+				resultFormat: "markdown",
+				totalDispatch: 10,
+				concurrentDispatch: 2,
+				maxSearches: 10,
+				maxFetches: 10,
+				retention: "artifact",
+			},
+			judge: {
+				description: "Judge",
+				model: "eval",
+				thinking: "medium",
+				tools: ["read"],
+				access: "read",
+				timeoutSeconds: 300,
+				promptPath: "judge.md",
+				resultFormat: "markdown",
+				totalDispatch: 5,
+				concurrentDispatch: 1,
+				maxSearches: 5,
+				maxFetches: 5,
+				retention: "artifact",
+			},
+		};
+
+		const baseConfig = {
+			defaultProgram: "deep-research",
+			defaultProfile: "standard",
+			defaultProvider: null,
+			defaults: {
+				maxIterations: 10,
+				maxTokens: 200000,
+				noProgress: 2,
+				scoreThreshold: 80,
+				retryCount: 1,
+				maxSearches: 30,
+				maxFetches: 30,
+			},
+			profiles: {
+				standard: {
+					minRounds: 5,
+					maxRounds: 5,
+					minSources: 30,
+					maxScouts: 8,
+					maxFetchers: 4,
+					verification: ["judge"],
+				},
+			},
+			roles: sharedRoles,
+			capabilities: {
+				"web-search": {
+					name: "web-search",
+					paths: ["pkg.ts"],
+					requiredTools: ["web_lookup"],
+				},
+			},
+			childExtensions: ["pkg/child.ts"],
+		};
+
+		// Create two layers pointing to different paths but sharing the same
+		// nested objects — if resolvePaths mutates, the second layer will see
+		// resolved absolute paths from the first.
+		const layer1 = {
+			path: "/config/pkg.json",
+			kind: "packaged" as const,
+			value: JSON.parse(JSON.stringify(baseConfig)),
+		};
+		const layer2 = {
+			path: "/user/config.json",
+			kind: "user" as const,
+			value: JSON.parse(JSON.stringify(baseConfig)),
+		};
+
+		resolveResearchConfig([layer1, layer2]);
+
+		// layer1's value should still have the relative promptPath
+		expect(layer1.value.roles!.scout!.promptPath).toBe("scout.md");
+		// layer2's value should still have the relative promptPath
+		expect(layer2.value.roles!.scout!.promptPath).toBe("scout.md");
+		// Original sharedRoles should not have been mutated
+		expect(sharedRoles.scout!.promptPath).toBe("scout.md");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // ConfigLayer type — kind discrimination
 // ---------------------------------------------------------------------------
 

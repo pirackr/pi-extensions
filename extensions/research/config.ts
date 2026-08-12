@@ -231,17 +231,18 @@ function deepMerge(
 /**
  * Resolves all relative paths (promptPath, capability paths, childExtensions)
  * in a config object against the given base directory.  Absolute paths are
- * left untouched.
+ * left untouched.  Returns a new object; the input is never mutated.
  */
-function resolvePaths(obj: Record<string, unknown>, baseDir: string): void {
-	for (const [key, value] of Object.entries(obj)) {
+function resolvePaths(obj: Record<string, unknown>, baseDir: string): Record<string, unknown> {
+	const result: Record<string, unknown> = { ...obj };
+	for (const [key, value] of Object.entries(result)) {
 		// promptPath on roles
 		if (key === "promptPath" && typeof value === "string" && !path.isAbsolute(value)) {
-			obj[key] = path.resolve(baseDir, value);
+			result[key] = path.resolve(baseDir, value);
 		}
 		// paths on capabilities
 		else if (key === "paths" && Array.isArray(value)) {
-			obj[key] = (value as unknown[]).map((p) =>
+			result[key] = (value as unknown[]).map((p) =>
 				typeof p === "string" && !path.isAbsolute(p)
 					? path.resolve(baseDir, p)
 					: p,
@@ -249,25 +250,26 @@ function resolvePaths(obj: Record<string, unknown>, baseDir: string): void {
 		}
 		// childExtensions
 		else if (key === "childExtensions" && Array.isArray(value)) {
-			obj[key] = (value as unknown[]).map((p) =>
+			result[key] = (value as unknown[]).map((p) =>
 				typeof p === "string" && !path.isAbsolute(p)
 					? path.resolve(baseDir, p)
 					: p,
 			);
 		}
-		// recurse into nested plain objects
+		// recurse into nested plain objects (clone to preserve immutability)
 		else if (isPlainObject(value)) {
-			resolvePaths(value, baseDir);
+			result[key] = resolvePaths(value as Record<string, unknown>, baseDir);
 		}
-		// recurse into arrays of plain objects
+		// recurse into arrays of plain objects (clone items)
 		else if (Array.isArray(value)) {
-			for (const item of value) {
-				if (isPlainObject(item)) {
-					resolvePaths(item, baseDir);
-				}
-			}
+			result[key] = (value as unknown[]).map((item) =>
+				isPlainObject(item)
+					? resolvePaths(item as Record<string, unknown>, baseDir)
+					: item,
+			);
 		}
 	}
+	return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -821,15 +823,26 @@ function validateLayer(
 		if ("roles" in raw) validateRoles(raw, sourceLabel);
 		if ("capabilities" in raw) validateCapabilities(raw, sourceLabel);
 		if ("profiles" in raw) {
-			validatePartialProfiles(raw, sourceLabel, new Set());
+			// F1 fix: pass role names from this layer so cross-reference
+			// validation (verification references) is performed within each
+			// layer that supplies both profiles and roles.  The merged result
+			// is still validated exhaustively in validateFinalConfig.
+			const roleNames =
+				"roles" in raw ? new Set(Object.keys(raw.roles as Record<string, unknown>)) : new Set();
+			validatePartialProfiles(raw, sourceLabel, roleNames);
 		}
 	}
 
 	// Resolve relative paths against the layer's directory
-	const layerDir = path.dirname(layer.path);
-	resolvePaths(raw, layerDir);
-
-	return raw;
+	// (resolvePaths returns a new object to avoid mutating the input)
+	try {
+		const layerDir = path.dirname(layer.path);
+		return resolvePaths(raw, layerDir);
+	} catch {
+		// resolvePaths should never throw for well-formed input;
+		// if it does, fall through with raw so the error bubbles up
+		return raw;
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -1,10 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 import createExtension, { resetExtensionState, controller } from "../extensions/auto-compact/index.ts";
 import * as fs from "node:fs";
-import { AutoCompactController } from "../extensions/auto-compact/controller.ts";
-import type { ResolvedPolicy } from "../extensions/auto-compact/policy.ts";
 
 // ---------------------------------------------------------------------------
 // Mock node:fs before importing config
@@ -29,38 +25,9 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 import * as fsReal from "node:fs";
 const mockReadFileSync = vi.mocked(fsReal.readFileSync);
 
-// Resolve the actual package root so mocks match real path resolution in index.ts
-const __testDir = dirname(fileURLToPath(import.meta.url));
-const PACKAGE_ROOT = resolve(__testDir, "../");
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function makePolicy(overrides: Partial<ResolvedPolicy> = {}): ResolvedPolicy {
-	return {
-		source: "packaged",
-		matchedPattern: "default",
-		enabled: true,
-		effectiveThresholdTokens: 80000,
-		warnings: [],
-		...overrides,
-	};
-}
-
-function mockFileContents(contents: Record<string, string>): void {
-	mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
-		const p = typeof path === "string" ? path : String(path);
-		if (p in contents) {
-			return contents[p];
-		}
-		const err = new Error(
-			`ENOENT: no such file or directory, open '${p}'`,
-		) as NodeJS.ErrnoException;
-		err.code = "ENOENT";
-		throw err;
-	});
-}
 
 function makeFakePi(overrides: Partial<FakePi> = {}): FakePi {
 	return {
@@ -99,7 +66,7 @@ function makeCtx(overrides: {
 	model?: { provider: string; id: string; contextWindow: number };
 	usage?: { tokens: number | null; contextWindow: number; percent: number | null };
 	trusted?: boolean;
-} = {}): Record<string, unknown> {
+} = {}) {
 	return {
 		hasUI: overrides.hasUI ?? false,
 		ui: {

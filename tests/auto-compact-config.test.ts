@@ -457,7 +457,7 @@ describe("invalid-layer fallback", () => {
 	});
 
 	it("throws for missing packaged file", () => {
-		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
+		mockReadFileSync.mockImplementation((_path: fs.PathOrFileDescriptor) => {
 			const err = new Error("ENOENT") as NodeJS.ErrnoException;
 			err.code = "ENOENT";
 			throw err;

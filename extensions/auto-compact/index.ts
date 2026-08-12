@@ -10,7 +10,6 @@ import type {
 	SessionBeforeCompactEvent,
 	SessionCompactEvent,
 	CompactOptions,
-	ContextUsage,
 } from "@earendil-works/pi-coding-agent";
 import { loadAutoCompactConfiguration } from "./config.ts";
 import { resolveModelPolicy } from "./policy.ts";

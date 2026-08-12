@@ -643,7 +643,7 @@ describe("UI notifications", () => {
 		);
 
 		// Invoke onComplete callback from compact
-		const compactOpts = ctx2.compact.mock.calls[0][0] as { onComplete?: () => void };
+		const compactOpts = ctx2.compact.mock.calls[0][0] as { onComplete?: (result: { summary: string; firstKeptEntryId: string; tokensBefore: number }) => void };
 		compactOpts.onComplete!({
 			summary: "summarized",
 			firstKeptEntryId: "e1",
@@ -708,7 +708,7 @@ describe("UI notifications", () => {
 			ctx2 as any,
 		);
 
-		const compactOpts = ctx2.compact.mock.calls[0][0] as { onComplete?: () => void };
+		const compactOpts = ctx2.compact.mock.calls[0][0] as { onComplete?: (result: { summary: string; firstKeptEntryId: string; tokensBefore: number }) => void };
 		compactOpts.onComplete!({
 			summary: "summarized",
 			firstKeptEntryId: "e1",

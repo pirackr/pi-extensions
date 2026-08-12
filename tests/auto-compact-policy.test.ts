@@ -371,4 +371,34 @@ describe("edge cases", () => {
 		expect(result.enabled).toBe(false);
 		expect(result.effectiveThresholdTokens).toBeNull();
 	});
+
+	it("short-circuits rule search when globally disabled — returns default pattern, not rule pattern", () => {
+		const result = resolveModelPolicy(
+			[
+				{ source: "packaged" as const, enabled: true, default: { percent: 80 }, rules: [] },
+				{ source: "user" as const, enabled: false, default: { percent: 70 }, rules: [{ match: "anthropic/claude-*", percent: 50 }] },
+			],
+			"anthropic/claude-3-opus",
+			200000,
+		);
+		expect(result.enabled).toBe(false);
+		expect(result.matchedPattern).toBe("default");
+		expect(result.effectiveThresholdTokens).toBeNull();
+		expect(result.source).toBe("user");
+		expect(result.warnings).toHaveLength(0);
+	});
+
+	it("short-circuits rule search when globally disabled in the packaged layer", () => {
+		const result = resolveModelPolicy(
+			[
+				{ source: "packaged" as const, enabled: false, default: { percent: 80 }, rules: [{ match: "anthropic/claude-*", percent: 50 }] },
+			],
+			"anthropic/claude-3-opus",
+			200000,
+		);
+		expect(result.enabled).toBe(false);
+		expect(result.matchedPattern).toBe("default");
+		expect(result.effectiveThresholdTokens).toBeNull();
+		expect(result.source).toBe("packaged");
+	});
 });

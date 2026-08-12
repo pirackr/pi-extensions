@@ -942,4 +942,26 @@ describe("global disablement", () => {
 
 		expect(ctx2.compact).not.toHaveBeenCalled();
 	});
+
+	it("allows threshold compaction when globally disabled even with a matching rule", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+		const handler = getHandler(pi, "session_before_compact");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		const result = handler!(
+			{
+				type: "session_before_compact",
+				preparation: { firstKeptEntryId: "e1", tokensBefore: 170000 },
+				branchEntries: [],
+				reason: "threshold",
+				willRetry: false,
+				signal: new AbortController().signal,
+			},
+			ctx as any,
+		);
+		expect(result).toEqual({});
+	});
 });

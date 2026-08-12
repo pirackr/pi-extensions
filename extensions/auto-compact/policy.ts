@@ -61,7 +61,21 @@ export function resolveModelPolicy(
 
 	// Determine global enablement from the highest-precedence layer that
 	// specifies `enabled`.
-	const enabled = resolveGlobalEnablement(layers);
+	const { enabled: globalEnabled, source: globalSource } = resolveGlobalEnablement(layers);
+
+	// If globally disabled, short-circuit immediately: do not search rules.
+	// This preserves the invariant that the gate discriminator
+	// `matchedPattern === "default"` distinguishes global-disable from
+	// disabled-rule. (See task-5-report.md round-4 fix.)
+	if (!globalEnabled) {
+		return {
+			source: globalSource,
+			matchedPattern: "default",
+			enabled: false,
+			effectiveThresholdTokens: null,
+			warnings,
+		};
+	}
 
 	// Search layers from highest to lowest precedence; first rule match wins.
 	const reversed = [...layers].reverse();
@@ -69,7 +83,7 @@ export function resolveModelPolicy(
 		const rules = layer.rules ?? [];
 		for (const rule of rules) {
 			if (matchesPattern(modelKey, rule.match)) {
-				return resolveRule(layer.source, rule, contextWindow, warnings, enabled);
+				return resolveRule(layer.source, rule, contextWindow, warnings, true);
 			}
 		}
 	}
@@ -82,7 +96,7 @@ export function resolveModelPolicy(
 			defaultResult.value,
 			contextWindow,
 			warnings,
-			enabled,
+			true,
 		);
 	}
 
@@ -104,13 +118,13 @@ function matchesPattern(modelKey: string, pattern: string): boolean {
 	return minimatch(modelKey, pattern, { nonegate: true, nobrace: true });
 }
 
-function resolveGlobalEnablement(layers: ConfigLayer[]): boolean {
+function resolveGlobalEnablement(layers: ConfigLayer[]): { enabled: boolean; source: ConfigLayerSource } {
 	for (let i = layers.length - 1; i >= 0; i--) {
 		if (layers[i].enabled !== undefined) {
-			return layers[i].enabled!;
+			return { enabled: layers[i].enabled!, source: layers[i].source };
 		}
 	}
-	return false;
+	return { enabled: false, source: "none" };
 }
 
 function resolveDefault(

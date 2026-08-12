@@ -1,6 +1,15 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import createExtension, { resetExtensionState, controller } from "../extensions/auto-compact/index.ts";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import * as fs from "node:fs";
+
+// Packaged config path, computed from this test file's location so the mock
+// matches index.ts's resolution in ANY checkout (worktree, main, CI).
+const PACKAGED_CONFIG_PATH = resolve(
+	dirname(fileURLToPath(import.meta.url)),
+	"../config/auto-compact.json",
+);
 
 // ---------------------------------------------------------------------------
 // Mock node:fs before importing config
@@ -131,7 +140,7 @@ describe("session_start", () => {
 		mockReadFileSync.mockReset();
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
-			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+			if (p === PACKAGED_CONFIG_PATH) {
 				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
@@ -143,7 +152,7 @@ describe("session_start", () => {
 	it("loads packaged + user config on startup", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
-			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+			if (p === PACKAGED_CONFIG_PATH) {
 				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
 			}
 			if (p === "/mock/agent/auto-compact/config.json") {
@@ -220,7 +229,7 @@ describe("model_select", () => {
 		mockReadFileSync.mockReset();
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
-			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+			if (p === PACKAGED_CONFIG_PATH) {
 				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
@@ -263,7 +272,7 @@ describe("turn_end threshold crossing", () => {
 		mockReadFileSync.mockReset();
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
-			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+			if (p === PACKAGED_CONFIG_PATH) {
 				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
@@ -359,7 +368,7 @@ describe("session_before_compact gate", () => {
 		mockReadFileSync.mockReset();
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
-			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+			if (p === PACKAGED_CONFIG_PATH) {
 				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
@@ -540,7 +549,7 @@ describe("session_compact sync", () => {
 		mockReadFileSync.mockReset();
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
-			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+			if (p === PACKAGED_CONFIG_PATH) {
 				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
@@ -610,7 +619,7 @@ describe("UI notifications", () => {
 		mockReadFileSync.mockReset();
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
-			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+			if (p === PACKAGED_CONFIG_PATH) {
 				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
@@ -728,7 +737,7 @@ describe("/auto-compact command", () => {
 		mockReadFileSync.mockReset();
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
-			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+			if (p === PACKAGED_CONFIG_PATH) {
 				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
@@ -789,7 +798,7 @@ describe("config warnings in status", () => {
 	it("reports warnings from configuration in status output", async () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
-			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+			if (p === PACKAGED_CONFIG_PATH) {
 				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
 			}
 			if (p === "/mock/agent/auto-compact/config.json") {
@@ -834,7 +843,7 @@ describe("disabled model rule", () => {
 		mockReadFileSync.mockReset();
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
-			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+			if (p === PACKAGED_CONFIG_PATH) {
 				return JSON.stringify({
 					enabled: true,
 					default: { percent: 80 },
@@ -888,7 +897,7 @@ describe("global disablement", () => {
 		mockReadFileSync.mockReset();
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
-			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+			if (p === PACKAGED_CONFIG_PATH) {
 				return JSON.stringify({ enabled: false, default: { percent: 80 }, rules: [] });
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
@@ -978,7 +987,7 @@ describe("precedence-based global enablement in status", () => {
 	it("reports enabled when only packaged layer specifies enabled:true", async () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
-			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+			if (p === PACKAGED_CONFIG_PATH) {
 				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
@@ -1010,7 +1019,7 @@ describe("precedence-based global enablement in status", () => {
 	it("reports disabled when user layer overrides packaged enabled:true", async () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
-			if (p === "/home/pirackr/Working/grinder/pi-extensions/.worktrees/auto-compact/config/auto-compact.json") {
+			if (p === PACKAGED_CONFIG_PATH) {
 				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
 			}
 			if (p === "/mock/agent/auto-compact/config.json") {

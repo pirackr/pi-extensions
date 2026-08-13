@@ -44,7 +44,7 @@ Recommended next action: one concrete action (e.g., "rerun fragment writers with
 <artifact>
 {
   "version": 1,
-  "runId": "<current run id>",
+  "runId": "<the actual run id>",
   "pass": true | false,
   "verdict": "PASS" | "FAIL" | "CONDITIONAL_PASS",
   "failedChecks": ["check description 1", "..."],
@@ -52,6 +52,8 @@ Recommended next action: one concrete action (e.g., "rerun fragment writers with
 }
 </artifact>
 ```
+
+**The `runId` must be the REAL run id, not a placeholder.** Read it from `<research-dir>/.research/run-state.json` (the `runId` field, e.g. `tr-abc123-...`) before writing the artifact. The completion gate rejects any artifact whose `runId` does not match the run's actual id — a made-up value (like "judge-run-2026-08-13") fails the whole run.
 
 The artifact block contains **only** schema-valid JSON matching the judge artifact schema. The summary fields carry the verdict and key failed checks; the artifact contains the full structured payload written to `result_path`.
 

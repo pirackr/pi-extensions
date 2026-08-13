@@ -6,11 +6,14 @@
  * is kept OUT of this module.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import type { LoopState, LoopStatus, LoopUsage } from "./state.ts";
 import type { CompletionPolicy, CompletionFailure } from "./completion.ts";
 import { addCoordinatorUsage } from "./state.ts";
-import { programBlockFor, extractAssistantText, assistantFingerprint } from "./program.ts";
+import { programBlockFor, assistantFingerprint } from "./program.ts";
 
 const CUSTOM_TYPE = "pi-loop";
 const EVENT_TYPE = "pi-loop-event";
@@ -29,9 +32,7 @@ export class LoopEngine {
 	private _continuationTurnPending = false;
 	private _thisTurnIsContinuation = false;
 
-	constructor(
-		private readonly options: LoopEngineOptions,
-	) {}
+	constructor(private readonly options: LoopEngineOptions) {}
 
 	get state(): LoopState | null {
 		return this.loop;
@@ -69,7 +70,9 @@ export class LoopEngine {
 		for (let i = entries.length - 1; i >= 0; i--) {
 			const e = entries[i];
 			if (e?.type === "custom" && e.customType === CUSTOM_TYPE) {
-				return (e.data as { loop?: LoopState | null } | undefined)?.loop ?? null;
+				return (
+					(e.data as { loop?: LoopState | null } | undefined)?.loop ?? null
+				);
 			}
 		}
 		return null;
@@ -321,7 +324,8 @@ export class LoopEngine {
 				triggerTurn:
 					kind === "continuation" ||
 					kind === "budget_limited" ||
-					kind === "no_progress",
+					kind === "no_progress" ||
+					kind === "active",
 				deliverAs,
 			},
 		);
@@ -346,24 +350,49 @@ export class LoopEngine {
 		}
 	}
 
-	private getProgramBlock(): { block: string; sig: string | null } {
-		if (!this.loop) return { block: "", sig: null };
-		// F5: Use snapshot if available — source is never reread during a run
-		if (this.loop.programSnapshot) {
-			return { block: this.loop.programSnapshot, sig: this.loop.programSig ?? null };
-		}
-		// First read: capture snapshot from disk for future rounds
+	/**
+	 * Capture the frozen program snapshot once (F5: source is never reread
+	 * during a run). No-op when a snapshot already exists.
+	 */
+	private ensureProgramSnapshot(): void {
+		if (!this.loop || this.loop.programSnapshot) return;
 		const result = programBlockFor(
 			this.loop.programPath,
 			this.loop.programInjected,
 			this.loop.programSig,
 		);
-		this.loop = { ...this.loop, programSnapshot: result.block };
-		return result;
+		this.loop = {
+			...this.loop,
+			programSnapshot: result.block,
+			programSig: result.sig ?? this.loop.programSig,
+		};
+	}
+
+	private getProgramBlock(): { block: string; sig: string | null } {
+		if (!this.loop) return { block: "", sig: null };
+		this.ensureProgramSnapshot();
+		if (this.loop.programInjected) {
+			// Full program already embedded in a prior continuation message.
+			// Return a short note, not the full snapshot — re-embedding the whole
+			// program every round is the single largest fixed context tax on long
+			// runs. The full snapshot stays cached for post-compaction recovery.
+			return {
+				block: `Program file unchanged since the last round (${this.loop.programPath}). It is already in context above; if you cannot see it (e.g. after compaction), re-read it now and follow it as the task contract.`,
+				sig: this.loop.programSig ?? null,
+			};
+		}
+		// First injection (or re-injection after compaction): embed the full
+		// snapshot and mark it injected so subsequent rounds use the short note.
+		this.loop = { ...this.loop, programInjected: true, updatedAt: Date.now() };
+		return {
+			block: this.loop.programSnapshot ?? "",
+			sig: this.loop.programSig ?? null,
+		};
 	}
 
 	private continuationContent(state: LoopState): string {
-		const budget = state.tokenBudget == null ? "none" : String(state.tokenBudget);
+		const budget =
+			state.tokenBudget == null ? "none" : String(state.tokenBudget);
 		const remaining =
 			state.tokenBudget == null
 				? "n/a"
@@ -401,32 +430,31 @@ Wrap up this turn: summarize progress, write partial findings to disk if the pro
 	private queueContinuation(pi: ExtensionAPI, ctx: ExtensionContext): void {
 		if (this._continuationQueued || this.loop?.status !== "active") return;
 		this._continuationQueued = true;
-		const self = this;
 		queueMicrotask(() => {
-			self._continuationQueued = false;
-			if (!self.loop || self.loop.status !== "active") return;
-			if (self.loop.rounds >= self.loop.maxRounds) {
-				self.loop = {
-					...self.loop,
+			this._continuationQueued = false;
+			if (!this.loop || this.loop.status !== "active") return;
+			if (this.loop.rounds >= this.loop.maxRounds) {
+				this.loop = {
+					...this.loop,
 					status: "budget_limited" as LoopStatus,
 					reason: "rounds",
 					updatedAt: Date.now(),
 				};
-				self.persist(pi, ctx);
-				self.emit(pi, "budget_limited", "followUp");
+				this.persist(pi, ctx);
+				this.emit(pi, "budget_limited", "followUp");
 				return;
 			}
-			self.incrementRound();
+			this.incrementRound();
 			// Apply post-increment callback (e.g. research checkpointEvidence invalidation)
-			if (self.options.onRoundIncrement && self.loop) {
-				self.loop = self.options.onRoundIncrement(self.loop);
+			if (this.options.onRoundIncrement && this.loop) {
+				this.loop = this.options.onRoundIncrement(this.loop);
 			}
-			// F5: Use snapshot instead of rereading from disk
-			const prog = self.getProgramBlock();
-			self.updateProgramBlock(prog.sig);
-			self.persist(pi, ctx);
-			self.emit(pi, "continuation", "followUp");
-			self._continuationTurnPending = true;
+			// F5: capture the frozen snapshot once; the render path embeds it on
+			// the first continuation and a short note thereafter.
+			this.ensureProgramSnapshot();
+			this.persist(pi, ctx);
+			this.emit(pi, "continuation", "followUp");
+			this._continuationTurnPending = true;
 		});
 	}
 
@@ -458,5 +486,4 @@ Wrap up this turn: summarize progress, write partial findings to disk if the pro
 				return "";
 		}
 	}
-
 }

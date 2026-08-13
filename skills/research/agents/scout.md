@@ -53,6 +53,8 @@ Complete scout report with findings, URLs, credibility ratings, contradictions
 
 The artifact block contains the full scout report written to `result_path`.
 
+**Block ordering:** put the `<coordinator-summary>` block FIRST, then the `<artifact>` block, then any supporting prose — never the other way around. If your output is long, the required blocks are what get parsed and written; supporting prose after them may be truncated harmlessly. Keep the report itself compact (claim → URL → credibility lines), not a raw page dump.
+
 ## Return Format
 
 ```

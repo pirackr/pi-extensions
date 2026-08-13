@@ -3,7 +3,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { LoopEngine } from "../extensions/loop/engine.ts";
 import type { LoopState, LoopUsage } from "../extensions/loop/state.ts";
-import type { CompletionFailure, CompletionPolicy } from "../extensions/loop/completion.ts";
+import type {
+	CompletionFailure,
+	CompletionPolicy,
+} from "../extensions/loop/completion.ts";
 import { addCoordinatorUsage } from "../extensions/loop/state.ts";
 
 // --- Mock helpers ----------------------------------------------------------
@@ -11,7 +14,11 @@ import { addCoordinatorUsage } from "../extensions/loop/state.ts";
 function makeMockPi() {
 	const entries: Array<{ type: string; data: unknown }> = [];
 	const activeTools: string[] = [];
-	const messages: Array<{ customType: string; content: string; details: unknown }> = [];
+	const messages: Array<{
+		customType: string;
+		content: string;
+		details: unknown;
+	}> = [];
 	const pi = {
 		appendEntry: vi.fn((type: string, data: unknown) => {
 			entries.push({ type, data });
@@ -33,11 +40,14 @@ function makeMockPi() {
 function makeMockCtx(pending = false) {
 	const statusLines: string[] = [];
 	return {
-		ui: { setStatus: vi.fn((_: string, line: string) => statusLines.push(line)) },
+		ui: {
+			setStatus: vi.fn((_: string, line: string) => statusLines.push(line)),
+		},
 		hasPendingMessages: () => pending,
 		isIdle: () => !pending,
 		sessionManager: {
-			getEntries: () => [] as Array<{ type: string; customType: string; data: unknown }>,
+			getEntries: () =>
+				[] as Array<{ type: string; customType: string; data: unknown }>,
 		},
 		getStatusLines: () => [...statusLines],
 	};
@@ -506,7 +516,11 @@ describe("LoopEngine — F1: resume persists state into this.loop", () => {
 			noProgressTurns: 3,
 		});
 		// Pretend it was paused so we can resume
-		engine.state = { ...engine.state!, status: "paused" as const, updatedAt: 1000 };
+		engine.state = {
+			...engine.state!,
+			status: "paused" as const,
+			updatedAt: 1000,
+		};
 		const resumed = engine.resumeState(Date.now());
 		expect(resumed.status).toBe("active");
 		expect(engine.state).toBe(resumed); // F1: this.loop was mutated
@@ -605,7 +619,10 @@ describe("LoopEngine — F3: addCoordinatorUsage wired into endTurn", () => {
 describe("LoopEngine — F5: programSnapshot prevents disk reread", () => {
 	it("first getProgramBlock captures snapshot from disk", () => {
 		const { engine, pi, ctx } = makeEngine();
-		const programPath = path.resolve(__dirname, "../skills/research/program.md");
+		const programPath = path.resolve(
+			__dirname,
+			"../skills/research/program.md",
+		);
 		const realProgram = fs.readFileSync(programPath, "utf8");
 		engine.startState({
 			commandName: "loop",
@@ -632,13 +649,15 @@ describe("LoopEngine — F5: programSnapshot prevents disk reread", () => {
 			tokenBudget: null,
 			noProgressTurns: 3,
 		});
-		engine.state = { ...engine.state!, programSnapshot: "<program>cached</program>" };
+		engine.state = {
+			...engine.state!,
+			programSnapshot: "<program>cached</program>",
+		};
 		engine.onAgentEnd(pi, ctx);
 		const microtask = Promise.resolve();
 		expect(engine.state?.programSnapshot).toBe("<program>cached</program>");
 	});
 });
-
 
 describe("LoopEngine — onRoundIncrement callback", () => {
 	it("calls onRoundIncrement after round is incremented", async () => {

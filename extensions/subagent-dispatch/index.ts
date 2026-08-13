@@ -478,7 +478,15 @@ export function registerFaçadeTools(
 
 			// Negotiate provider
 			const requirements: string[] = []; // no hard requirements for generic dispatch
-			const liveProviders = registry.getAll();
+			let liveProviders = registry.getAll();
+			// In auto mode, the in-memory fake provider is only a test fallback —
+			// prefer any real provider (e.g. tmux-subagent) when one is registered.
+			if ((config.defaultProvider ?? null) === null) {
+				const realProviders = liveProviders.filter(
+					(p) => p.id !== FakeSubagentProvider.ID,
+				);
+				if (realProviders.length > 0) liveProviders = realProviders;
+			}
 			const { providerId, descriptor } = negotiateProvider(
 				liveProviders,
 				config.defaultProvider ?? null,
@@ -636,8 +644,11 @@ export function registerFaçadeTools(
 export default function createSubagentDispatchFacade(
 	pi: ExtensionAPI,
 ): DispatchFacade {
+	// The full `run_subagents` tool is registered by the tmux-subagent
+	// extension (which owns the real prepare → launch → poll → export flow).
+	// The façade keeps provider discovery and the `registerFaçadeTools` export
+	// for tests, but must not register a second, conflicting tool.
 	const facade = createFacade({ eventBus: pi.events });
-	registerFaçadeTools(pi, facade);
 	return facade;
 }
 

@@ -2,13 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { createHash } from "node:crypto";
 import type { Workspace } from "../extensions/research/workspace.ts";
-import {
-	newRunState,
-	readRunState,
-	updateRunState,
-} from "../extensions/research/state.ts";
+import { newRunState, readRunState } from "../extensions/research/state.ts";
 import { createRunManifest } from "../extensions/research/manifest.ts";
 import {
 	evaluateCheckpoint,
@@ -16,8 +11,6 @@ import {
 	parseScoreTable,
 	parseLedger,
 	type ScoreRow,
-	type LedgerRow,
-	type CheckpointResult,
 } from "../extensions/research/checkpoint.ts";
 
 // ---------------------------------------------------------------------------
@@ -32,24 +25,11 @@ function cleanup(dir: string): void {
 	fs.rmSync(dir, { recursive: true, force: true });
 }
 
-function makeFakeWorkspace(
-	tmpDir: string,
-	mission: string,
-	transitionId: string,
-): Workspace {
-	const wsPath = path.join(tmpDir, mission.replace(/\s+/g, "-"));
-	fs.mkdirSync(wsPath, { recursive: false });
-	fs.mkdirSync(path.join(wsPath, ".research"), { recursive: false });
-	return {
-		path: wsPath,
-		projectRoot: tmpDir,
-		mission,
-		runId: `${transitionId}-${mission.replace(/\s+/g, "-")}`,
-		transitionId,
-	};
-}
-
-function initWorkspace(ws: Workspace, profile = "standard", researchRound = 0): void {
+function initWorkspace(
+	ws: Workspace,
+	profile = "standard",
+	researchRound = 0,
+): void {
 	const init = newRunState(ws);
 	init.checkpointProfile = profile;
 	init.researchRound = researchRound;
@@ -62,25 +42,41 @@ function initWorkspace(ws: Workspace, profile = "standard", researchRound = 0): 
 	createRunManifest(ws);
 }
 
-function writeScoreTable(ws: Workspace, rows: Array<{ id: string; score: number }>): void {
+function writeScoreTable(
+	ws: Workspace,
+	rows: Array<{ id: string; score: number }>,
+): void {
 	const header = "| ID | Question | Score | Notes |";
 	const sep = "| --- | --- | ---: | --- |";
 	const body = rows
 		.map((r) => `| ${r.id} | some question | ${r.score} | some notes |`)
 		.join("\n");
-	fs.writeFileSync(path.join(ws.path, "score.md"), `${header}\n${sep}\n${body}\n`);
+	fs.writeFileSync(
+		path.join(ws.path, "score.md"),
+		`${header}\n${sep}\n${body}\n`,
+	);
 }
 
-function writeLedger(ws: Workspace, rows: Array<{ url: string; title: string }>): void {
+function writeLedger(
+	ws: Workspace,
+	rows: Array<{ url: string; title: string }>,
+): void {
 	const header = "| URL | Title | Tier | Retrieved | Claims |";
 	const sep = "| --- | --- | --- | --- | --- |";
 	const body = rows
 		.map((r) => `| ${r.url} | ${r.title} | tier1 | 2024-01-01 | 1 |`)
 		.join("\n");
-	fs.writeFileSync(path.join(ws.path, "notes.md"), `${header}\n${sep}\n${body}\n`);
+	fs.writeFileSync(
+		path.join(ws.path, "notes.md"),
+		`${header}\n${sep}\n${body}\n`,
+	);
 }
 
-function buildWs(tmpDir: string, name: string, transitionId: string): Workspace {
+function buildWs(
+	tmpDir: string,
+	name: string,
+	transitionId: string,
+): Workspace {
 	const wsPath = path.join(tmpDir, name);
 	fs.mkdirSync(wsPath, { recursive: false });
 	fs.mkdirSync(path.join(wsPath, ".research"), { recursive: false });
@@ -119,8 +115,15 @@ describe("parseScoreTable", () => {
 	});
 
 	it("parses an 8-row score table (max structural range)", () => {
-		const rows = Array.from({ length: 8 }, (_, i) => `| q${i + 1} | q | 80 | n |`);
-		const text = ["| ID | Question | Score | Notes |", "| --- | --- | ---: | --- |", ...rows].join("\n");
+		const rows = Array.from(
+			{ length: 8 },
+			(_, i) => `| q${i + 1} | q | 80 | n |`,
+		);
+		const text = [
+			"| ID | Question | Score | Notes |",
+			"| --- | --- | ---: | --- |",
+			...rows,
+		].join("\n");
 		const result = parseScoreTable(text);
 		expect(result.length).toBe(8);
 		expect(result[0].id).toBe("q1");
@@ -128,14 +131,30 @@ describe("parseScoreTable", () => {
 	});
 
 	it("rejects table with fewer than 5 rows", () => {
-		const rows = ["| q1 | q | 80 | n |", "| q2 | q | 80 | n |", "| q3 | q | 80 | n |", "| q4 | q | 80 | n |"];
-		const text = ["| ID | Question | Score | Notes |", "| --- | --- | ---: | --- |", ...rows].join("\n");
+		const rows = [
+			"| q1 | q | 80 | n |",
+			"| q2 | q | 80 | n |",
+			"| q3 | q | 80 | n |",
+			"| q4 | q | 80 | n |",
+		];
+		const text = [
+			"| ID | Question | Score | Notes |",
+			"| --- | --- | ---: | --- |",
+			...rows,
+		].join("\n");
 		expect(() => parseScoreTable(text)).toThrow("outside range");
 	});
 
 	it("rejects table with more than 8 rows", () => {
-		const rows = Array.from({ length: 9 }, (_, i) => `| q${i + 1} | q | 80 | n |`);
-		const text = ["| ID | Question | Score | Notes |", "| --- | --- | ---: | --- |", ...rows].join("\n");
+		const rows = Array.from(
+			{ length: 9 },
+			(_, i) => `| q${i + 1} | q | 80 | n |`,
+		);
+		const text = [
+			"| ID | Question | Score | Notes |",
+			"| --- | --- | ---: | --- |",
+			...rows,
+		].join("\n");
 		expect(() => parseScoreTable(text)).toThrow("outside range");
 	});
 
@@ -219,7 +238,8 @@ describe("parseScoreTable", () => {
 
 	// F4 edge cases
 	it("throws when input has only header and separator (no data rows)", () => {
-		const text = "| ID | Question | Score | Notes |\n| --- | --- | ---: | --- |";
+		const text =
+			"| ID | Question | Score | Notes |\n| --- | --- | ---: | --- |";
 		expect(() => parseScoreTable(text)).toThrow("outside range");
 	});
 
@@ -262,6 +282,46 @@ describe("parseScoreTable", () => {
 			{ id: "q5", score: 100 },
 		]);
 	});
+
+	it("finds the table when mission text precedes it (Round-0 layout)", () => {
+		// The planner prepends the mission summary and sub-question sections
+		// before the score table (program Round-0 step 3). The table must be
+		// located anywhere in the file, not just at line 0.
+		const text = [
+			"# Research Plan: How to deal with toddler at 2 effectively",
+			"",
+			"## Mission Summary",
+			"A toddler presents behavioral challenges.",
+			"",
+			"---",
+			"",
+			"## Sub-Questions",
+			"### q1: What is a typical 2-year-old like developmentally?",
+			"- Evidence needed: consensus milestones",
+			"",
+			"---",
+			"",
+			"## Score Table",
+			"",
+			"| ID | Question | Score | Notes |",
+			"| --- | --- | ---: | --- |",
+			"| q1 | What is a typical 2-year-old like developmentally? | 82 | Strong sources |",
+			"| q2 | Why do 2-year-olds have tantrums? | 88 | Excellent sources |",
+			"| q3 | What are evidence-based discipline strategies? | 85 | Strong evidence base |",
+			"| q4 | What are the most common daily challenges? | 0 | Needs research |",
+			"| q5 | How should parents communicate? | 0 | Needs research |",
+			"| q6 | What behaviors are red flags? | 0 | Needs research |",
+		].join("\n");
+		const result = parseScoreTable(text);
+		expect(result).toEqual<ScoreRow[]>([
+			{ id: "q1", score: 82 },
+			{ id: "q2", score: 88 },
+			{ id: "q3", score: 85 },
+			{ id: "q4", score: 0 },
+			{ id: "q5", score: 0 },
+			{ id: "q6", score: 0 },
+		]);
+	});
 });
 
 // ===========================================================================
@@ -294,7 +354,8 @@ describe("parseLedger", () => {
 	});
 
 	it("returns 0 for an empty ledger (header only, no rows)", () => {
-		const text = "| URL | Title | Tier | Retrieved | Claims |\n| --- | --- | --- | --- | --- |\n";
+		const text =
+			"| URL | Title | Tier | Retrieved | Claims |\n| --- | --- | --- | --- | --- |\n";
 		const result = parseLedger(text);
 		expect(result.length).toBe(0);
 	});
@@ -315,10 +376,16 @@ describe("parseLedger", () => {
 	});
 
 	it("parses ledger with 10 sources", () => {
-		const rows = Array.from({ length: 10 }, (_, i) =>
-			`| https://example.com/${i} | Title ${i} | tier1 | 2024-01-01 | 1 |`,
+		const rows = Array.from(
+			{ length: 10 },
+			(_, i) =>
+				`| https://example.com/${i} | Title ${i} | tier1 | 2024-01-01 | 1 |`,
 		);
-		const text = ["| URL | Title | Tier | Retrieved | Claims |", "| --- | --- | --- | --- | --- |", ...rows].join("\n");
+		const text = [
+			"| URL | Title | Tier | Retrieved | Claims |",
+			"| --- | --- | --- | --- | --- |",
+			...rows,
+		].join("\n");
 		const result = parseLedger(text);
 		expect(result.length).toBe(10);
 	});
@@ -330,52 +397,86 @@ describe("parseLedger", () => {
 
 describe("canonicalizeUrl", () => {
 	it("lowercases scheme and host", () => {
-		expect(canonicalizeUrl("HTTPS://Example.COM/path")).toBe("https://example.com/path");
+		expect(canonicalizeUrl("HTTPS://Example.COM/path")).toBe(
+			"https://example.com/path",
+		);
 	});
 
 	it("drops default ports (80 for http, 443 for https)", () => {
-		expect(canonicalizeUrl("http://example.com:80/path")).toBe("http://example.com/path");
-		expect(canonicalizeUrl("https://example.com:443/path")).toBe("https://example.com/path");
+		expect(canonicalizeUrl("http://example.com:80/path")).toBe(
+			"http://example.com/path",
+		);
+		expect(canonicalizeUrl("https://example.com:443/path")).toBe(
+			"https://example.com/path",
+		);
 	});
 
 	it("keeps non-default ports", () => {
-		expect(canonicalizeUrl("http://example.com:8080/path")).toBe("http://example.com:8080/path");
-		expect(canonicalizeUrl("https://example.com:8443/path")).toBe("https://example.com:8443/path");
+		expect(canonicalizeUrl("http://example.com:8080/path")).toBe(
+			"http://example.com:8080/path",
+		);
+		expect(canonicalizeUrl("https://example.com:8443/path")).toBe(
+			"https://example.com:8443/path",
+		);
 	});
 
 	it("drops fragments", () => {
-		expect(canonicalizeUrl("https://example.com/page#section")).toBe("https://example.com/page");
+		expect(canonicalizeUrl("https://example.com/page#section")).toBe(
+			"https://example.com/page",
+		);
 	});
 
 	it("drops all tracked UTM / ad params (utm_source, utm_medium, fbclid, gclid, dclid, msclkid)", () => {
-		expect(canonicalizeUrl("https://example.com/page?utm_source=newsletter&utm_medium=email")).toBe(
+		expect(
+			canonicalizeUrl(
+				"https://example.com/page?utm_source=newsletter&utm_medium=email",
+			),
+		).toBe("https://example.com/page");
+		expect(canonicalizeUrl("https://example.com/page?fbclid=abc123")).toBe(
 			"https://example.com/page",
 		);
-		expect(canonicalizeUrl("https://example.com/page?fbclid=abc123")).toBe("https://example.com/page");
-		expect(canonicalizeUrl("https://example.com/page?gclid=xyz&dclid=uvw")).toBe("https://example.com/page");
-		expect(canonicalizeUrl("https://example.com/page?msclkid=abc")).toBe("https://example.com/page");
-		expect(canonicalizeUrl("https://example.com/page?utm_source=x&fbclid=y")).toBe("https://example.com/page");
+		expect(
+			canonicalizeUrl("https://example.com/page?gclid=xyz&dclid=uvw"),
+		).toBe("https://example.com/page");
+		expect(canonicalizeUrl("https://example.com/page?msclkid=abc")).toBe(
+			"https://example.com/page",
+		);
+		expect(
+			canonicalizeUrl("https://example.com/page?utm_source=x&fbclid=y"),
+		).toBe("https://example.com/page");
 	});
 
 	it("keeps and sorts remaining query params", () => {
-		expect(canonicalizeUrl("https://example.com/page?z=1&a=2")).toBe("https://example.com/page?a=2&z=1");
-		expect(canonicalizeUrl("https://example.com/page?b=2&a=1&utm_source=x")).toBe("https://example.com/page?a=1&b=2");
+		expect(canonicalizeUrl("https://example.com/page?z=1&a=2")).toBe(
+			"https://example.com/page?a=2&z=1",
+		);
+		expect(
+			canonicalizeUrl("https://example.com/page?b=2&a=1&utm_source=x"),
+		).toBe("https://example.com/page?a=1&b=2");
 	});
 
 	it("handles URL with only fragment", () => {
-		expect(canonicalizeUrl("https://example.com/page#frag")).toBe("https://example.com/page");
+		expect(canonicalizeUrl("https://example.com/page#frag")).toBe(
+			"https://example.com/page",
+		);
 	});
 
 	it("handles empty query string", () => {
-		expect(canonicalizeUrl("https://example.com/page?")).toBe("https://example.com/page");
+		expect(canonicalizeUrl("https://example.com/page?")).toBe(
+			"https://example.com/page",
+		);
 	});
 
 	it("drops multiple trailing slashes to single slash", () => {
-		expect(canonicalizeUrl("https://example.com//path")).toBe("https://example.com/path");
+		expect(canonicalizeUrl("https://example.com//path")).toBe(
+			"https://example.com/path",
+		);
 	});
 
 	it("preserves query-only URLs (no path → /)", () => {
-		expect(canonicalizeUrl("https://example.com?foo=bar")).toBe("https://example.com/?foo=bar");
+		expect(canonicalizeUrl("https://example.com?foo=bar")).toBe(
+			"https://example.com/?foo=bar",
+		);
 	});
 
 	it("handles https with non-default port and params", () => {
@@ -437,7 +538,9 @@ describe("evaluateCheckpoint", () => {
 		]);
 		writeLedger(ws, [{ url: "https://example.com/a", title: "A" }]);
 
-		await expect(evaluateCheckpoint(ws, 1, init.revision)).rejects.toThrow(/Run-identity.*mismatch/);
+		await expect(evaluateCheckpoint(ws, 1, init.revision)).rejects.toThrow(
+			/Run-identity.*mismatch/,
+		);
 	});
 
 	it("throws on workspace mismatch between manifest and state", async () => {
@@ -473,7 +576,9 @@ describe("evaluateCheckpoint", () => {
 		]);
 		writeLedger(ws, [{ url: "https://example.com/a", title: "A" }]);
 
-		await expect(evaluateCheckpoint(ws, 1, init.revision)).rejects.toThrow(/Run-identity.*mismatch/);
+		await expect(evaluateCheckpoint(ws, 1, init.revision)).rejects.toThrow(
+			/Run-identity.*mismatch/,
+		);
 	});
 
 	it("passes run identity when manifest matches state", async () => {
@@ -613,7 +718,10 @@ describe("evaluateCheckpoint", () => {
 			{ id: "q4", score: 90 },
 			{ id: "q5", score: 90 },
 		]);
-		fs.writeFileSync(path.join(ws.path, "notes.md"), "just some text\nno table here\n");
+		fs.writeFileSync(
+			path.join(ws.path, "notes.md"),
+			"just some text\nno table here\n",
+		);
 
 		const result = await evaluateCheckpoint(ws, 1, 1);
 		expect(result.verdict).toBe("CONTINUE");
@@ -662,7 +770,7 @@ describe("evaluateCheckpoint", () => {
 		const result = await evaluateCheckpoint(ws, 1, 1);
 		expect(result.verdict).toBe("CONTINUE");
 		expect(result.round).toBe(1);
-		expect(result.unmet.some(u => u.includes("min rounds"))).toBe(true);
+		expect(result.unmet.some((u) => u.includes("min rounds"))).toBe(true);
 	});
 
 	it("returns CONTINUE when minSources not met (round≥5, sources<30, standard profile)", async () => {
@@ -695,7 +803,7 @@ describe("evaluateCheckpoint", () => {
 		const result = await evaluateCheckpoint(ws, 1, 1);
 		expect(result.verdict).toBe("CONTINUE");
 		expect(result.round).toBe(5);
-		expect(result.unmet.some(u => u.includes("min sources"))).toBe(true);
+		expect(result.unmet.some((u) => u.includes("min sources"))).toBe(true);
 	});
 
 	it("returns CONTINUE when score below threshold (round<max, sources≥30, score<80)", async () => {
@@ -729,7 +837,7 @@ describe("evaluateCheckpoint", () => {
 		const result = await evaluateCheckpoint(ws, 1, 1);
 		expect(result.verdict).toBe("CONTINUE");
 		expect(result.round).toBe(5);
-		expect(result.unmet.some(u => u.includes("score threshold"))).toBe(true);
+		expect(result.unmet.some((u) => u.includes("score threshold"))).toBe(true);
 	});
 
 	// F5: isolated score-below-threshold — ONLY score unmet (not confounded by round state)
@@ -755,10 +863,13 @@ describe("evaluateCheckpoint", () => {
 			{ id: "q4", score: 90 },
 			{ id: "q5", score: 90 },
 		]);
-		writeLedger(ws, Array.from({ length: 35 }, (_, i) => ({
-			url: `https://example.com/${i}`,
-			title: `Source ${i}`,
-		})));
+		writeLedger(
+			ws,
+			Array.from({ length: 35 }, (_, i) => ({
+				url: `https://example.com/${i}`,
+				title: `Source ${i}`,
+			})),
+		);
 
 		const result = await evaluateCheckpoint(ws, 1, 1);
 		expect(result.verdict).toBe("CONTINUE");
@@ -832,7 +943,7 @@ describe("evaluateCheckpoint", () => {
 		const result = await evaluateCheckpoint(ws, 1, 1);
 		expect(result.verdict).toBe("PROCEED_WITH_GAPS");
 		expect(result.round).toBe(4);
-		expect(result.unmet.some(u => u.includes("min sources"))).toBe(true);
+		expect(result.unmet.some((u) => u.includes("min sources"))).toBe(true);
 	});
 
 	it("returns CONTINUE when maxRounds is null (open-ended) even with unmet floors", async () => {
@@ -855,14 +966,12 @@ describe("evaluateCheckpoint", () => {
 			{ id: "q4", score: 90 },
 			{ id: "q5", score: 90 },
 		]);
-		writeLedger(ws, [
-			{ url: "https://example.com/a", title: "A" },
-		]);
+		writeLedger(ws, [{ url: "https://example.com/a", title: "A" }]);
 
 		const result = await evaluateCheckpoint(ws, 1, 1);
 		expect(result.verdict).toBe("CONTINUE");
 		expect(result.round).toBe(6);
-		expect(result.unmet.some(u => u.includes("min sources"))).toBe(true);
+		expect(result.unmet.some((u) => u.includes("min sources"))).toBe(true);
 	});
 
 	// -----------------------------------------------------------------------
@@ -965,11 +1074,9 @@ describe("evaluateCheckpoint", () => {
 			{ id: "q4", score: 90 },
 			{ id: "q5", score: 90 },
 		]);
-		writeLedger(ws, [
-			{ url: "https://example.com/a", title: "A" },
-		]);
+		writeLedger(ws, [{ url: "https://example.com/a", title: "A" }]);
 
-		const result = await evaluateCheckpoint(ws, 1, 1);
+		await evaluateCheckpoint(ws, 1, 1);
 		const persisted = readRunState(ws);
 		expect(persisted.researchRound).toBe(6);
 		expect(persisted.checkpointVerdict).toBe("PROCEED_WITH_GAPS");
@@ -986,9 +1093,7 @@ describe("evaluateCheckpoint", () => {
 			{ id: "q4", score: 90 },
 			{ id: "q5", score: 90 },
 		]);
-		writeLedger(ws, [
-			{ url: "https://example.com/a", title: "A" },
-		]);
+		writeLedger(ws, [{ url: "https://example.com/a", title: "A" }]);
 
 		// First checkpoint
 		await evaluateCheckpoint(ws, 1, 1);
@@ -1030,9 +1135,7 @@ describe("research rounds vs loop iterations", () => {
 			{ id: "q4", score: 90 },
 			{ id: "q5", score: 90 },
 		]);
-		writeLedger(ws, [
-			{ url: "https://example.com/a", title: "A" },
-		]);
+		writeLedger(ws, [{ url: "https://example.com/a", title: "A" }]);
 
 		const r1 = await evaluateCheckpoint(ws, 1, 1);
 		expect(r1.round).toBe(1);
@@ -1090,6 +1193,6 @@ describe("ledger deduplication", () => {
 		expect(result.round).toBe(4);
 		expect(result.verdict).toBe("PROCEED_WITH_GAPS");
 		// uniqueCount should be 1, not 3
-		expect(result.state.checkpointUniqueSources).toBe(1);
+		expect(result.state?.checkpointUniqueSources).toBe(1);
 	});
 });

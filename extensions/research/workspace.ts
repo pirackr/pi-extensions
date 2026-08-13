@@ -104,9 +104,9 @@ export function acquireWorkspaceClaim(
 				const metaPath = path.join(projectRoot, entry.name, ".meta.json");
 				if (fs.existsSync(metaPath)) {
 					try {
-						const meta = JSON.parse(
-							fs.readFileSync(metaPath, "utf-8"),
-						) as { finalDir: string };
+						const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8")) as {
+							finalDir: string;
+						};
 						usedFinalDirs.add(meta.finalDir);
 					} catch {
 						// Skip broken metadata
@@ -122,6 +122,11 @@ export function acquireWorkspaceClaim(
 		const finalDir = suffix ? `${s}${suffix}` : s;
 		// Skip if another claim already reserves this finalDir
 		if (usedFinalDirs.has(finalDir)) {
+			continue;
+		}
+		// Skip if the final path already exists on disk (e.g. a prior completed
+		// run whose claim was cleaned up, leaving the visible directory behind).
+		if (fs.existsSync(path.join(projectRoot, finalDir))) {
 			continue;
 		}
 
@@ -205,9 +210,7 @@ export function commitStaging(
 		if (fs.existsSync(staged.stagingPath)) {
 			fs.rmSync(staged.stagingPath, { recursive: true, force: true });
 		}
-		throw new Error(
-			`Workspace target appeared before commit: ${finalPath}`,
-		);
+		throw new Error(`Workspace target appeared before commit: ${finalPath}`);
 	}
 
 	// Atomic rename: staging → final (same-parent, same filesystem)
@@ -217,9 +220,9 @@ export function commitStaging(
 	const metaPath = path.join(claim.claimPath, ".meta.json");
 	let mission = "";
 	if (fs.existsSync(metaPath)) {
-		const meta = JSON.parse(
-			fs.readFileSync(metaPath, "utf-8"),
-		) as { mission: string };
+		const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8")) as {
+			mission: string;
+		};
 		mission = meta.mission ?? "";
 	}
 
@@ -251,10 +254,7 @@ export function commitStaging(
 function quarantineClaim(claim: WorkspaceClaim): void {
 	try {
 		if (!fs.existsSync(claim.claimPath)) return;
-		const quarantinePath = claim.claimPath.replace(
-			".claim-",
-			".quarantine-",
-		);
+		const quarantinePath = claim.claimPath.replace(".claim-", ".quarantine-");
 		fs.renameSync(claim.claimPath, quarantinePath);
 	} catch {
 		// Best-effort quarantine — ignore errors
@@ -368,7 +368,5 @@ export function discoverVisibleEntries(dir: string): string[] {
 	if (!fs.existsSync(dir)) {
 		return [];
 	}
-	return fs
-		.readdirSync(dir)
-		.filter((entry) => !entry.startsWith("."));
+	return fs.readdirSync(dir).filter((entry) => !entry.startsWith("."));
 }

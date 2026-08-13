@@ -54,7 +54,22 @@
     }
   },
   "roles": {
-    "scout": {
+    "planner": {
+      "description": "Plan research sub-questions and initialize score tracking",
+      "model": "strong",
+      "thinking": "high",
+      "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
+      "access": "read",
+      "timeoutSeconds": 600,
+      "promptPath": "../skills/research/agents/planner.md",
+      "resultFormat": "markdown",
+      "totalDispatch": 5,
+      "concurrentDispatch": 1,
+      "maxSearches": 5,
+      "maxFetches": 5,
+      "retention": "artifact"
+    },
+    "scout_research": {
       "description": "Discover and evaluate sources — finds URLs, assesses credibility, returns findings and a scored source list",
       "model": "strong",
       "thinking": "high",
@@ -83,6 +98,36 @@
       "maxSearches": 10,
       "maxFetches": 30,
       "retention": "ephemeral"
+    },
+    "consolidator": {
+      "description": "Consolidate newly gathered research into the shared knowledge base",
+      "model": "strong",
+      "thinking": "high",
+      "tools": ["read", "grep", "find", "ls", "write", "edit"],
+      "access": "write",
+      "timeoutSeconds": 900,
+      "promptPath": "../skills/research/agents/consolidator.md",
+      "resultFormat": "markdown",
+      "totalDispatch": 20,
+      "concurrentDispatch": 1,
+      "maxSearches": 0,
+      "maxFetches": 0,
+      "retention": "artifact"
+    },
+    "fragment_writer": {
+      "description": "Write org-mode report fragments with claim-level citations from the consolidated knowledge base",
+      "model": "strong",
+      "thinking": "high",
+      "tools": ["read", "grep", "find", "ls"],
+      "access": "read",
+      "timeoutSeconds": 1200,
+      "promptPath": "../skills/research/agents/fragment-writer.md",
+      "resultFormat": "markdown",
+      "totalDispatch": 20,
+      "concurrentDispatch": 4,
+      "maxSearches": 0,
+      "maxFetches": 0,
+      "retention": "artifact"
     },
     "judge": {
       "description": "Evaluate draft research report against credibility rubric — returns pass/fail with specific findings",

@@ -11,10 +11,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { countUniqueSourceUrls, effectiveSourceCount } from "./sources.ts";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { loadPackagedConfig } from "../research/config.ts";
-import { parseScoreTable } from "../research/checkpoint.ts";
+import {
+	parseScoreTable,
+	computeEvidenceDigest,
+} from "../research/checkpoint.ts";
 import { LoopEngine, LoopEngineOptions } from "./engine.ts";
 import { registerLoopCommand } from "./command.ts";
 import {
@@ -35,8 +41,17 @@ import {
 	ensureGitExclude,
 	type Workspace,
 } from "../research/workspace.ts";
-import { newRunState, acquireLease, readRunState, type StateConflict } from "../research/state.ts";
-import { researchCompletionGate, finalizeSuccess } from "../research/completion.ts";
+import {
+	newRunState,
+	acquireLease,
+	readRunState,
+	updateRunState,
+	type StateConflict,
+} from "../research/state.ts";
+import {
+	researchCompletionGate,
+	finalizeSuccess,
+} from "../research/completion.ts";
 import { createRunManifest } from "../research/manifest.ts";
 import { ResearchPolicy } from "../research/policy.ts";
 import { evaluateCheckpoint } from "../research/checkpoint.ts";
@@ -44,8 +59,8 @@ import { runVerification } from "../research/verification.ts";
 import type { ProviderDescriptor } from "../subagent-dispatch/contract.ts";
 import type { ResolvedResearchConfig } from "../research/config.ts";
 import {
-	LoopState,
-	LoopStatus,
+	type LoopState,
+	type LoopStatus,
 	LoopUsage,
 	normalizeState,
 	addCoordinatorUsage,
@@ -108,7 +123,11 @@ function makeCompleteLoopExecute(pi: ExtensionAPI, engine: LoopEngine) {
 			  }) => void)
 			| undefined,
 		ctx: ExtensionContext,
-	): Promise<{ content: { type: string; text: string }[]; isError?: boolean; details?: unknown }> => {
+	): Promise<{
+		content: { type: string; text: string }[];
+		isError?: boolean;
+		details?: unknown;
+	}> => {
 		const p = params as { status?: string; guardId?: string };
 		if (p.status !== "complete") {
 			return {
@@ -119,7 +138,10 @@ function makeCompleteLoopExecute(pi: ExtensionAPI, engine: LoopEngine) {
 			};
 		}
 		if (!engine.state || engine.state.status !== "active") {
-			return { content: [{ type: "text", text: "No active loop." }], isError: true };
+			return {
+				content: [{ type: "text", text: "No active loop." }],
+				isError: true,
+			};
 		}
 		if (p.guardId != null && p.guardId !== engine.state.guardId) {
 			return {
@@ -171,7 +193,8 @@ function makeCompleteLoopExecute(pi: ExtensionAPI, engine: LoopEngine) {
 					content: [
 						{
 							type: "text",
-							text: "Research completion gates not met:\n" +
+							text:
+								"Research completion gates not met:\n" +
 								failures.map((f) => `  • ${f.code}: ${f.message}`).join("\n"),
 						},
 					],
@@ -210,7 +233,9 @@ function makeCompleteLoopExecute(pi: ExtensionAPI, engine: LoopEngine) {
 		engine.persist(pi, ctx);
 		engine.emit(pi, "complete", "steer");
 		return {
-			content: [{ type: "text", text: JSON.stringify({ loop: completed }, null, 2) }],
+			content: [
+				{ type: "text", text: JSON.stringify({ loop: completed }, null, 2) },
+			],
 			details: { loop: completed },
 		};
 	};
@@ -232,7 +257,10 @@ function makeResearchCheckpointExecute(
 			  }) => void)
 			| undefined,
 		ctx: ExtensionContext,
-	): Promise<{ content: { type: string; text: string }[]; isError?: boolean }> => {
+	): Promise<{
+		content: { type: string; text: string }[];
+		isError?: boolean;
+	}> => {
 		const p = params as {
 			profile?: string;
 			round?: number;
@@ -319,38 +347,28 @@ function makeResearchCheckpointExecute(
 
 		const effectiveMax = engine.state?.maxRounds ?? profileCfg.maxRounds;
 		// null maxRounds = open-ended profile (no cap) — never treat as reached.
+		let verdict: "PROCEED" | "PROCEED_WITH_GAPS" | "CONTINUE";
 		if (effectiveMax !== null && round >= effectiveMax) {
-			const verdict = issues.length > 0 ? "PROCEED_WITH_GAPS" : "PROCEED";
-			const verdictText =
-				verdict === "PROCEED_WITH_GAPS"
-					? `🟢 PROCEED_WITH_GAPS — max rounds reached with ${issues.length} gap(s): ${issues.join("; ")}${hint}`
-					: `🟢 PROCEED — criteria met.${hint}`;
-			if (engine.state) {
-				engine.state = {
-					...engine.state,
-					checkpointEvidence: {
-						runId: engine.state.id,
-						round,
-						sources,
-						scoreState,
-						verdict,
-					},
-					updatedAt: Date.now(),
-				};
-				engine.persist(pi, ctx);
-			}
-			return { content: [{ type: "text", text: verdictText }] };
+			verdict = issues.length > 0 ? "PROCEED_WITH_GAPS" : "PROCEED";
+		} else if (issues.length > 0) {
+			verdict = "CONTINUE";
+		} else {
+			verdict = "PROCEED";
 		}
-		if (issues.length > 0) {
-			return {
-				content: [
-					{
-						type: "text",
-						text: `🔴 CONTINUE — ${issues.join("; ")}${hint}`,
-					},
-				],
-			};
-		}
+
+		// Persist the verdict + evidence digest to the retained workspace on disk
+		// so the complete_loop completion gate (which audits run-state.json) sees
+		// this checkpoint. Without this write, run-state.json keeps its initial
+		// CONTINUE verdict and the gate rejects completion as "missing evidence".
+		await persistCheckpointEvidence(
+			engine,
+			profile,
+			round,
+			sources,
+			verdict,
+			issues,
+		);
+
 		if (engine.state) {
 			engine.state = {
 				...engine.state,
@@ -359,11 +377,32 @@ function makeResearchCheckpointExecute(
 					round,
 					sources,
 					scoreState,
-					verdict: "PROCEED",
+					verdict,
 				},
 				updatedAt: Date.now(),
 			};
 			engine.persist(pi, ctx);
+		}
+
+		if (verdict === "PROCEED_WITH_GAPS") {
+			return {
+				content: [
+					{
+						type: "text",
+						text: `🟢 PROCEED_WITH_GAPS — max rounds reached with ${issues.length} gap(s): ${issues.join("; ")}${hint}`,
+					},
+				],
+			};
+		}
+		if (verdict === "CONTINUE") {
+			return {
+				content: [
+					{
+						type: "text",
+						text: `🔴 CONTINUE — ${issues.join("; ")}${hint}`,
+					},
+				],
+			};
 		}
 		return {
 			content: [
@@ -387,6 +426,55 @@ function countNotesSources(workingDir: string | undefined): number | null {
 		return countUniqueSourceUrls(fs.readFileSync(notesPath, "utf8"));
 	} catch {
 		return null;
+	}
+}
+
+// Persist a checkpoint verdict + evidence digest to the retained workspace's
+// run-state.json. The complete_loop gate audits that file (not the in-memory
+// LoopState), so without this write the gate sees the initial CONTINUE verdict
+// and rejects completion as "missing evidence".
+async function persistCheckpointEvidence(
+	engine: LoopEngine,
+	profile: string,
+	round: number,
+	sources: number,
+	verdict: "PROCEED" | "PROCEED_WITH_GAPS" | "CONTINUE",
+	unmet: string[],
+): Promise<void> {
+	const workingDir = engine.state?.workingDir;
+	if (!workingDir) return;
+	const ws: Workspace = {
+		path: workingDir,
+		projectRoot: path.dirname(workingDir),
+		mission: engine.state?.mission ?? "",
+		runId: engine.state?.id ?? "",
+		transitionId: "",
+	};
+	try {
+		const state = readRunState(ws);
+		ws.runId = state.runId;
+		const scorePath = path.join(workingDir, "score.md");
+		const notesPath = path.join(workingDir, "notes.md");
+		const scoreContent = fs.existsSync(scorePath)
+			? fs.readFileSync(scorePath, "utf8")
+			: "";
+		const notesContent = fs.existsSync(notesPath)
+			? fs.readFileSync(notesPath, "utf8")
+			: "";
+		const digest = computeEvidenceDigest(scoreContent, notesContent);
+		await updateRunState(ws, state.revision, (current) => ({
+			...current,
+			researchRound: round,
+			checkpointVerdict: verdict,
+			checkpointDigest: digest,
+			checkpointUnmet: unmet,
+			checkpointUniqueSources: sources,
+			loopIteration: round,
+			checkpointProfile: profile,
+		}));
+	} catch {
+		// Best-effort: the completion gate will report the precise failure if the
+		// checkpoint could not be persisted. Never fail the checkpoint tool itself.
 	}
 }
 
@@ -429,45 +517,53 @@ export default function piLoop(pi: ExtensionAPI) {
 	});
 
 	// --- Register /loop command (generic) --------------------------------
-	registerLoopCommand(pi, {
-		command: "loop",
-		description:
-			"Run an autonomous loop driven by a program file until its completion condition is met or budgets are hit.",
-		defaultProgram: "program.md",
-		defaultMaxRounds: DEFAULT_MAX_ROUNDS,
-	}, engine);
+	registerLoopCommand(
+		pi,
+		{
+			command: "loop",
+			description:
+				"Run an autonomous loop driven by a program file until its completion condition is met or budgets are hit.",
+			defaultProgram: "program.md",
+			defaultMaxRounds: DEFAULT_MAX_ROUNDS,
+		},
+		engine,
+	);
 
 	// --- Register /research command (deep research) ----------------------
-	registerLoopCommand(pi, {
-		command: "research",
-		description:
-			"Deep research: run the bundled research program (program.md) as an autonomous loop — searches, fetches sources, and compiles report.org (claim-level citations) into a retained per-run workspace under the project root.",
-		defaultProgram: RESEARCH_PROGRAM_PATH,
-		defaultMaxRounds: researchConfig?.profiles.standard?.maxRounds ?? 8,
-		isResearch: true,
-		config: researchConfig ?? undefined,
-		onResearchStart: async (request: ResearchStartRequest, ctx) => {
-			if (!resolvedResearchConfig) {
-				throw new Error(
-					"Research configuration not loaded — cannot start research.",
+	registerLoopCommand(
+		pi,
+		{
+			command: "research",
+			description:
+				"Deep research: run the bundled research program (program.md) as an autonomous loop — searches, fetches sources, and compiles report.org (claim-level citations) into a retained per-run workspace under the project root.",
+			defaultProgram: RESEARCH_PROGRAM_PATH,
+			defaultMaxRounds: researchConfig?.profiles.standard?.maxRounds ?? 8,
+			isResearch: true,
+			config: researchConfig ?? undefined,
+			onResearchStart: async (request: ResearchStartRequest, ctx) => {
+				if (!resolvedResearchConfig) {
+					throw new Error(
+						"Research configuration not loaded — cannot start research.",
+					);
+				}
+				return prepareAndActivateResearch(
+					request,
+					buildResearchDeps(ctx, resolvedResearchConfig),
 				);
-			}
-			return prepareAndActivateResearch(
-				request,
-				buildResearchDeps(ctx, resolvedResearchConfig),
-			);
+			},
+			onResumeDeps: (ctx) => {
+				if (!resolvedResearchConfig) return null;
+				const config = resolvedResearchConfig;
+				const tools = researchRequiredTools(config);
+				return {
+					config,
+					getModels: () => buildModelView(ctx),
+					getProviders: () => buildProviderView(ctx, config, tools),
+				};
+			},
 		},
-		onResumeDeps: (ctx) => {
-			if (!resolvedResearchConfig) return null;
-			const config = resolvedResearchConfig;
-			const tools = researchRequiredTools(config);
-			return {
-				config,
-				getModels: () => buildModelView(ctx),
-				getProviders: () => buildProviderView(ctx, config, tools),
-			};
-		},
-	}, engine);
+		engine,
+	);
 
 	// --- Register complete_loop tool -------------------------------------
 	pi.registerTool({
@@ -534,7 +630,11 @@ export default function piLoop(pi: ExtensionAPI) {
 		updateStatus(ctx, engine);
 		const reason = (event as { reason?: string }).reason;
 		if (restored?.status === "active" && reason === "reload") {
-			engine.state = { ...restored, status: "paused" as LoopStatus, updatedAt: Date.now() };
+			engine.state = {
+				...restored,
+				status: "paused" as LoopStatus,
+				updatedAt: Date.now(),
+			};
 			engine.persist(pi, ctx);
 			ctx.ui.notify(
 				`⏸ Loop paused after reload: ${truncate(restored.mission)}\n/${restored.commandName} resume to continue · /${restored.commandName} clear to stop`,

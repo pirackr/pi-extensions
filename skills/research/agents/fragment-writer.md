@@ -46,3 +46,5 @@ The complete org-mode fragment content.
 ```
 
 The fragment file written to `result_path` is the authoritative output.
+
+**Block ordering:** put the `<coordinator-summary>` block FIRST, then the `<artifact>` block containing the complete fragment, then any supporting prose. The text between `<artifact>` and `</artifact>` is what gets written to `result_path` — never let the fragment prose live outside that block. If the output is long, only the blocks are parsed; prose after them may be truncated harmlessly.

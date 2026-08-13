@@ -39,13 +39,15 @@ Recommended next action: one concrete action
 <artifact>
 {
   "version": 1,
-  "runId": "<current run id>",
+  "runId": "<the actual run id>",
   "pass": true | false,
   "unsupportedClaims": ["claim text 1", "..."],
   "misattributedClaims": ["claim text → wrong source → correct source", "..."]
 }
 </artifact>
 ```
+
+**The `runId` must be the REAL run id, not a placeholder.** Read it from `<research-dir>/.research/run-state.json` (the `runId` field) before writing the artifact. The completion gate rejects any artifact whose `runId` does not match the run's actual id.
 
 The artifact block contains **only** schema-valid JSON matching the citations artifact schema. The summary fields carry the high-level verdict; the artifact contains the full structured payload written to `result_path`.
 

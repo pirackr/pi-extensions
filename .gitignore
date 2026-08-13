@@ -6,3 +6,5 @@ package-lock.json
 /research/
 .env
 .envrc
+
+.research/

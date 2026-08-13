@@ -79,7 +79,21 @@ function evaluateUsage(ctx: ExtensionContext): { triggered: boolean } | null {
 	});
 }
 
-
+/**
+ * Pi's native auto-compaction can run concurrently with this extension's
+ * turn_end trigger. When it wins the race, our manual `ctx.compact()` call
+ * fails with a benign error that means "nothing to do", not "compaction is
+ * broken". Treat these as a completed cycle so the controller rearms
+ * instead of recording a spurious failure.
+ */
+function isBenignCompactionError(error: Error): boolean {
+	const message = error.message;
+	return (
+		message.includes("Already compacted") ||
+		message.includes("Nothing to compact") ||
+		message.includes("Compaction cancelled")
+	);
+}
 
 function formatStatus(ctx: ExtensionContext): string {
 	const lines: string[] = [];
@@ -108,7 +122,7 @@ function formatStatus(ctx: ExtensionContext): string {
 	const usage = ctx.getContextUsage();
 	if (usage && usage.tokens !== null) {
 		lines.push(
-		`Usage: ${usage.tokens} tokens (${usage.percent !== null ? `${usage.percent}%` : "unknown%"})`,
+			`Usage: ${usage.tokens} tokens (${usage.percent !== null ? `${usage.percent}%` : "unknown%"})`,
 		);
 	} else {
 		lines.push("Usage: unknown");
@@ -119,11 +133,9 @@ function formatStatus(ctx: ExtensionContext): string {
 		lines.push(`Rule: ${currentPolicy.matchedPattern}`);
 		lines.push(`Source: ${currentPolicy.source}`);
 		if (currentPolicy.effectiveThresholdTokens !== null) {
-		lines.push(
-			`Threshold: ${currentPolicy.effectiveThresholdTokens} tokens`,
-		);
+			lines.push(`Threshold: ${currentPolicy.effectiveThresholdTokens} tokens`);
 		} else {
-		lines.push("Threshold: disabled");
+			lines.push("Threshold: disabled");
 		}
 	} else {
 		lines.push("Rule: none matched");
@@ -131,20 +143,18 @@ function formatStatus(ctx: ExtensionContext): string {
 	}
 
 	// Controller state
-	lines.push(
-		`Controller: armed=${status.armed}, in-flight=${status.inFlight}`,
-	);
+	lines.push(`Controller: armed=${status.armed}, in-flight=${status.inFlight}`);
 
 	// Config paths
 	if (config) {
 		for (const p of config.loadedPaths) {
-		lines.push(`Loaded: ${p}`);
+			lines.push(`Loaded: ${p}`);
 		}
 		for (const ig of config.ignoredPaths) {
-		lines.push(`Ignored: ${ig.path} (${ig.reason})`);
+			lines.push(`Ignored: ${ig.path} (${ig.reason})`);
 		}
 		for (const w of config.warnings) {
-		lines.push(`Warning: ${w.message}`);
+			lines.push(`Warning: ${w.message}`);
 		}
 	}
 
@@ -163,77 +173,81 @@ export default function (pi: ExtensionAPI) {
 	// session_start
 	pi.on("session_start", (_event: SessionStartEvent, ctx: ExtensionContext) => {
 		try {
-		const trusted = ctx.isProjectTrusted();
-		loadConfiguration(trusted);
-		currentPolicy = resolvePolicy(ctx);
-		controller.resetSession(
+			const trusted = ctx.isProjectTrusted();
+			loadConfiguration(trusted);
+			currentPolicy = resolvePolicy(ctx);
+			controller.resetSession(
 				ctx.model ? canonicalModelKey(ctx.model) : "unknown",
-		);
-		evaluateUsage(ctx);
+			);
+			evaluateUsage(ctx);
 		} catch {
-		// Non-fatal: extension remains functional.
+			// Non-fatal: extension remains functional.
 		}
 	});
 
 	// model_select
 	pi.on("model_select", (event: ModelSelectEvent, ctx: ExtensionContext) => {
 		try {
-		const modelKey = canonicalModelKey(event.model);
-		controller.resetSession(modelKey);
-		if (loadedConfig) {
+			const modelKey = canonicalModelKey(event.model);
+			controller.resetSession(modelKey);
+			if (loadedConfig) {
 				currentPolicy = resolveModelPolicy(
 					loadedConfig.layers,
 					modelKey,
 					event.model.contextWindow,
 				);
-		}
-		evaluateUsage(ctx);
+			}
+			evaluateUsage(ctx);
 		} catch {
-		// Non-fatal.
+			// Non-fatal.
 		}
 	});
 
 	// turn_end
 	pi.on("turn_end", (_event: TurnEndEvent, ctx: ExtensionContext) => {
 		try {
-		// Re-resolve policy in case model changed without model_select.
-		const model = ctx.model;
-		if (model) {
-			const modelKey = canonicalModelKey(model);
-			if (
-				!currentPolicy ||
-				controller.status().modelKey !== modelKey
-			) {
-				if (loadedConfig) {
-					currentPolicy = resolveModelPolicy(
-						loadedConfig.layers,
-						modelKey,
-						model.contextWindow,
-					);
-				}
-			}
-		}
-		const result = evaluateUsage(ctx);
-		if (result?.triggered) {
-			const options: CompactOptions = {
-				onComplete: () => {
-					controller.recordComplete();
-					if (ctx.hasUI) {
-						ctx.ui.notify("Auto-compaction completed", "info");
-					}
-				},
-				onError: (error: Error) => {
-					controller.recordFailure(error);
-					if (ctx.hasUI) {
-						ctx.ui.notify(
-							`Auto-compaction failed: ${error.message}`,
-							"error",
+			// Re-resolve policy in case model changed without model_select.
+			const model = ctx.model;
+			if (model) {
+				const modelKey = canonicalModelKey(model);
+				if (!currentPolicy || controller.status().modelKey !== modelKey) {
+					if (loadedConfig) {
+						currentPolicy = resolveModelPolicy(
+							loadedConfig.layers,
+							modelKey,
+							model.contextWindow,
 						);
 					}
-				},
-			};
-			ctx.compact(options);
-		}
+				}
+			}
+			const result = evaluateUsage(ctx);
+			if (result?.triggered) {
+				const options: CompactOptions = {
+					onComplete: () => {
+						controller.recordComplete();
+						if (ctx.hasUI) {
+							ctx.ui.notify("Auto-compaction completed", "info");
+						}
+					},
+					onError: (error: Error) => {
+						if (isBenignCompactionError(error)) {
+							// Pi's native auto-compaction already compacted (or the session is
+							// too small to compact) — a benign race with this extension's own
+							// turn_end trigger. Treat it as a completed cycle, not an error.
+							controller.recordComplete();
+							return;
+						}
+						controller.recordFailure(error);
+						if (ctx.hasUI) {
+							ctx.ui.notify(
+								`Auto-compaction failed: ${error.message}`,
+								"error",
+							);
+						}
+					},
+				};
+				ctx.compact(options);
+			}
 		} catch {
 			// Non-fatal.
 		}
@@ -243,40 +257,43 @@ export default function (pi: ExtensionAPI) {
 	pi.on(
 		"session_before_compact",
 		(event: SessionBeforeCompactEvent, _ctx: ExtensionContext) => {
-		try {
-			const allowed = controller.gate({
-				reason: event.reason,
-				tokens: event.preparation.tokensBefore,
-				policy: currentPolicy,
-			});
-			if (!allowed) {
-				return { cancel: true } as const;
+			try {
+				const allowed = controller.gate({
+					reason: event.reason,
+					tokens: event.preparation.tokensBefore,
+					policy: currentPolicy,
+				});
+				if (!allowed) {
+					return { cancel: true } as const;
+				}
+				return {} as const;
+			} catch {
+				// Fail open: allow Pi to continue.
+				return {} as const;
 			}
-			return {} as const;
-		} catch {
-			// Fail open: allow Pi to continue.
-			return {} as const;
-		}
 		},
 	);
 
 	// session_compact
-	pi.on("session_compact", (_event: SessionCompactEvent, _ctx: ExtensionContext) => {
-		try {
-		controller.recordComplete();
-		} catch {
-		// Non-fatal.
-		}
-	});
+	pi.on(
+		"session_compact",
+		(_event: SessionCompactEvent, _ctx: ExtensionContext) => {
+			try {
+				controller.recordComplete();
+			} catch {
+				// Non-fatal.
+			}
+		},
+	);
 
 	// /auto-compact status command
 	pi.registerCommand("auto-compact", {
 		description: "Show auto-compaction status and active policy.",
 		handler: async (_args: string, ctx: ExtensionContext) => {
-		const report = formatStatus(ctx);
-		if (ctx.hasUI) {
-			ctx.ui.notify(report, "info");
-		}
+			const report = formatStatus(ctx);
+			if (ctx.hasUI) {
+				ctx.ui.notify(report, "info");
+			}
 		},
 	});
 }

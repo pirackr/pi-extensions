@@ -10,7 +10,10 @@ import {
 	reconcileTransition,
 	discoverVisibleEntries,
 } from "../extensions/research/workspace.ts";
-import { createRunManifest, readManifest } from "../extensions/research/manifest.ts";
+import {
+	createRunManifest,
+	readManifest,
+} from "../extensions/research/manifest.ts";
 import {
 	newRunState,
 	readRunState,
@@ -44,7 +47,10 @@ function writeManifestInStaging(
 	const manifest: any = {
 		runId: `${transitionId}-${path.basename(stagingPath).replace(".staging-", "")}`,
 		mission,
-		workspace: path.join(path.dirname(stagingPath), path.basename(stagingPath).replace(".staging-", "")),
+		workspace: path.join(
+			path.dirname(stagingPath),
+			path.basename(stagingPath).replace(".staging-", ""),
+		),
 		manifestPath: "placeholder",
 		createdAt: Date.now(),
 		snapshotSha256: null,
@@ -108,9 +114,9 @@ describe("acquireWorkspaceClaim", () => {
 
 	it("throws for non-existent project root", () => {
 		const nonExistent = path.join(tmpDir, "does-not-exist");
-		expect(() =>
-			acquireWorkspaceClaim(nonExistent, "mission", "t1"),
-		).toThrow("Project root does not exist");
+		expect(() => acquireWorkspaceClaim(nonExistent, "mission", "t1")).toThrow(
+			"Project root does not exist",
+		);
 	});
 
 	it("slugifies mission to URL-safe form", () => {
@@ -158,9 +164,9 @@ describe("suffix allocation", () => {
 		acquireWorkspaceClaim(tmpDir, "same mission", "t1");
 		acquireWorkspaceClaim(tmpDir, "same mission", "t2");
 		acquireWorkspaceClaim(tmpDir, "same mission", "t3");
-		expect(() =>
-			acquireWorkspaceClaim(tmpDir, "same mission", "t4"),
-		).toThrow("all suffixes taken");
+		expect(() => acquireWorkspaceClaim(tmpDir, "same mission", "t4")).toThrow(
+			"all suffixes taken",
+		);
 	});
 
 	it("different missions can use the same base slug", () => {
@@ -168,6 +174,12 @@ describe("suffix allocation", () => {
 		expect(claim1.finalDir).toBe("mission-alpha");
 		const claim2 = acquireWorkspaceClaim(tmpDir, "mission beta", "t2");
 		expect(claim2.finalDir).toBe("mission-beta");
+	});
+	it("allocates -2 when the base slug's final directory already exists", () => {
+		// A prior completed run left a visible final dir; its claim was cleaned up.
+		fs.mkdirSync(path.join(tmpDir, "same-mission"), { recursive: false });
+		const claim = acquireWorkspaceClaim(tmpDir, "same mission", "t1");
+		expect(claim.finalDir).toBe("same-mission-2");
 	});
 });
 
@@ -373,12 +385,8 @@ describe("hidden-entry discovery exclusion", () => {
 		const claim = acquireWorkspaceClaim(tmpDir, "discover test", "t1");
 		const staged = prepareStaging(claim);
 		const visible = discoverVisibleEntries(tmpDir);
-		expect(visible).not.toContain(
-			path.basename(claim.claimPath),
-		);
-		expect(visible).not.toContain(
-			path.basename(staged.stagingPath),
-		);
+		expect(visible).not.toContain(path.basename(claim.claimPath));
+		expect(visible).not.toContain(path.basename(staged.stagingPath));
 		expect(visible).not.toContain(".claim-" + claim.finalDir);
 		expect(visible).not.toContain(".staging-" + staged.finalDir);
 	});
@@ -414,11 +422,7 @@ describe("ensureGitExclude", () => {
 	it("is idempotent — no duplicate entry", () => {
 		fs.mkdirSync(path.join(tmpDir, ".git"), { recursive: false });
 		const gitignore = path.join(tmpDir, ".gitignore");
-		fs.writeFileSync(
-			gitignore,
-			"# existing\n.research/\n",
-			"utf-8",
-		);
+		fs.writeFileSync(gitignore, "# existing\n.research/\n", "utf-8");
 
 		ensureGitExclude(tmpDir);
 
@@ -539,10 +543,7 @@ describe("commitStaging rollback", () => {
 		expect(() => commitStaging(staged, claim)).toThrow();
 
 		// Check that claim was quarantined (not fully deleted)
-		const quarantinePath = claim.claimPath.replace(
-			".claim-",
-			".quarantine-",
-		);
+		const quarantinePath = claim.claimPath.replace(".claim-", ".quarantine-");
 		expect(fs.existsSync(quarantinePath)).toBe(true);
 	});
 });

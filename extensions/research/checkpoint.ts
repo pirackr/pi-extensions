@@ -2,12 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import type { Workspace } from "./workspace.ts";
-import type { RunState, StateConflict, Verdict } from "./state.ts";
-import {
-	newRunState,
-	readRunState,
-	updateRunState,
-} from "./state.ts";
+import type { RunState, Verdict } from "./state.ts";
+import { readRunState, updateRunState } from "./state.ts";
 import { loadPackagedConfig } from "./config.ts";
 
 // ---------------------------------------------------------------------------
@@ -39,21 +35,14 @@ export interface CheckpointResult {
 // Constants
 // ---------------------------------------------------------------------------
 
-const SCORE_HEADER = "| ID | Question | Score | Notes |";
-const SCORE_SEPARATOR = "| --- | --- | ---: | --- |";
-const LEDGER_HEADER = "| URL | Title | Tier | Retrieved | Claims |";
-const LEDGER_SEPARATOR = "| --- | --- | --- | --- | --- |";
+const SCORE_HEADER_CELLS = ["ID", "Question", "Score", "Notes"];
+const LEDGER_HEADER_CELLS = ["URL", "Title", "Tier", "Retrieved", "Claims"];
 const MIN_SCORE_ROWS = 5;
 const MAX_SCORE_ROWS = 8;
 
 // Params to strip from URLs (non-UTM tracking params only —
 // all utm_* params are caught by startsWith("utm_") below)
-const STRIPPED_PARAMS = new Set([
-	"fbclid",
-	"gclid",
-	"dclid",
-	"msclkid",
-]);
+const STRIPPED_PARAMS = new Set(["fbclid", "gclid", "dclid", "msclkid"]);
 
 // ---------------------------------------------------------------------------
 // parseScoreTable
@@ -67,38 +56,62 @@ const STRIPPED_PARAMS = new Set([
  * Row count must be within [MIN_SCORE_ROWS, MAX_SCORE_ROWS].
  */
 export function parseScoreTable(text: string): ScoreRow[] {
-	const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+	const lines = text
+		.split("\n")
+		.map((l) => l.trim())
+		.filter(Boolean);
 	if (lines.length < 2) {
-		throw new Error("score.md table must have at least a header and separator row");
+		throw new Error(
+			"score.md table must have at least a header and separator row",
+		);
 	}
 
-	const header = lines[0];
-	const sep = lines[1];
-
-	// Validate header columns (split by |, trim, filter empty)
-	const headerCols = header.split("|").map((c) => c.trim()).filter(Boolean);
-	if (
-		headerCols.length !== 4 ||
-		headerCols[0] !== "ID" ||
-		headerCols[1] !== "Question" ||
-		headerCols[2] !== "Score" ||
-		headerCols[3] !== "Notes"
-	) {
-		throw new Error("score.md must have exact header columns: ID | Question | Score | Notes");
+	// The score table may be preceded by the mission summary and sub-question
+	// sections (program Round-0 step 3: "Prepend the mission to score.md"), so
+	// it is NOT guaranteed to be the first content in the file. Locate the
+	// header row anywhere, then require the very next non-empty line to be
+	// its separator row.
+	let headerIdx = -1;
+	for (let i = 0; i < lines.length - 1; i++) {
+		const cols = lines[i]
+			.split("|")
+			.map((c) => c.trim())
+			.filter(Boolean);
+		if (
+			cols.length === SCORE_HEADER_CELLS.length &&
+			SCORE_HEADER_CELLS.every((cell, idx) => cols[idx] === cell)
+		) {
+			headerIdx = i;
+			break;
+		}
 	}
+	if (headerIdx === -1) {
+		throw new Error(
+			"score.md must have exact header columns: ID | Question | Score | Notes",
+		);
+	}
+
+	const sep = lines[headerIdx + 1];
 
 	// Validate separator row has at least 4 cells
-	const sepCols = sep.split("|").map((c) => c.trim()).filter(Boolean);
+	const sepCols = sep
+		.split("|")
+		.map((c) => c.trim())
+		.filter(Boolean);
 	if (sepCols.length < 4) {
 		throw new Error("score.md separator row has too few columns");
 	}
 
-	// Parse data rows
+	// Parse data rows (until the first line that isn't a table row)
 	const rows: ScoreRow[] = [];
 	const seenIds = new Set<string>();
 
-	for (let i = 2; i < lines.length; i++) {
-		const cols = lines[i].split("|").map((c) => c.trim()).filter(Boolean);
+	for (let i = headerIdx + 2; i < lines.length; i++) {
+		if (!lines[i].startsWith("|")) break; // table ended — stop
+		const cols = lines[i]
+			.split("|")
+			.map((c) => c.trim())
+			.filter(Boolean);
 		if (cols.length < 4) continue; // skip malformed rows
 
 		const id = cols[0];
@@ -112,11 +125,15 @@ export function parseScoreTable(text: string): ScoreRow[] {
 
 		// Validate score is integer 0–100
 		if (!/^-?\d+$/.test(scoreStr)) {
-			throw new Error(`score.md row '${id}': score '${scoreStr}' is not a valid integer`);
+			throw new Error(
+				`score.md row '${id}': score '${scoreStr}' is not a valid integer`,
+			);
 		}
 		const score = parseInt(scoreStr, 10);
 		if (score < 0 || score > 100) {
-			throw new Error(`score.md row '${id}': score ${score} is outside range 0–100`);
+			throw new Error(
+				`score.md row '${id}': score ${score} is outside range 0–100`,
+			);
 		}
 
 		rows.push({ id, score });
@@ -124,10 +141,14 @@ export function parseScoreTable(text: string): ScoreRow[] {
 
 	// Validate row count
 	if (rows.length < MIN_SCORE_ROWS) {
-		throw new Error(`score.md: row count ${rows.length} outside range ${MIN_SCORE_ROWS}–${MAX_SCORE_ROWS}`);
+		throw new Error(
+			`score.md: row count ${rows.length} outside range ${MIN_SCORE_ROWS}–${MAX_SCORE_ROWS}`,
+		);
 	}
 	if (rows.length > MAX_SCORE_ROWS) {
-		throw new Error(`score.md: row count ${rows.length} outside range ${MIN_SCORE_ROWS}–${MAX_SCORE_ROWS}`);
+		throw new Error(
+			`score.md: row count ${rows.length} outside range ${MIN_SCORE_ROWS}–${MAX_SCORE_ROWS}`,
+		);
 	}
 
 	return rows;
@@ -144,29 +165,45 @@ export function parseScoreTable(text: string): ScoreRow[] {
  * Only parses rows within the table (ignores footnotes, etc.).
  */
 export function parseLedger(text: string): LedgerRow[] {
-	const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+	const lines = text
+		.split("\n")
+		.map((l) => l.trim())
+		.filter(Boolean);
 	if (lines.length < 2) {
-		throw new Error("notes.md ledger must have at least a header and separator row");
+		throw new Error(
+			"notes.md ledger must have at least a header and separator row",
+		);
 	}
 
-	const header = lines[0];
-	const sep = lines[1];
-
-	// Validate header
-	const headerCols = header.split("|").map((c) => c.trim()).filter(Boolean);
-	if (
-		headerCols.length !== 5 ||
-		headerCols[0] !== "URL" ||
-		headerCols[1] !== "Title" ||
-		headerCols[2] !== "Tier" ||
-		headerCols[3] !== "Retrieved" ||
-		headerCols[4] !== "Claims"
-	) {
-		throw new Error("notes.md ledger must have exact header columns: URL | Title | Tier | Retrieved | Claims");
+	// notes.md begins with a "# Research Notes" heading and claim lines before
+	// any ledger section, so the ledger table is NOT guaranteed to be first.
+	// Locate the header row anywhere, then require the next non-empty line to
+	// be its separator row.
+	let headerIdx = -1;
+	for (let i = 0; i < lines.length - 1; i++) {
+		const cols = lines[i]
+			.split("|")
+			.map((c) => c.trim())
+			.filter(Boolean);
+		if (
+			cols.length === LEDGER_HEADER_CELLS.length &&
+			LEDGER_HEADER_CELLS.every((cell, idx) => cols[idx] === cell)
+		) {
+			headerIdx = i;
+			break;
+		}
+	}
+	if (headerIdx === -1) {
+		throw new Error(
+			"notes.md ledger must have exact header columns: URL | Title | Tier | Retrieved | Claims",
+		);
 	}
 
 	// Validate separator
-	const sepCols = sep.split("|").map((c) => c.trim()).filter(Boolean);
+	const sepCols = lines[headerIdx + 1]
+		.split("|")
+		.map((c) => c.trim())
+		.filter(Boolean);
 	if (sepCols.length < 5) {
 		throw new Error("notes.md ledger separator row has too few columns");
 	}
@@ -174,9 +211,12 @@ export function parseLedger(text: string): LedgerRow[] {
 	// Parse data rows (table ends when we encounter a line that isn't a table row)
 	const rows: LedgerRow[] = [];
 
-	for (let i = 2; i < lines.length; i++) {
+	for (let i = headerIdx + 2; i < lines.length; i++) {
 		const line = lines[i];
-		const cols = line.split("|").map((c) => c.trim()).filter(Boolean);
+		const cols = line
+			.split("|")
+			.map((c) => c.trim())
+			.filter(Boolean);
 		if (cols.length < 5) break; // table ended or malformed — stop
 
 		const url = cols[0];
@@ -219,8 +259,10 @@ export function canonicalizeUrl(u: string): string {
 	url.hostname = url.hostname.toLowerCase();
 
 	// Drop default ports
-	if ((url.protocol === "http:" && url.port === "80") ||
-		(url.protocol === "https:" && url.port === "443")) {
+	if (
+		(url.protocol === "http:" && url.port === "80") ||
+		(url.protocol === "https:" && url.port === "443")
+	) {
 		url.port = "";
 	}
 
@@ -279,7 +321,10 @@ export function canonicalizeUrl(u: string): string {
  * Exported so the completion gate (Task 11) can verify that the recorded
  * checkpoint digest still matches the current evidence bytes.
  */
-export function computeEvidenceDigest(scoreContent: string, ledgerContent: string): string {
+export function computeEvidenceDigest(
+	scoreContent: string,
+	ledgerContent: string,
+): string {
 	const combined = `${scoreContent}\n||\n${ledgerContent}`;
 	return createHash("sha256").update(combined).digest("hex");
 }
@@ -315,8 +360,6 @@ export async function evaluateCheckpoint(
 	loopIteration: number,
 	expectedRevision: number,
 ): Promise<CheckpointResult> {
-	const statePath = path.join(ws.path, ".research", "run-state.json");
-
 	// Read current state
 	let currentState: RunState | undefined;
 	try {
@@ -335,10 +378,15 @@ export async function evaluateCheckpoint(
 	// ── F1: Verify run identity against the immutable manifest ────────────
 	const manifestPath = path.join(ws.path, ".research", "run.json");
 	if (fs.existsSync(manifestPath)) {
-		const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
-			runId: string;
-			workspace: string;
-		};
+		let manifest: { runId: string; workspace: string };
+		try {
+			manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
+				runId: string;
+				workspace: string;
+			};
+		} catch {
+			throw new Error(`run.json malformed: ${manifestPath}`);
+		}
 		if (manifest.runId !== currentState.runId) {
 			throw new Error(
 				`Run-identity mismatch: manifest runId="${manifest.runId}" but state runId="${currentState.runId}". ` +
@@ -433,11 +481,7 @@ export async function evaluateCheckpoint(
 		};
 	}
 
-	const {
-		minRounds,
-		maxRounds,
-		minSources,
-	} = profileCfg;
+	const { minRounds, maxRounds, minSources } = profileCfg;
 
 	// Evaluate criteria
 	const unmet: string[] = [];
@@ -462,7 +506,9 @@ export async function evaluateCheckpoint(
 		}
 	}
 	if (belowThreshold.length > 0) {
-		unmet.push(`score threshold: ${belowThreshold.join(", ")} below ${scoreThreshold}`);
+		unmet.push(
+			`score threshold: ${belowThreshold.join(", ")} below ${scoreThreshold}`,
+		);
 	}
 
 	// Determine verdict
@@ -495,7 +541,6 @@ export async function evaluateCheckpoint(
 			checkpointProfile: profileName,
 		}));
 	} catch (conflict) {
-		const stateConflict = conflict as StateConflict;
 		// Retry with the fresh state's revision — but do NOT increment round
 		// on retry, as the first call already incremented (the queue serializes)
 		const freshState = readRunState(ws);

@@ -182,7 +182,9 @@ initializes `score.md`. It does **not** call `research_checkpoint`.
 4. **`score.md` strict format:** a markdown table with exactly these columns:
    `| ID | Question | Score | Notes |` — at least 5 and at most 8 data rows,
    integer scores 0–100, unique IDs. A malformed table fails the checkpoint
-   with a repair instruction.
+   with a repair instruction. The table may sit anywhere in the file — the
+   mission/summary text prepended per step 3 is expected, and the parser
+   locates the header row wherever it appears.
 5. **START WIDE** — the first round's scout constraints say "use broad
    queries first". Narrow after round 0.
 6. Plan revision is the consolidator's job (every 3rd round, see below). The
@@ -263,6 +265,13 @@ State the evidence-backed failure mode and change the retry strategy to address
 it. Never blindly re-dispatch the same task. If retained artifacts are
 unavailable, report that limitation before re-dispatching rather than guessing.
 
+**Artifact-write vs summary-validation failures:** a task marked failed for a
+missing/malformed `<coordinator-summary>` or `<artifact>` block may still have
+written its durable payload to `result_path` (write-capable roles write the
+file directly). Before re-dispatching, `ls` the `result_path` file: if it
+exists and is non-empty, the work is DONE — treat the task as succeeded and
+move on. Only re-dispatch when the artifact is genuinely absent or corrupt.
+
 **Role → profile mapping:** the engine registers research roles under
 profile names from `config/research.json`. Logical roles map to executable
 agent names as follows: scout → `scout_research`, fetcher → `fetcher`,
@@ -337,10 +346,7 @@ run_subagents({
 run_subagents({
   tasks: [{
     agent: "consolidator",
-    objective: "Consolidate new scout/fetcher reports into the research knowledge base (round N). This is a knowledge-management task — do NOT inspect or modify repository code. Read exactly these scout-output files: <research-dir>/scout-outputs/<file1>, <research-dir>/scout-outputs/<file2>, ... (only the files echoed this round — never re-read older ones). For each report: append claim → source URL → confidence (0-100) → credibility (1-5) lines to <research-dir>/notes.md; mark UGC pages (forums, Reddit, wikis, reviews) (UGC) and cap credibility at 3; keep exact quotes for load-bearing claims; prune stale search-result dumps; record unresolved contradictions — never paper them over. Update <research-dir>/score.md (0-100 per sub-question + notes column): flag attribution claims lacking a second independent source; flag key claims needing 2+ independent sources (triangulation). If round N is a multiple of 3, revise the sub-questions against the mission at the top of score.md — add dropped angles, merge overlapping, drop exhausted — and record the revision. Return ONLY a one-line summary: updated scores, unique URL count in notes.md, contradiction flags, coverage gaps.",
-    scope: ["<research-dir>/notes.md", "<research-dir>/score.md", "<research-dir>/scout-outputs/"],
-    inputs: ["<research-dir>/notes.md", "<research-dir>/score.md", "<research-dir>/scout-outputs/"],
-    expected_output: "One-line summary: scores, unique URL count, contradictions, gaps",
+    objective: "Consolidate new scout/fetcher reports into the research knowledge base (round N). This is a knowledge-management task — do NOT inspect or modify repository code. Read exactly these scout-output files: <research-dir>/scout-outputs/<file1>, <research-dir>/scout-outputs/<file2>, ... (only the files echoed this round — never re-read older ones). For each report: append claim → source URL → confidence (0-100) → credibility (1-5) lines to <research-dir>/notes.md; mark UGC pages (forums, Reddit, wikis, reviews) (UGC) and cap credibility at 3; keep exact quotes for load-bearing claims; prune stale search-result dumps; record unresolved contradictions — never paper them over. Update <research-dir>/score.md (0-100 per sub-question + notes column): flag attribution claims lacking a second independent source; flag key claims needing 2+ independent sources (triangulation). If round N is a multiple of 3, revise the sub-questions against the mission at the top of score.md — add dropped angles, merge overlapping, drop exhausted — and record the revision. Count unique source URLs AFTER the merge as the number of distinct http(s):// URL strings present in notes.md itself (dedupe exact URLs; do not count URLs from scout reports that did not survive into notes.md — the checkpoint audits notes.md directly and flags any over-report). Return ONLY a one-line summary: updated scores, unique URL count in notes.md, contradiction flags, coverage gaps."
     constraints: ["Do not run in parallel with other agents.", "Do not delegate.", "Prune notes.md hard each round: delete stale search-result dumps and collapse redundant claims; keep it compact — a bloated notes.md slows every later merge and causes timeouts."]
   }],
   retain_artifacts: "always"
@@ -359,7 +365,7 @@ run_subagents({
    run_subagents({
      tasks: [{
        agent: "fragment_writer",
-       objective: "Write the Executive Summary + Findings for sub-questions <subset> of the research report to <research-dir>/fragments/findings-<n>.org. This is a document-writing task — do NOT inspect or modify repository code. Read <research-dir>/notes.md (claim → source → confidence → credibility), <research-dir>/score.md (scores + gaps), and the matching <research-dir>/scout-outputs/ files (raw quotes). Every claim must carry an inline [[URL][description]] citation present in notes.md; uncited/low-confidence claims go to an appended 'Uncertainties (fragment <n>)' list. [embed Org-Mode Format section here]",
+       objective: "Write the Executive Summary + Findings for sub-questions <subset> of the research report to <research-dir>/fragments/findings-<n>.org. This is a document-writing task — do NOT inspect or modify repository code. Read <research-dir>/notes.md (claim → source → confidence → credibility), <research-dir>/score.md (scores + gaps), and the matching <research-dir>/scout-outputs/ files (raw quotes). Every claim must carry an inline [[URL][description]] citation present in notes.md; uncited/low-confidence claims go to an appended 'Uncertainties (fragment <n>)' list. [embed Org-Mode Format section here]. IMPORTANT: put the <artifact> block FIRST in your response (right after <coordinator-summary>), containing the complete fragment — the text between <artifact> and </artifact> is what gets written to your result_path. Do not let the fragment prose escape into response text outside that block."
        scope: ["<research-dir>/fragments/findings-<n>.org"],
        result_path: "<research-dir>/fragments/findings-<n>.org",
        expected_output: "findings-<n>.org written with claim-level citations",
@@ -375,7 +381,7 @@ run_subagents({
    run_subagents({
      tasks: [{
        agent: "worker",
-       objective: "Assemble the research report. Read every <research-dir>/fragments/findings-*.org fragment, then write <research-dir>/draft-report.org and <research-dir>/report.org by concatenating in order: fragments (Executive Summary first, then each Findings subsection), Comparison Table, Contradictions & Debates, Uncertainties & Gaps (merge the per-fragment lists), Sources (from <research-dir>/notes.md). Add the judge metadata line near the top: judge: <profile> + <model tier> + <date>. Do not rewrite fragment prose. [embed Org-Mode Format section here]",
+       objective: "Assemble the research report. Read every <research-dir>/fragments/findings-*.org fragment, then write <research-dir>/draft-report.org and <research-dir>/report.org by concatenating in order: fragments (Executive Summary first, then each Findings subsection), Comparison Table, Contradictions & Debates, Uncertainties & Gaps (merge the per-fragment lists), Sources (from <research-dir>/notes.md). Add the judge metadata line near the top: judge: <profile> + <model tier> + <date>. Do not rewrite fragment prose. [embed Org-Mode Format section here]. IMPORTANT: put the <artifact> block FIRST in your response (right after <coordinator-summary>), containing the complete assembled report — the text between <artifact> and </artifact> is what gets written to your result_path. Do not let the report prose escape into response text outside that block."
        scope: ["<research-dir>/report.org", "<research-dir>/draft-report.org"],
        result_path: "<research-dir>/report.org",
        expected_output: "report.org assembled from all fragments with every required section",
@@ -398,7 +404,7 @@ run_subagents({
    run_subagents({
      tasks: [{
        agent: "judge",
-       objective: "Judge the research report against the credibility rubric. Evaluate claim quality, triangulation, contradictions, and completeness. Re-verify any disputed claim against its cited source with web_lookup/fetch_web — do not accept a claim at face value because the draft states it.",
+       objective: "Judge the research report against the credibility rubric. Evaluate claim quality, triangulation, contradictions, and completeness. Re-verify any disputed claim against its cited source with web_lookup/fetch_web — do not accept a claim at face value because the draft states it. In the JSON artifact, set runId to the run's REAL id (read it from <research-dir>/.research/run-state.json) — the completion gate rejects any artifact whose runId does not match the run.",
        scope: ["<research-dir>/report.org", "<research-dir>/notes.md", "<research-dir>/score.md"],
        result_path: "<research-dir>/verification/judge.json",
        expected_output: "Strict JSON artifact: judge.json with pass/verdict/failedChecks/fixes"
@@ -408,7 +414,10 @@ run_subagents({
    ```
 
    Repeat for each required verification role, each with its own
-   `result_path`.
+   `result_path`. Every verification agent must set its artifact's `runId`
+   to the run's real id from `<research-dir>/.research/run-state.json` —
+   never a placeholder or invented value (a made-up id fails the completion
+   gate).
 
 4. **Repair loop** — if any verification check fails:
    - The failed checks become a structured repair list.

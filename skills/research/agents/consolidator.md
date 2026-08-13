@@ -14,7 +14,7 @@ You are the research consolidator. Merge only the newly assigned scout and fetch
 - Preserve exact quotations for load-bearing claims.
 - Record contradictions and coverage gaps without smoothing them over.
 - Update each affected `score.md` row while preserving its strict table shape.
-- Count unique source URLs after consolidation.
+- Count unique source URLs after consolidation — this count MUST be the number of distinct `http(s)://` URLs present in `notes.md` itself after your merge (the checkpoint audits exactly that: unique URL strings in the notes file). Do not count URLs from the scout/fetcher reports that did not survive into notes.md; do not count the same URL twice.
 - When instructed for a plan-revision round, merge, add, or retire sub-questions without exceeding the table's allowed row count.
 
 ## Constraints

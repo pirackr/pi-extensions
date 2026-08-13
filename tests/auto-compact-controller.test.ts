@@ -1,8 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import createExtension, { resetExtensionState, controller } from "../extensions/auto-compact/index.ts";
+import createExtension, {
+	resetExtensionState,
+	controller,
+} from "../extensions/auto-compact/index.ts";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import * as fs from "node:fs";
+import type * as fs from "node:fs";
 
 // Packaged config path, computed from this test file's location so the mock
 // matches index.ts's resolution in ANY checkout (worktree, main, CI).
@@ -70,12 +73,18 @@ function getHandler(pi: FakePi, event: string) {
 	return call?.[1] as ((event: unknown, ctx: unknown) => unknown) | undefined;
 }
 
-function makeCtx(overrides: {
-	hasUI?: boolean;
-	model?: { provider: string; id: string; contextWindow: number };
-	usage?: { tokens: number | null; contextWindow: number; percent: number | null };
-	trusted?: boolean;
-} = {}) {
+function makeCtx(
+	overrides: {
+		hasUI?: boolean;
+		model?: { provider: string; id: string; contextWindow: number };
+		usage?: {
+			tokens: number | null;
+			contextWindow: number;
+			percent: number | null;
+		};
+		trusted?: boolean;
+	} = {},
+) {
 	return {
 		hasUI: overrides.hasUI ?? false,
 		ui: {
@@ -114,9 +123,12 @@ describe("registration", () => {
 	it("registers /auto-compact command", () => {
 		const pi = makeFakePi();
 		createExtension(pi);
-		expect(pi.registerCommand).toHaveBeenCalledWith("auto-compact", expect.objectContaining({
-			description: expect.stringContaining("auto-compaction status"),
-		}));
+		expect(pi.registerCommand).toHaveBeenCalledWith(
+			"auto-compact",
+			expect.objectContaining({
+				description: expect.stringContaining("auto-compaction status"),
+			}),
+		);
 	});
 
 	it("registers all five events", () => {
@@ -141,7 +153,11 @@ describe("session_start", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
 			if (p === PACKAGED_CONFIG_PATH) {
-				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+				return JSON.stringify({
+					enabled: true,
+					default: { percent: 80 },
+					rules: [],
+				});
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
 			err.code = "ENOENT";
@@ -153,7 +169,11 @@ describe("session_start", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
 			if (p === PACKAGED_CONFIG_PATH) {
-				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+				return JSON.stringify({
+					enabled: true,
+					default: { percent: 80 },
+					rules: [],
+				});
 			}
 			if (p === "/mock/agent/auto-compact/config.json") {
 				return JSON.stringify({ default: { percent: 70 } });
@@ -171,10 +191,7 @@ describe("session_start", () => {
 			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
 		});
 
-		handler!(
-			{ type: "session_start", reason: "startup" },
-			ctx as any,
-		);
+		handler!({ type: "session_start", reason: "startup" }, ctx as any);
 
 		// Controller should have been reset and evaluate called
 		const compactCalls = (ctx as any).compact.mock.calls;
@@ -190,10 +207,7 @@ describe("session_start", () => {
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		handler!(
-			{ type: "session_start", reason: "resume" },
-			ctx as any,
-		);
+		handler!({ type: "session_start", reason: "resume" }, ctx as any);
 		// session_start evaluates usage but does not call compact directly;
 		// the controller should be in-flight because the resumed session
 		// already exceeds the effective threshold.
@@ -210,10 +224,7 @@ describe("session_start", () => {
 			trusted: false,
 		});
 
-		handler!(
-			{ type: "session_start", reason: "resume" },
-			ctx as any,
-		);
+		handler!({ type: "session_start", reason: "resume" }, ctx as any);
 
 		const compactCalls = (ctx as any).compact.mock.calls;
 		expect(compactCalls).toHaveLength(0);
@@ -230,7 +241,11 @@ describe("model_select", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
 			if (p === PACKAGED_CONFIG_PATH) {
-				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+				return JSON.stringify({
+					enabled: true,
+					default: { percent: 80 },
+					rules: [],
+				});
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
 			err.code = "ENOENT";
@@ -273,7 +288,11 @@ describe("turn_end threshold crossing", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
 			if (p === PACKAGED_CONFIG_PATH) {
-				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+				return JSON.stringify({
+					enabled: true,
+					default: { percent: 80 },
+					rules: [],
+				});
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
 			err.code = "ENOENT";
@@ -369,7 +388,11 @@ describe("session_before_compact gate", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
 			if (p === PACKAGED_CONFIG_PATH) {
-				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+				return JSON.stringify({
+					enabled: true,
+					default: { percent: 80 },
+					rules: [],
+				});
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
 			err.code = "ENOENT";
@@ -550,7 +573,11 @@ describe("session_compact sync", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
 			if (p === PACKAGED_CONFIG_PATH) {
-				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+				return JSON.stringify({
+					enabled: true,
+					default: { percent: 80 },
+					rules: [],
+				});
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
 			err.code = "ENOENT";
@@ -620,7 +647,11 @@ describe("UI notifications", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
 			if (p === PACKAGED_CONFIG_PATH) {
-				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+				return JSON.stringify({
+					enabled: true,
+					default: { percent: 80 },
+					rules: [],
+				});
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
 			err.code = "ENOENT";
@@ -652,14 +683,23 @@ describe("UI notifications", () => {
 		);
 
 		// Invoke onComplete callback from compact
-		const compactOpts = ctx2.compact.mock.calls[0][0] as { onComplete?: (result: { summary: string; firstKeptEntryId: string; tokensBefore: number }) => void };
+		const compactOpts = ctx2.compact.mock.calls[0][0] as {
+			onComplete?: (result: {
+				summary: string;
+				firstKeptEntryId: string;
+				tokensBefore: number;
+			}) => void;
+		};
 		compactOpts.onComplete!({
 			summary: "summarized",
 			firstKeptEntryId: "e1",
 			tokensBefore: 170000,
 		});
 
-		expect(ctx2.ui.notify).toHaveBeenCalledWith("Auto-compaction completed", "info");
+		expect(ctx2.ui.notify).toHaveBeenCalledWith(
+			"Auto-compaction completed",
+			"info",
+		);
 	});
 
 	it("sends notification on compact failure when UI available", () => {
@@ -685,13 +725,79 @@ describe("UI notifications", () => {
 			ctx2 as any,
 		);
 
-		const compactOpts = ctx2.compact.mock.calls[0][0] as { onError?: (e: Error) => void };
+		const compactOpts = ctx2.compact.mock.calls[0][0] as {
+			onError?: (e: Error) => void;
+		};
 		compactOpts.onError!(new Error("compaction failed"));
 
 		expect(ctx2.ui.notify).toHaveBeenCalledWith(
 			"Auto-compaction failed: compaction failed",
 			"error",
 		);
+	});
+
+	it("treats benign compaction races (Already compacted) as completion, not failure", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			hasUI: true,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		const turnHandler = getHandler(pi, "turn_end");
+		const ctx2 = makeCtx({
+			hasUI: true,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		turnHandler!(
+			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
+			ctx2 as any,
+		);
+
+		const compactOpts = ctx2.compact.mock.calls[0][0] as {
+			onError?: (e: Error) => void;
+		};
+		compactOpts.onError!(new Error("Already compacted"));
+
+		expect(ctx2.ui.notify).not.toHaveBeenCalled();
+		expect(controller.status().inFlight).toBe(false);
+	});
+
+	it("treats benign compaction races (Nothing to compact) as completion, not failure", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			hasUI: true,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		const turnHandler = getHandler(pi, "turn_end");
+		const ctx2 = makeCtx({
+			hasUI: true,
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		turnHandler!(
+			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
+			ctx2 as any,
+		);
+
+		const compactOpts = ctx2.compact.mock.calls[0][0] as {
+			onError?: (e: Error) => void;
+		};
+		compactOpts.onError!(new Error("Nothing to compact (session too small)"));
+
+		expect(ctx2.ui.notify).not.toHaveBeenCalled();
+		expect(controller.status().inFlight).toBe(false);
 	});
 
 	it("does not call ui.notify when UI is not available", () => {
@@ -717,7 +823,13 @@ describe("UI notifications", () => {
 			ctx2 as any,
 		);
 
-		const compactOpts = ctx2.compact.mock.calls[0][0] as { onComplete?: (result: { summary: string; firstKeptEntryId: string; tokensBefore: number }) => void };
+		const compactOpts = ctx2.compact.mock.calls[0][0] as {
+			onComplete?: (result: {
+				summary: string;
+				firstKeptEntryId: string;
+				tokensBefore: number;
+			}) => void;
+		};
 		compactOpts.onComplete!({
 			summary: "summarized",
 			firstKeptEntryId: "e1",
@@ -738,7 +850,11 @@ describe("/auto-compact command", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
 			if (p === PACKAGED_CONFIG_PATH) {
-				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+				return JSON.stringify({
+					enabled: true,
+					default: { percent: 80 },
+					rules: [],
+				});
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
 			err.code = "ENOENT";
@@ -762,7 +878,8 @@ describe("/auto-compact command", () => {
 		await handler!("", ctx as any);
 
 		expect(ctx.ui.notify).toHaveBeenCalled();
-		const report = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+		const report = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock
+			.calls[0][0] as string;
 		expect(report).toContain("Auto-compact");
 		expect(pi.sendMessage).not.toHaveBeenCalled();
 	});
@@ -799,7 +916,11 @@ describe("config warnings in status", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
 			if (p === PACKAGED_CONFIG_PATH) {
-				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+				return JSON.stringify({
+					enabled: true,
+					default: { percent: 80 },
+					rules: [],
+				});
 			}
 			if (p === "/mock/agent/auto-compact/config.json") {
 				return JSON.stringify({
@@ -821,7 +942,10 @@ describe("config warnings in status", () => {
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
 		});
-		await startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+		await startHandler!(
+			{ type: "session_start", reason: "startup" },
+			ctx as any,
+		);
 
 		const cmdCall = pi.registerCommand.mock.calls.find(
 			(c) => c[0] === "auto-compact",
@@ -829,7 +953,8 @@ describe("config warnings in status", () => {
 		const handler = cmdCall![1].handler;
 		await handler!("", ctx as any);
 
-		const report = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+		const report = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock
+			.calls[0][0] as string;
 		expect(report).toContain("Warning");
 	});
 });
@@ -898,7 +1023,11 @@ describe("global disablement", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
 			if (p === PACKAGED_CONFIG_PATH) {
-				return JSON.stringify({ enabled: false, default: { percent: 80 }, rules: [] });
+				return JSON.stringify({
+					enabled: false,
+					default: { percent: 80 },
+					rules: [],
+				});
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
 			err.code = "ENOENT";
@@ -988,7 +1117,11 @@ describe("precedence-based global enablement in status", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
 			if (p === PACKAGED_CONFIG_PATH) {
-				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+				return JSON.stringify({
+					enabled: true,
+					default: { percent: 80 },
+					rules: [],
+				});
 			}
 			const err = new Error(`ENOENT`) as NodeJS.ErrnoException;
 			err.code = "ENOENT";
@@ -1004,7 +1137,10 @@ describe("precedence-based global enablement in status", () => {
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
 		});
-		await startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+		await startHandler!(
+			{ type: "session_start", reason: "startup" },
+			ctx as any,
+		);
 
 		const cmdCall = pi.registerCommand.mock.calls.find(
 			(c) => c[0] === "auto-compact",
@@ -1012,7 +1148,8 @@ describe("precedence-based global enablement in status", () => {
 		const handler = cmdCall![1].handler;
 		await handler!("", ctx as any);
 
-		const report = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+		const report = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock
+			.calls[0][0] as string;
 		expect(report).toContain("Auto-compact: enabled");
 	});
 
@@ -1020,7 +1157,11 @@ describe("precedence-based global enablement in status", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			const p = typeof path === "string" ? path : String(path);
 			if (p === PACKAGED_CONFIG_PATH) {
-				return JSON.stringify({ enabled: true, default: { percent: 80 }, rules: [] });
+				return JSON.stringify({
+					enabled: true,
+					default: { percent: 80 },
+					rules: [],
+				});
 			}
 			if (p === "/mock/agent/auto-compact/config.json") {
 				return JSON.stringify({ enabled: false });
@@ -1039,7 +1180,10 @@ describe("precedence-based global enablement in status", () => {
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
 		});
-		await startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+		await startHandler!(
+			{ type: "session_start", reason: "startup" },
+			ctx as any,
+		);
 
 		const cmdCall = pi.registerCommand.mock.calls.find(
 			(c) => c[0] === "auto-compact",
@@ -1047,7 +1191,8 @@ describe("precedence-based global enablement in status", () => {
 		const handler = cmdCall![1].handler;
 		await handler!("", ctx as any);
 
-		const report = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+		const report = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock
+			.calls[0][0] as string;
 		expect(report).toContain("Auto-compact: disabled");
 	});
 });

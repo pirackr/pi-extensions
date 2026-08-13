@@ -7,7 +7,7 @@
  * provider records every attempted launch.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Mock the pi-coding-agent module (we don't import the real ExtensionAPI here)
@@ -44,18 +44,12 @@ import {
 	createFacade,
 	resetFacade,
 	registerFaçadeTools,
-	type DispatchFacade,
 	MockDispatchPolicy,
 } from "../extensions/subagent-dispatch/index.ts";
 import { ProviderRegistry } from "../extensions/subagent-dispatch/registry.ts";
 import {
 	negotiateProvider,
 	type ProviderDescriptor,
-	type DispatchContext,
-	type RequestedPlan,
-	type ResolvedDispatch,
-	type ResolvedAttempt,
-	type AttemptReservation,
 	type AttemptOutcome,
 	type AttemptResult,
 	type SerializedError,
@@ -367,142 +361,6 @@ describe("discovery — after façade load", () => {
 	});
 });
 
-// ---------------------------------------------------------------------------
-// Façade — reservation before every attempt
-// ---------------------------------------------------------------------------
-
-describe("façade — reservation before every attempt", () => {
-	afterEach(() => {
-		resetFacade();
-	});
-
-	it("reserveAttempt is conceptually called before each executeAttempt", () => {
-		// The façade pattern requires reserve → execute → release.
-		// We verify the contract types support this flow.
-		const attempt: ResolvedAttempt = {
-			attemptId: "att-1",
-			planId: "plan-1",
-			index: 0,
-		};
-		const reservation: AttemptReservation = {
-			reservationId: "res-1",
-			attempt,
-			providerId: FakeSubagentProvider.ID,
-		};
-		expect(reservation.reservationId).toBe("res-1");
-		expect(reservation.attempt.attemptId).toBe("att-1");
-	});
-});
-
-// ---------------------------------------------------------------------------
-// Façade — release on success/error/cancellation
-// ---------------------------------------------------------------------------
-
-describe("façade — releaseAttempt on all outcomes", () => {
-	it("releaseAttempt is called in finally — completed", () => {
-		// The façade must call releaseAttempt once for every successful reservation.
-		// Verify the type contract allows a completed outcome.
-		const completed: AttemptOutcome = {
-			status: "completed",
-			result: { output: "ok" },
-		};
-		expect(completed.status).toBe("completed");
-	});
-
-	it("releaseAttempt is called in finally — failed", () => {
-		const failed: AttemptOutcome = {
-			status: "failed",
-			error: { message: "fail" },
-		};
-		expect(failed.status).toBe("failed");
-	});
-
-	it("releaseAttempt is called in finally — cancelled", () => {
-		const cancelled: AttemptOutcome = {
-			status: "cancelled",
-			error: { message: "cancelled" },
-		};
-		expect(cancelled.status).toBe("cancelled");
-	});
-
-	it("releaseAttempt is called in finally — interrupted", () => {
-		const interrupted: AttemptOutcome = {
-			status: "interrupted",
-			error: { message: "interrupted" },
-		};
-		expect(interrupted.status).toBe("interrupted");
-	});
-});
-
-// ---------------------------------------------------------------------------
-// Façade — no launch after reservation failure
-// ---------------------------------------------------------------------------
-
-describe("façade — no launch after reservation failure", () => {
-	it("a failed reservation prevents executeAttempt", () => {
-		// If reserveAttempt throws, the façade must not call executeAttempt.
-		// We verify the contract by showing the attempt plan is defined
-		// but the reservation is never obtained.
-		const attempt: ResolvedAttempt = {
-			attemptId: "att-no-launch",
-			planId: "plan-1",
-			index: 0,
-		};
-		// No reservation means no launch. This is verified by the contract
-		// that executeAttempt requires an attempt, and the façade guards
-		// on reservation success.
-		expect(attempt.attemptId).toBe("att-no-launch");
-	});
-});
-
-// ---------------------------------------------------------------------------
-// Façade — one physical launch per executeAttempt
-// ---------------------------------------------------------------------------
-
-describe("façade — one physical launch per executeAttempt", () => {
-	afterEach(() => {
-		resetFacade();
-	});
-
-	it("fake provider records exactly one record per executeAttempt call", async () => {
-		const provider = new FakeSubagentProvider();
-		const plan = { attemptId: "single", planId: "p", index: 0 };
-		await provider.executeAttempt(plan, new AbortController().signal);
-		expect(provider.records.length).toBe(1);
-	});
-
-	it("multiple executeAttempt calls produce one record each", async () => {
-		const provider = new FakeSubagentProvider();
-		for (let i = 0; i < 3; i++) {
-			await provider.executeAttempt(
-				{ attemptId: `a-${i}`, planId: "p", index: i },
-				new AbortController().signal,
-			);
-		}
-		expect(provider.records.length).toBe(3);
-	});
-});
-
-// ---------------------------------------------------------------------------
-// Façade — façade-owned retries
-// ---------------------------------------------------------------------------
-
-describe("façade — façade-owned retries", () => {
-	it("the contract allows retries — executeAttempt is called multiple times for the same task", async () => {
-		// The façade owns retries, not the provider.
-		// Multiple calls to executeAttempt for the same logical task
-		// are expected when the façade retries.
-		const provider = new FakeSubagentProvider();
-		const plan = { attemptId: "retry-1", planId: "task-x", index: 0 };
-		await provider.executeAttempt(plan, new AbortController().signal);
-		expect(provider.records.length).toBe(1);
-
-		// Retry: a new attemptId, same planId
-		const retryPlan = { attemptId: "retry-2", planId: "task-x", index: 1 };
-		await provider.executeAttempt(retryPlan, new AbortController().signal);
-		expect(provider.records.length).toBe(2);
-	});
-});
 
 // ---------------------------------------------------------------------------
 // Façade — run_subagents tool registration

@@ -517,6 +517,16 @@ export default function piLoop(pi: ExtensionAPI) {
 				buildResearchDeps(ctx, resolvedResearchConfig),
 			);
 		},
+		onResumeDeps: (ctx) => {
+			if (!resolvedResearchConfig) return null;
+			const config = resolvedResearchConfig;
+			const tools = researchRequiredTools(config);
+			return {
+				config,
+				getModels: () => buildModelView(ctx),
+				getProviders: () => buildProviderView(ctx, config, tools),
+			};
+		},
 	}, engine);
 
 	// --- Register complete_loop tool -------------------------------------

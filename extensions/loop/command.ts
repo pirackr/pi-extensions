@@ -18,6 +18,23 @@ import type {
 	ActiveResearchPointer,
 	ResearchStartRequest,
 } from "../research/startup.ts";
+import {
+	listWorkspaces,
+	lookupWorkspace,
+	getLifecycle,
+	getActiveWorkspace,
+	type WorkspaceEntry,
+} from "../research/history.ts";
+import {
+	pauseLifecycle,
+	markResumed,
+	markAbandoned,
+} from "../research/lifecycle.ts";
+import {
+	resumeWorkspace,
+	type ResumeDependencies,
+} from "../research/resume.ts";
+import type { Workspace } from "../research/workspace.ts";
 
 /**
  * /research start handler — injected by the wiring layer (loop/index.ts).
@@ -37,6 +54,8 @@ export interface LoopCommandOptions {
 	config?: unknown; // ResearchConfigShape — kept as unknown to keep this file generic
 	/** Research-only: startup engine handler (prepareAndActivateResearch wiring). */
 	onResearchStart?: ResearchStartHandler;
+	/** Research-only: resume deps factory (config + model/provider views). */
+	onResumeDeps?: (ctx: ExtensionCommandContext) => ResumeDependencies | null;
 }
 
 /**
@@ -58,7 +77,9 @@ export function registerLoopCommand(
 	pi.registerCommand(cmd, {
 		description: `${opts.description} Usage: ${usage}`,
 		getArgumentCompletions: (prefix) => {
-			const values = ["status", "pause", "resume", "clear"];
+			const values = opts.isResearch
+				? ["list", "status", "pause", "resume", "clear"]
+				: ["status", "pause", "resume", "clear"];
 			const filtered = values.filter((v) => v.startsWith(prefix));
 			return filtered.length
 				? filtered.map((value) => ({ value, label: value }))
@@ -67,6 +88,18 @@ export function registerLoopCommand(
 		handler: async (args, ctx) => {
 			const trimmed = args.trim();
 			const now = Date.now();
+
+			// Research-only: workspace-scoped subcommands (list/status/pause/
+			// clear/resume) operate on retained workspaces via history.ts /
+			// lifecycle.ts / resume.ts. /loop never routes here — it keeps its
+			// loop-level status/pause/resume/clear behavior on the active loop.
+			if (
+				opts.isResearch &&
+				RESEARCH_SUBCOMMANDS.has(trimmed.split(/\s+/)[0])
+			) {
+				await routeResearchWorkspaceCommand(trimmed, ctx, engine, opts);
+				return;
+			}
 
 			if (!trimmed || trimmed === "status") {
 				if (!engine.state) ctx.ui.notify(`Usage: ${usage}`, "info");
@@ -279,6 +312,222 @@ export function registerLoopCommand(
 			engine.emit(pi, "active", ctx.isIdle() ? "steer" : undefined);
 		},
 	});
+}
+
+// ---------------------------------------------------------------------------
+// Research workspace-scoped subcommands (list/status/pause/clear/resume)
+// ---------------------------------------------------------------------------
+
+const RESEARCH_SUBCOMMANDS = new Set([
+	"list",
+	"status",
+	"pause",
+	"resume",
+	"clear",
+]);
+
+/**
+ * Route a /research workspace subcommand against retained workspaces.
+ *
+ *   list         → listWorkspaces(projectRoot) — excludes .research/cache/web,
+ *                  reports malformed entries without aborting
+ *   status       → lookupWorkspace + getLifecycle (workspace lifecycle, not
+ *                  just the active loop state)
+ *   pause        → pauseLifecycle
+ *   clear        → markAbandoned
+ *   resume       → resumeWorkspace (validation + lease) then markResumed
+ *
+ * A bare subcommand (no slug) targets the active workspace: the active loop
+ * state's workingDir when set, else getActiveWorkspace (transitions pointer).
+ * projectRoot for discovery is ctx.cwd — the same convention startup/index.ts
+ * uses for the transitions/workspace root.
+ *
+ * This is gated by opts.isResearch at the call site; /loop never reaches it.
+ */
+async function routeResearchWorkspaceCommand(
+	trimmed: string,
+	ctx: ExtensionCommandContext,
+	engine: LoopEngine,
+	opts: LoopCommandOptions,
+): Promise<void> {
+	const projectRoot = ctx.cwd;
+	const transitionsPath = path.join(projectRoot, "transitions.json");
+	const [sub, ...rest] = trimmed.split(/\s+/);
+	const slug = rest.join(" ").trim() || undefined;
+
+	const resolveEntry = (): WorkspaceEntry | null => {
+		if (slug) {
+			const entry = lookupWorkspace(projectRoot, slug);
+			if (!entry) {
+				ctx.ui.notify(
+					`No research workspace found for "${slug}". Use /research list to see retained workspaces.`,
+					"warning",
+				);
+				return null;
+			}
+			return entry;
+		}
+		// No slug → active loop state's workingDir, then the transitions pointer.
+		if (engine.state?.workingDir) {
+			const byDir = lookupWorkspace(
+				projectRoot,
+				path.basename(engine.state.workingDir),
+			);
+			if (byDir) return byDir;
+		}
+		const active = getActiveWorkspace(projectRoot, transitionsPath);
+		if (!active) {
+			ctx.ui.notify(
+				"No active research workspace. Start one with /research <mission> or pass a workspace slug.",
+				"warning",
+			);
+			return null;
+		}
+		return active;
+	};
+
+	const toWorkspace = (entry: WorkspaceEntry): Workspace => ({
+		path: entry.path,
+		projectRoot,
+		mission: entry.mission,
+		runId: entry.runId,
+		transitionId: entry.transitionId,
+	});
+
+	switch (sub) {
+		case "list": {
+			const result = listWorkspaces(projectRoot);
+			if (result.entries.length === 0 && result.malformed.length === 0) {
+				ctx.ui.notify(
+					"No research workspaces found. Start one with /research <mission>.",
+				"info",
+			);
+			return;
+		}
+			const lines: string[] = [];
+			for (const e of result.entries) {
+				const when = new Date(e.updatedAt)
+					.toISOString()
+					.slice(0, 16)
+					.replace("T", " ");
+				lines.push(
+					`• ${path.basename(e.path)} — ${e.status} (${e.profile}) · ${when}${e.mission ? ` — ${truncate(e.mission)}` : ""}`,
+				);
+			}
+			for (const m of result.malformed) {
+				lines.push(`⚠ ${path.basename(m.path)} — malformed: ${m.reason}`);
+			}
+			ctx.ui.notify(lines.join("\n"), "info");
+			return;
+		}
+		case "status": {
+			const entry = resolveEntry();
+			if (!entry) return;
+			const lifecycle = getLifecycle(entry.path);
+			ctx.ui.notify(
+				[
+					`Workspace: ${path.basename(entry.path)}`,
+					`Status: ${lifecycle ?? "unknown"}`,
+					`Run: ${entry.runId || "unknown"}`,
+					entry.mission ? `Mission: ${truncate(entry.mission)}` : "",
+				]
+					.filter(Boolean)
+					.join("\n"),
+				"info",
+			);
+			return;
+		}
+		case "pause": {
+			const entry = resolveEntry();
+			if (!entry) return;
+			try {
+				const snapshot = pauseLifecycle(
+					toWorkspace(entry),
+					"paused via /research pause",
+				);
+				ctx.ui.notify(
+					`Paused ${path.basename(entry.path)} — lifecycle: ${snapshot.current}.`,
+					"info",
+				);
+			} catch (err) {
+				ctx.ui.notify(
+					`Cannot pause ${path.basename(entry.path)}: ${err instanceof Error ? err.message : String(err)}`,
+					"warning",
+				);
+			}
+			return;
+		}
+		case "clear": {
+			const entry = resolveEntry();
+			if (!entry) return;
+			try {
+				const snapshot = markAbandoned(
+					toWorkspace(entry),
+					"cleared via /research clear",
+				);
+				ctx.ui.notify(
+					`Cleared ${path.basename(entry.path)} — lifecycle: ${snapshot.current}.`,
+					"info",
+				);
+			} catch (err) {
+				ctx.ui.notify(
+					`Cannot clear ${path.basename(entry.path)}: ${err instanceof Error ? err.message : String(err)}`,
+					"warning",
+				);
+			}
+			return;
+		}
+		case "resume": {
+			const entry = resolveEntry();
+			if (!entry) return;
+			if (!opts.onResumeDeps) {
+				ctx.ui.notify(
+					"Research resume engine not wired (missing onResumeDeps).",
+					"error",
+				);
+				return;
+			}
+			const deps = opts.onResumeDeps(ctx);
+			if (!deps) {
+				ctx.ui.notify(
+					"Research configuration not loaded — cannot resume.",
+					"error",
+				);
+				return;
+			}
+			const sessionManager = (
+				ctx as { sessionManager?: { getSessionId?: () => string } }
+			).sessionManager;
+			const sessionId =
+				typeof sessionManager?.getSessionId === "function"
+					? sessionManager.getSessionId()
+					: "resume-session";
+			try {
+				const result = await resumeWorkspace(entry.path, deps, sessionId);
+				if (!result.success) {
+					ctx.ui.notify(
+						`Cannot resume ${path.basename(entry.path)}: ${result.error} (${result.reason}).`,
+						"warning",
+					);
+					return;
+				}
+				markResumed(result.workspace, "resumed via /research resume");
+				ctx.ui.notify(
+					`Resumed ${path.basename(entry.path)} — lease acquired, lifecycle active.`,
+					"info",
+				);
+			} catch (err) {
+				ctx.ui.notify(
+					`Cannot resume ${path.basename(entry.path)}: ${err instanceof Error ? err.message : String(err)}`,
+					"error",
+				);
+			}
+			return;
+		}
+		default:
+			// Not a research workspace subcommand — caller gates before invoking.
+			return;
+	}
 }
 
 /**

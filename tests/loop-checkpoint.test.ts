@@ -421,10 +421,18 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 		// Simulate queueContinuation by directly invoking the module-level
 		// function isn't possible from tests, so we start a fresh research run
 		// which resets loop state. The evidence from the prior run is lost.
-		await mock.commands.research.handler("clear", mockCtx(cwd));
+		// (Note: /research clear is now workspace-scoped — it no longer clears
+		// the engine loop state, so a fresh run is the way to reset it.)
+		await mock.commands.research.handler(
+			"--yes --profile quick \"fresh invalidate run\"",
+			mockCtx(cwd),
+		);
 		entry = latestLoopEntry();
-		// clear writes an entry with loop: null
-		expect((entry as { loop: null }).loop).toBeNull();
+		// A fresh run replaces the loop state — prior checkpoint evidence is gone.
+		const freshLoop = (entry as { loop?: { checkpointEvidence?: unknown } })
+			.loop;
+		expect(freshLoop).toBeDefined();
+		expect(freshLoop?.checkpointEvidence).toBeUndefined();
 	});
 
 	it("CONTINUEs at round 12 with CLI override above profile max (effective cap distinguishes from profileCfg)", async () => {

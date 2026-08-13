@@ -1,0 +1,8 @@
+{
+  "defaultProvider": null,
+  "ceilings": {
+    "maxConcurrentAttempts": 10,
+    "maxAttemptsPerTask": 100,
+    "hardTimeoutSeconds": 1800
+  }
+}

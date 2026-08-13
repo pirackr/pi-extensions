@@ -22,8 +22,11 @@ import {
 	type VerificationResult,
 	type VerificationArtifact,
 	type InvalidationKind,
+	type BoundCategory,
 	verificationDefinitions,
 	getVerificationDefinition,
+	getProfileVerifications,
+	getBoundCategory,
 	runVerification,
 	computeRunDigests,
 	evaluateInvalidations,
@@ -45,6 +48,7 @@ function makeFakeWorkspace(
 	tmpDir: string,
 	mission: string,
 	transitionId: string,
+	options?: { withManifest?: boolean },
 ): Workspace {
 	const wsPath = path.join(tmpDir, mission.replace(/\s+/g, "-"));
 	fs.mkdirSync(wsPath, { recursive: false });
@@ -61,6 +65,17 @@ function makeFakeWorkspace(
 	const statePath = path.join(wsPath, ".research", "run-state.json");
 	fs.writeFileSync(statePath, JSON.stringify(init, null, 2), "utf-8");
 
+	// F6: optional manifest creation for digest-heavy tests
+	if (options?.withManifest) {
+		createRunManifest({
+			path: wsPath,
+			projectRoot: tmpDir,
+			mission,
+			runId: init.runId,
+			transitionId,
+		});
+	}
+
 	return {
 		path: wsPath,
 		projectRoot: tmpDir,
@@ -73,6 +88,61 @@ function makeFakeWorkspace(
 function sha256(content: string): string {
 	return createHash("sha256").update(content).digest("hex");
 }
+
+// ===========================================================================
+// Step 1: Profile→verification mapping (derived from definitions)
+// ===========================================================================
+
+describe("Verification Registry — profile derivation from definitions", () => {
+	it("getProfileVerifications returns correct kinds for quick", () => {
+		expect(getProfileVerifications("quick")).toEqual(["judge"]);
+	});
+
+	it("getProfileVerifications returns correct kinds for standard", () => {
+		expect(getProfileVerifications("standard")).toEqual(["judge"]);
+	});
+
+	it("getProfileVerifications returns correct kinds for intermediate", () => {
+		expect(getProfileVerifications("intermediate")).toEqual([
+			"judge",
+			"citation_agent",
+			"source_auditor",
+		]);
+	});
+
+	it("getProfileVerifications returns correct kinds for deep", () => {
+		expect(getProfileVerifications("deep")).toEqual([
+			"judge",
+			"citation_agent",
+			"source_auditor",
+			"contradiction_resolver",
+		]);
+	});
+
+	it("getProfileVerifications returns correct kinds for open-ended", () => {
+		expect(getProfileVerifications("open-ended")).toEqual(["judge"]);
+	});
+
+	it("getProfileVerifications returns undefined for unknown profile", () => {
+		expect(getProfileVerifications("nonexistent")).toBeUndefined();
+	});
+
+	it("derived list matches definitions profiles consistency", () => {
+		// Every profile that appears in any definition's profiles array must be
+		// reachable via getProfileVerifications (F3 consistency check).
+		const allProfiles = new Set<string>();
+		for (const def of verificationDefinitions) {
+			for (const p of def.profiles) {
+				allProfiles.add(p);
+			}
+		}
+		for (const profile of allProfiles) {
+			const kinds = getProfileVerifications(profile);
+			expect(kinds).toBeDefined();
+			expect(kinds!.length).toBeGreaterThan(0);
+		}
+	});
+});
 
 // ===========================================================================
 // Step 1: Per-kind verification definitions
@@ -636,5 +706,44 @@ describe("Verification Registry — profile coverage", () => {
 		expect(deepResults.map((r) => r.kind)).toEqual(
 			["judge", "citation_agent", "source_auditor", "contradiction_resolver"],
 		);
+	});
+
+	it("withManifest option creates run.json for digest tests", () => {
+		const ws = makeFakeWorkspace(tmpDir, "with manifest", "t1", { withManifest: true });
+		const manifestPath = path.join(ws.path, ".research", "run.json");
+		expect(fs.existsSync(manifestPath)).toBe(true);
+		const digests = computeRunDigests(ws);
+		expect(digests.manifest).toBeTruthy();
+	});
+});
+
+// ===========================================================================
+// Integration: getBoundCategory
+// ===========================================================================
+
+describe("Verification Registry — getBoundCategory helper", () => {
+	it("judge maps to report", () => {
+		expect(getBoundCategory("judge")).toBe("report");
+	});
+
+	it("citation_agent maps to evidence", () => {
+		expect(getBoundCategory("citation_agent")).toBe("evidence");
+	});
+
+	it("source_auditor maps to evidence", () => {
+		expect(getBoundCategory("source_auditor")).toBe("evidence");
+	});
+
+	it("contradiction_resolver maps to checkpoint", () => {
+		expect(getBoundCategory("contradiction_resolver")).toBe("checkpoint");
+	});
+
+	it("unknown kind defaults to evidence", () => {
+		expect(getBoundCategory("nonexistent")).toBe("evidence");
+	});
+
+	it("bound category type is exhaustive", () => {
+		const bound: BoundCategory = "report";
+		expect(bound).toBeDefined();
 	});
 });

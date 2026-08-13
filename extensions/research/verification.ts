@@ -102,6 +102,21 @@ export interface RunDigests {
 // Canonical artifact paths per verification kind
 // ---------------------------------------------------------------------------
 
+/** Bound category for a verification kind. */
+export type BoundCategory = "report" | "evidence" | "checkpoint";
+
+/**
+ * Map a verification kind name to its bound category.
+ * This is the single source of truth — all callers use this helper instead of
+ * duplicating the kind→category mapping.
+ */
+export function getBoundCategory(kind: string): BoundCategory {
+  if (kind === "judge") return "report";
+  if (kind === "citation_agent" || kind === "source_auditor") return "evidence";
+  if (kind === "contradiction_resolver") return "checkpoint";
+  return "evidence"; // default
+}
+
 /**
  * Canonical artifact paths per verification kind.
  * Verification agents write strict JSON under verification/ per role boundaries.
@@ -132,6 +147,14 @@ function readState(ws: Workspace): RunState {
 // ---------------------------------------------------------------------------
 // Registry: one definition per verification kind
 // ---------------------------------------------------------------------------
+
+/**
+ * Credibility threshold for source_auditor pass predicate.
+ * Sources below this average credibility fail verification.
+ * This is a domain constant tied to the 0-100 credibility scoring scale used
+ * by the source_auditor role.
+ */
+const SOURCE_CREDIBILITY_THRESHOLD = 50;
 
 export const verificationDefinitions: VerificationDefinition[] = [
   {
@@ -178,9 +201,9 @@ export const verificationDefinitions: VerificationDefinition[] = [
       if (typeof lowQualityCount === "number" && lowQualityCount > 0) {
         return false;
       }
-      // Fail if average credibility is too low
+      // Fail if average credibility is below the domain threshold
       const avgCred = obj.averageCredibility;
-      if (typeof avgCred === "number" && avgCred < 50) {
+      if (typeof avgCred === "number" && avgCred < SOURCE_CREDIBILITY_THRESHOLD) {
         return false;
       }
       return true;
@@ -214,6 +237,22 @@ export const verificationDefinitions: VerificationDefinition[] = [
  */
 export function getVerificationDefinition(name: string): VerificationDefinition | undefined {
   return verificationDefinitions.find((d) => d.name === name);
+}
+
+/**
+ * Derive the list of verification kinds required for a profile.
+ * Reads from verificationDefinitions at runtime — this is the single source
+ * of truth for profile→verification mapping (F3).
+ *
+ * @param profileName — e.g. "standard", "deep", "open-ended"
+ * @returns array of verification kind names, or undefined if no definition
+ *          includes this profile in its `profiles` array.
+ */
+export function getProfileVerifications(profileName: string): string[] | undefined {
+  const kinds = verificationDefinitions
+    .filter((d) => d.profiles.includes(profileName))
+    .map((d) => d.name);
+  return kinds.length > 0 ? kinds : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +311,9 @@ export function computeRunDigests(ws: Workspace): RunDigests {
  * This function builds its artifact list from the verification definitions
  * (not from file scanning) so it returns a complete picture regardless of
  * whether verification agents have written their outputs yet.
+ *
+ * (F5) Only reads/digests artifacts whose boundTo category is affected by the
+ * current edit kind to avoid unnecessary I/O.
  */
 export function evaluateInvalidations(
   ws: Workspace,
@@ -293,31 +335,29 @@ export function evaluateInvalidations(
   // Build artifact list from definitions — each definition maps to one artifact
   const results: VerificationArtifact[] = [];
 
-  // Mapping from verification kind name to file stem
-  const kindToStem: Record<string, string> = {
-    judge: "judge",
-    citation_agent: "citation",
-    source_auditor: "source",
-    contradiction_resolver: "contradiction",
-  };
-
-  // Mapping from file stem to bound category
-  const stemToBound: Record<string, string> = {
-    judge: "report",
-    citation: "evidence",
-    source: "evidence",
-    contradiction: "checkpoint",
-  };
-
+  // Use shared getBoundCategory helper (F2 — no duplicate mappings)
+  // Extract file stem from outputPath (e.g. "verification/citation.json" → "citation")
   for (const def of verificationDefinitions) {
-    const stem = kindToStem[def.name];
-    if (!stem) continue; // unknown kind, skip
+    const boundTo = getBoundCategory(def.name);
 
-    const boundTo = stemToBound[stem] ?? "evidence";
-    const fileName = `${stem}.json`;
-    const filePath = path.join(ws.path, "verification", fileName);
+    // F5: skip artifacts whose bound category is not affected by this edit kind
+    if (!affectedBounds.has(boundTo)) {
+      // Still include the artifact but mark it not invalidated (no I/O needed)
+      const fileStem = def.outputPath.split("/").pop()?.replace(".json", "") ?? def.name;
+      results.push({
+        name: `verification/${fileStem}.json`,
+        kind: def.name,
+        boundTo,
+        digest: "", // no digest needed for uninteresting artifacts
+        invalidated: false,
+      });
+      continue;
+    }
 
-    // Read existing artifact content for digest
+    const fileStem = def.outputPath.split("/").pop()?.replace(".json", "") ?? def.name;
+    const filePath = path.join(ws.path, "verification", `${fileStem}.json`);
+
+    // Read existing artifact content for digest (F5 — only for affected artifacts)
     let digest = "";
     try {
       const content = fs.readFileSync(filePath, "utf-8");
@@ -330,7 +370,7 @@ export function evaluateInvalidations(
     const isInvalidated = affectedBounds.has(boundTo);
 
     results.push({
-      name: `verification/${fileName}`,
+      name: `verification/${fileStem}.json`,
       kind: def.name,
       boundTo,
       digest,
@@ -346,38 +386,22 @@ export function evaluateInvalidations(
 // ---------------------------------------------------------------------------
 
 /**
- * Known profiles that require the open-ended profile's judge verification
- * (since open-ended also has verification: ["judge"]).
- */
-const PROFILE_VERIFICATION = {
-  quick: ["judge"],
-  standard: ["judge"],
-  intermediate: ["judge", "citation_agent", "source_auditor"],
-  deep: ["judge", "citation_agent", "source_auditor", "contradiction_resolver"],
-  "open-ended": ["judge"],
-};
-
-/**
  * Build verification artifacts for a given kind, including bound artifacts.
  */
 function buildArtifacts(
   ws: Workspace,
   verificationKind: string,
 ): VerificationArtifact[] {
-  // Determine bound category
-  let boundTo: string;
-  if (verificationKind === "judge") {
-    boundTo = "report";
-  } else if (verificationKind === "citation_agent" || verificationKind === "source_auditor") {
-    boundTo = "evidence";
-  } else if (verificationKind === "contradiction_resolver") {
-    boundTo = "checkpoint";
-  } else {
-    boundTo = "evidence";
-  }
+  // Determine bound category via shared helper (F2)
+  const boundTo = getBoundCategory(verificationKind);
 
-  // Build artifact for this kind
-  const artifactName = `${verificationKind}.json`;
+  // Extract file stem from the definition's outputPath for consistency
+  // with evaluateInvalidations (e.g. "verification/citation.json" → "citation")
+  const def = getVerificationDefinition(verificationKind);
+  const fileStem = def
+    ? def.outputPath.split("/").pop()?.replace(".json", "")
+    : verificationKind;
+  const artifactName = `${fileStem}.json`;
   const artifactFull = verificationArtifactPath(ws, verificationKind);
 
   let digest = "";
@@ -415,13 +439,17 @@ function buildArtifacts(
  * 3. Run the pass predicate
  * 4. Compute the artifact digest
  * 5. Return the result
+ *
+ * Profile→verification mapping is derived from verificationDefinitions at
+ * runtime via getProfileVerifications (F3) — no stale PROFILE_VERIFICATION
+ * constant.
  */
 export function runVerification(
   ws: Workspace,
   profileName: string,
 ): VerificationResult[] {
-  // Get the verification list for this profile
-  const profileKeys = PROFILE_VERIFICATION[profileName];
+  // Derive verification list from definitions (F3 — single source of truth)
+  const profileKeys = getProfileVerifications(profileName);
   if (!profileKeys) {
     // Unknown profile — fall back to empty
     return [];

@@ -180,6 +180,32 @@ describe("TmuxSubagentProvider — executeAttempt contract", () => {
 		expect(result.metadata?.windowId).toBe("@42");
 	});
 
+	it("F1: metadata includes startedAt and finishedAt ISO timestamps", async () => {
+		const provider = new TmuxSubagentProvider();
+		const plan = { attemptId: "att-ts", planId: "p1", index: 0 };
+		const result = await provider.executeAttempt(plan, new AbortController().signal);
+
+		expect(result.metadata?.startedAt).toBeDefined();
+		expect(result.metadata?.finishedAt).toBeDefined();
+		// Both must be valid ISO 8601 strings.
+		expect(new Date(result.metadata?.startedAt as string).toISOString()).toBe(
+			result.metadata?.startedAt,
+		);
+		expect(new Date(result.metadata?.finishedAt as string).toISOString()).toBe(
+			result.metadata?.finishedAt,
+		);
+		// finishedAt must be >= startedAt.
+		expect(new Date(result.metadata?.finishedAt as string) >= new Date(result.metadata?.startedAt as string)).toBe(true);
+	});
+
+	it("F7: metadata includes sessionId from launchResult.window", async () => {
+		const provider = new TmuxSubagentProvider();
+		const plan = { attemptId: "att-sid", planId: "p1", index: 0 };
+		const result = await provider.executeAttempt(plan, new AbortController().signal);
+
+		expect(result.metadata?.sessionId).toBe("parent");
+	});
+
 	it("one executeAttempt call = one launchBatch invocation", async () => {
 		const provider = new TmuxSubagentProvider();
 		const plan = { attemptId: "att-launch", planId: "p1", index: 0 };
@@ -237,11 +263,12 @@ describe("TmuxSubagentProvider — executeAttempt contract", () => {
 		controller.abort();
 		const plan = { attemptId: "a3", planId: "p1", index: 0 };
 
-		// Even with an aborted signal, launchBatch gets called (the provider
-		// doesn't implement retry/abort handling — that's the façade's job).
-		await provider.executeAttempt(plan, controller.signal);
+		// F2: provider must throw before launching when already aborted.
+		await expect(provider.executeAttempt(plan, controller.signal)).rejects.toThrow(
+			"Attempt a3 cancelled before launch",
+		);
 		const { launchBatch } = await import("../extensions/tmux-subagent/tmux.ts");
-		expect(launchBatch).toHaveBeenCalledTimes(1);
+		expect(launchBatch).not.toHaveBeenCalled();
 	});
 
 	it("no hidden retries — provider delegates to launchBatch once per call", async () => {

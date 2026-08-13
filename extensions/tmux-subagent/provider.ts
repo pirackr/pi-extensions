@@ -19,7 +19,6 @@ import type { ProviderDescriptor } from "../subagent-dispatch/contract.ts";
 import { launchBatch, SHARED_SESSION } from "./tmux.ts";
 import type { PaneSpec, TmuxExecutor } from "./tmux.ts";
 import { runCommand } from "./index.ts";
-import { loadSubagentConfiguration } from "./config.ts";
 
 // ---------------------------------------------------------------------------
 // Descriptor
@@ -27,6 +26,7 @@ import { loadSubagentConfiguration } from "./config.ts";
 
 const TmuxSubagentProvider_ID = "tmux-subagent";
 
+/** The single source-of-truth descriptor.  Instances derive from this object. */
 export const TmuxSubagentProviderDescriptor: ProviderDescriptor = {
 	id: TmuxSubagentProvider_ID,
 	adapterVersion: "0.0.1",
@@ -36,6 +36,9 @@ export const TmuxSubagentProviderDescriptor: ProviderDescriptor = {
 	maxConcurrentAttempts: 10,
 	maxAttemptsPerTask: 100,
 };
+
+/** Shorthand alias for consumers that used the old export name. */
+export const TmuxProviderDescriptor = TmuxSubagentProviderDescriptor;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,34 +64,11 @@ export class TmuxSubagentProvider {
 	static readonly ID = TmuxSubagentProvider_ID;
 	static readonly ADAPTER_VERSION = "0.0.1";
 
-	/** Profile map — loaded once at construction so tests can inject one. */
-	private readonly profileMap: Map<string, import("./config.ts").AgentProfile>;
-
 	readonly descriptor: ProviderDescriptor;
 
-	constructor(
-		profiles?: Array<{ name: string }>,
-	) {
+	constructor() {
+		// Derive instance descriptor from the static single source of truth.
 		this.descriptor = { ...TmuxSubagentProviderDescriptor };
-
-		// Build a name-only map for profile lookup.
-		this.profileMap = profiles
-			? new Map(profiles.map((p) => [p.name, p as import("./config.ts").AgentProfile]))
-			: new Map();
-
-		// If the map is empty, try loading real config (production path).
-		if (this.profileMap.size === 0) {
-			try {
-				const extensionDir = path.dirname(fileURLToPath(import.meta.url));
-				const { profiles } = loadSubagentConfiguration(extensionDir);
-				this.profileMap = new Map(
-					profiles.map((p) => [p.name, p as import("./config.ts").AgentProfile]),
-				);
-			} catch {
-				// Config unavailable — the provider will still work for tasks
-				// whose taskInfo.agent name is known to the caller.
-			}
-		}
 	}
 
 	/**
@@ -102,6 +82,13 @@ export class TmuxSubagentProvider {
 		plan: ResolvedAttempt,
 		signal: AbortSignal,
 	): Promise<AttemptResult> {
+		// F2: bail early if already aborted — the façade owns retry policy.
+		if (signal.aborted) {
+			throw new Error(`Attempt ${plan.attemptId} cancelled before launch`);
+		}
+
+		const startedAt = new Date().toISOString();
+
 		const taskInfo = plan.taskInfo as Record<string, unknown> | undefined;
 		const agentName =
 			(typeof taskInfo?.agent === "string" && taskInfo.agent) || "worker";
@@ -133,9 +120,8 @@ export class TmuxSubagentProvider {
 			},
 		];
 
-		// TmuxExecutor adapter: runCommand takes (command, args, timeout?) but
-		// launchBatch expects (args) => Promise<TmuxResult>.
-		const tmuxExec: TmuxExecutor = (args) => runCommand("tmux", args);
+		// F5: tmux operations need an explicit 30s timeout (runCommand default is 10s).
+		const tmuxExec: TmuxExecutor = (args) => runCommand("tmux", args, 30_000);
 
 		const launchResult = await launchBatch(tmuxExec, {
 			sessionId: "parent",
@@ -151,11 +137,12 @@ export class TmuxSubagentProvider {
 			usage: { totalTokens: 0 },
 			metadata: {
 				provider: TmuxSubagentProvider_ID,
+				startedAt,
+				finishedAt: new Date().toISOString(),
 				windowId: launchResult.window.id,
 				windowName: launchResult.window.name,
+				sessionId: launchResult.window.sessionId,
 			},
 		};
 	}
 }
-
-export { TmuxSubagentProviderDescriptor as TmuxProviderDescriptor };

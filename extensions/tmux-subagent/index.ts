@@ -23,7 +23,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadSubagentConfiguration } from "./config.ts";
 import { TmuxSubagentProvider } from "./provider.ts";
 import {
 	buildWindowName,
@@ -494,19 +493,19 @@ export async function validateAndExportSummaryResults(
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI) {
-	const { profiles } = loadSubagentConfiguration(extensionDir);
-
 	// Advertise the tmux-subagent provider descriptor through pi.events so that
 	// the subagent-dispatch façade can discover it during provider enumeration.
-	const provider = new TmuxSubagentProvider(profiles);
+	const provider = new TmuxSubagentProvider();
 	if (pi.events) {
 		const envelope: { descriptors: import("../subagent-dispatch/contract.ts").ProviderDescriptor[] } =
 			{ descriptors: [] };
+		// F6: push descriptor before emitting so synchronous listeners see a
+		// complete envelope (no stale empty-descriptors window).
+		envelope.descriptors.push(provider.descriptor);
 		pi.events.emit(
 			"subagent-dispatch-provider-discovered",
 			{ envelope },
 		);
-		envelope.descriptors.push(provider.descriptor);
 	}
 
 	// Parent window lifecycle: keep the window's display name in sync with

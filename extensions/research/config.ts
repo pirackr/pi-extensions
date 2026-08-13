@@ -927,8 +927,11 @@ function validateFinalConfig(raw: Record<string, unknown>): Record<string, unkno
 /**
  * Loads and validates the packaged research configuration from the
  * package's config/research.json.
+ *
+ * Exported for use by checkpoint evaluation and other modules that need
+ * access to config thresholds without going through resolveResearchConfig.
  */
-function loadPackagedConfig(): ResolvedResearchConfig {
+export function loadPackagedConfig(): ResolvedResearchConfig {
 	const configDir = path.resolve(import.meta.dirname, "../../config");
 	const configPath = path.join(configDir, "research.json");
 

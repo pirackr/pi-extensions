@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Workspace } from "./workspace.ts";
+import type { Verdict } from "./checkpoint.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,6 +34,20 @@ export interface RunState {
 	tokensUsed: number;
 	/** In-flight reservation count (used by ResearchPolicy releaseAttempt F1). */
 	concurrentReservations: number;
+	/** Current research round counter (separate from loop iterations). */
+	researchRound: number;
+	/** Checkpoint verdict for the last evaluated round. */
+	checkpointVerdict: Verdict;
+	/** Checkpoint evidence digest (SHA-256 hex). */
+	checkpointDigest: string;
+	/** Unmet criteria from last checkpoint evaluation. */
+	checkpointUnmet: string[];
+	/** Unique source count from last checkpoint evaluation. */
+	checkpointUniqueSources: number;
+	/** Loop iteration at which last checkpoint was evaluated. */
+	loopIteration: number;
+	/** Profile used for last checkpoint evaluation. */
+	checkpointProfile: string;
 }
 
 export interface RunLease {
@@ -93,6 +108,13 @@ export function newRunState(ws: Workspace): RunState {
 		nestedUsage: 0,
 		tokensUsed: 0,
 		concurrentReservations: 0,
+		researchRound: 0,
+		checkpointVerdict: "CONTINUE" as Verdict,
+		checkpointDigest: "",
+		checkpointUnmet: [],
+		checkpointUniqueSources: 0,
+		loopIteration: 0,
+		checkpointProfile: "standard",
 	};
 }
 

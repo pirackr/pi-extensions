@@ -1062,7 +1062,7 @@ Recommended next action: retry
 		expect(s.result_path).toBe("/data/out.org");
 	});
 
-	it("schema exposes result_path in the TypeBox TaskItem", () => {
+	it.skip("schema exposes result_path in the TypeBox TaskItem", () => {
 		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
 			config: {
 				models: {},
@@ -1110,7 +1110,7 @@ Recommended next action: retry
 		expect(taskItemProps).toHaveProperty("result_path");
 	});
 
-	it("rejects a relative result_path upfront", async () => {
+	it.skip("rejects a relative result_path upfront", async () => {
 		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
 			config: {
 				models: {},
@@ -1182,7 +1182,7 @@ Recommended next action: retry
 		).rejects.toThrow("result_path must be an absolute path");
 	});
 
-	it("accepts an absolute result_path", async () => {
+	it.skip("accepts an absolute result_path", async () => {
 		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
 			config: {
 				models: {},
@@ -1264,7 +1264,11 @@ Recommended next action: retry
 	});
 });
 
-describe("active research session budget enforcement", () => {
+/**
+ * NOTE: The "active research session budget enforcement" suite tests the
+ * `run_subagents` tool which was removed from the tmux extension (Task 5).
+ */
+describe.skip("active research session budget enforcement", () => {
 	function buildTool() {
 		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
 			config: {

@@ -102,7 +102,13 @@ import {
 	renameWindow,
 } from "../tmux.ts";
 
-describe("shared tmux integration", () => {
+/**
+ * NOTE: The "shared tmux integration" suite tests the `run_subagents` tool
+ * which was removed from the tmux extension (Task 5).  The provider adapter
+ * lives in `tests/tmux-provider.test.ts` which runs the shared contract
+ * suite against the tmux provider.
+ */
+describe.skip("shared tmux integration", () => {
 	function setupSharedTool() {
 		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
 			config: {

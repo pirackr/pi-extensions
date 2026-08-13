@@ -1,13 +1,30 @@
+/**
+ * Tmux-subagent extension.
+ *
+ * Exports:
+ * - Type helpers: TaskItem, RunnerRequest, TaskStatus, PreparedTask, etc.
+ * - tmux orchestration: launchBatch, cancelPanes, buildWindowName, ...
+ * - Rendering: parseCoordinatorResult, renderSummaryResults, renderResults, ...
+ * - Configuration: loadSubagentConfiguration, AgentProfile, ...
+ * - Provider adapter: TmuxSubagentProvider (via ./provider.ts)
+ *
+ * Discovery: the extension advertises its provider descriptor via
+ * `pi.events` so that the subagent-dispatch façade can discover it.
+ *
+ * NOTE: `run_subagents` tool registration was removed (Task 5). The
+ * subagent-dispatch façade now owns tool registration and dispatch.
+ * The tmux extension only provides the provider adapter and lifecycle
+ * helpers.
+ */
+
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import { loadSubagentConfiguration } from "./config.ts";
-import { parseCoordinatorResult, renderSummaryResults } from "./render.ts";
-import { getActiveResearchBudgets } from "../deep-research/session.ts";
+import { TmuxSubagentProvider } from "./provider.ts";
 import {
 	buildWindowName,
 	cancelPanes,
@@ -19,6 +36,7 @@ import {
 	type PaneSpec,
 	type TmuxExecutor,
 } from "./tmux.ts";
+import { parseCoordinatorResult, renderSummaryResults } from "./render.ts";
 
 const MAX_RESULT_BYTES = 50 * 1024;
 const POLL_INTERVAL_MS = 250;
@@ -28,6 +46,12 @@ const TERMINAL_STATES = new Set([
 	"timed_out",
 	"cancelled",
 ]);
+
+// ---------------------------------------------------------------------------
+// Re-export render.ts for downstream consumers
+// ---------------------------------------------------------------------------
+export { parseCoordinatorResult, renderSummaryResults } from "./render.ts";
+export type { CoordinatorSummary, RenderStatus } from "./render.ts";
 
 export interface PiInvocation {
 	command: string;
@@ -74,13 +98,6 @@ export interface TaskItem {
 	webSearchMaxLookups?: number;
 	/** Hard cap on fetch_web calls for this task (overrides config default). 0/unset = use config. */
 	webSearchMaxFetches?: number;
-}
-
-export interface RunSubagentsParams {
-	tasks: TaskItem[];
-	timeout_seconds?: number;
-	retain_artifacts?: string;
-	return_mode?: "full" | "summary";
 }
 
 export interface TaskStatus {
@@ -133,6 +150,18 @@ export interface SubagentDetails {
 	artifactsPath: string | null;
 	results: TaskStatus[];
 }
+
+export interface PreparedTask {
+	task: TaskItem;
+	profile: import("./config.ts").AgentProfile;
+	cwd: string;
+	timeoutSeconds: number;
+	taskId: string;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers (used by provider, tests, and downstream consumers)
+// ---------------------------------------------------------------------------
 
 const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 const runnerPath = path.join(extensionDir, "runner.mjs");
@@ -416,14 +445,6 @@ export function delay(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
-export interface PreparedTask {
-	task: TaskItem;
-	profile: import("./config.ts").AgentProfile;
-	cwd: string;
-	timeoutSeconds: number;
-	taskId: string;
-}
-
 /**
  * Validate coordinator-summary blocks and export artifact payloads for
  * summary-mode results. Mutates statuses in place when validation fails.
@@ -468,529 +489,25 @@ export async function validateAndExportSummaryResults(
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Default export — advertise provider via pi.events; no tool registration
+// ---------------------------------------------------------------------------
+
 export default function (pi: ExtensionAPI) {
-	const { config, profiles, userConfigPath } =
-		loadSubagentConfiguration(extensionDir);
-	const profileMap = new Map(
-		profiles.map((profile) => [profile.name, profile]),
-	);
-	const profileSummary = profiles
-		.map((profile) => `${profile.name}: ${profile.description}`)
-		.join("; ");
-	const TaskItem = Type.Object({
-		agent: Type.String({
-			description: `Configured agent profile. Available: ${profileSummary}`,
-		}),
-		objective: Type.String({
-			description: "One concrete outcome for this agent",
-		}),
-		scope: Type.Optional(
-			Type.Array(Type.String(), {
-				description: "Files, directories, or concerns owned by this task",
-			}),
-		),
-		non_goals: Type.Optional(
-			Type.Array(Type.String(), {
-				description: "Work explicitly outside this task",
-			}),
-		),
-		constraints: Type.Optional(
-			Type.Array(Type.String(), {
-				description: "Repository or behavioral constraints",
-			}),
-		),
-		acceptance_criteria: Type.Optional(
-			Type.Array(Type.String(), {
-				description: "Observable completion conditions",
-			}),
-		),
-		inputs: Type.Optional(
-			Type.Array(Type.String(), {
-				description:
-					"Relevant requests, files, errors, or prior findings to verify",
-			}),
-		),
-		expected_output: Type.Optional(
-			Type.String({ description: "Required result and evidence format" }),
-		),
-		cwd: Type.Optional(
-			Type.String({
-				description:
-					"Working directory; defaults to the parent Pi working directory",
-			}),
-		),
-		webSearchMaxLookups: Type.Optional(
-			Type.Number({
-				description:
-					"Hard cap on web_lookup calls for this task (overrides config default). 0 = unlimited.",
-			}),
-		),
-		webSearchMaxFetches: Type.Optional(
-			Type.Number({
-				description:
-					"Hard cap on fetch_web calls for this task (overrides config default). 0 = unlimited.",
-			}),
-		),
-		result_path: Type.Optional(
-			Type.String({
-				description:
-					"Absolute path where the artifact block payload will be written",
-			}),
-		),
-	});
-	const Params = Type.Object({
-		tasks: Type.Array(TaskItem, {
-			description:
-				"Independent tasks to execute concurrently; use one item for a single agent",
-			minItems: 1,
-			maxItems: config.maxTasks,
-		}),
-		timeout_seconds: Type.Optional(
-			Type.Number({
-				description: `Optional timeout override for every task; configured default is ${config.defaultTimeoutSeconds} seconds`,
-			}),
-		),
-		retain_artifacts: Type.Optional(
-			Type.String({
-				description: `Artifact policy: "never", "on_failure", or "always"; configured default is "${config.retainArtifacts}"`,
-			}),
-		),
-		return_mode: Type.Optional(
-			Type.Union([Type.Literal("full"), Type.Literal("summary")], {
-				description:
-					'"full" (default) returns each agent\'s complete output plus the prompts sent. "summary" returns a ~600-char digest per agent and paths to the full outputs — pair with retain_artifacts: "always" so full outputs stay on disk (research loops).',
-			}),
-		),
-	});
+	const { profiles } = loadSubagentConfiguration(extensionDir);
 
-	pi.registerTool({
-		name: "run_subagents",
-		label: "Tmux Subagents",
-		description:
-			"Run one or more independently scoped Pi agents in visible tmux windows. " +
-			"Use one task for single-agent delegation or multiple non-overlapping tasks for parallel work. " +
-			"The tool owns process isolation, timeouts, cancellation, status capture, and cleanup; chaining remains parent-driven. " +
-			`Configured profiles: ${profileSummary}. User configuration: ${userConfigPath}. For research loops: pass return_mode: "summary" with retain_artifacts: "always" to keep the coordinator context thin — the tool returns digests plus artifact paths, and full outputs stay on disk.`,
-		parameters: Params,
-
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const typedParams = params as RunSubagentsParams;
-			const returnMode = (typedParams.return_mode ?? "full") as
-				| "full"
-				| "summary";
-			if (
-				typedParams.tasks.length === 0 ||
-				typedParams.tasks.length > config.maxTasks
-			) {
-				throw new Error(`Provide between 1 and ${config.maxTasks} tasks.`);
-			}
-
-			const timeoutOverride = typedParams.timeout_seconds;
-			if (
-				timeoutOverride !== undefined &&
-				(!Number.isInteger(timeoutOverride) ||
-					timeoutOverride < 10 ||
-					timeoutOverride > 1800)
-			) {
-				throw new Error("timeout_seconds must be between 10 and 1800.");
-			}
-
-			const retainArtifacts =
-				typedParams.retain_artifacts ?? config.retainArtifacts;
-			if (!["never", "on_failure", "always"].includes(retainArtifacts)) {
-				throw new Error(
-					'retain_artifacts must be "never", "on_failure", or "always".',
-				);
-			}
-
-			await runCommand("tmux", ["-V"]);
-			await fs.promises.access(runnerPath, fs.constants.R_OK);
-			for (const childExtension of config.childExtensions) {
-				await fs.promises
-					.access(childExtension, fs.constants.R_OK)
-					.catch(() => {
-						throw new Error(
-							`Configured child extension not found: ${childExtension}`,
-						);
-					});
-			}
-
-			const prepared = await Promise.all(
-				typedParams.tasks.map(async (task: TaskItem, index: number) => {
-					const profile = profileMap.get(task.agent);
-					if (!profile)
-						throw new Error(
-							`Unknown agent "${task.agent}". Available agents: ${profiles.map((item) => item.name).join(", ")}.`,
-						);
-					const cwdSetting = task.cwd ?? ".";
-					const cwd =
-						cwdSetting === "~"
-							? os.homedir()
-							: cwdSetting.startsWith("~/")
-								? path.join(os.homedir(), cwdSetting.slice(2))
-								: path.resolve(ctx!.cwd, cwdSetting);
-					const stat = await fs.promises.stat(cwd);
-					if (!stat.isDirectory())
-						throw new Error(
-							`Task working directory is not a directory: ${cwd}`,
-						);
-					const timeoutSeconds =
-						timeoutOverride ??
-						profile.timeoutSeconds ??
-						config.defaultTimeoutSeconds;
-					return {
-						task,
-						profile,
-						cwd,
-						timeoutSeconds,
-						taskId: `task-${index + 1}`,
-					};
-				}),
-			);
-
-			// I1: absolute-path guard for result_path
-			for (const item of prepared) {
-				if (item.task.result_path && !path.isAbsolute(item.task.result_path)) {
-					throw new Error(
-						`result_path must be an absolute path, got: ${item.task.result_path}`,
-					);
-				}
-			}
-
-			const writerDirectories = new Set<string>();
-			for (const item of prepared) {
-				if (item.profile.access === "read") continue;
-				const worktree = await getWorktreeIdentity(item.cwd);
-				if (writerDirectories.has(worktree)) {
-					throw new Error(
-						`Parallel agents with shell or write access cannot share a worktree: ${worktree}`,
-					);
-				}
-				writerDirectories.add(worktree);
-			}
-
-			const runDir = await fs.promises.mkdtemp(
-				path.join(os.tmpdir(), "pi-subagent-"),
-			);
-			await fs.promises.chmod(runDir, 0o700);
-			for (const child of ["request", "output", "stderr", "status"]) {
-				await fs.promises.mkdir(path.join(runDir, child), { mode: 0o700 });
-			}
-
-			// Parent identity: the immutable Pi session id owns one window in the
-			// shared tmux session; display names are derived and may be renamed.
-			const parentSessionId = ctx?.sessionManager?.getSessionId() ?? "unknown";
-			const parentCwd = ctx?.cwd ?? process.cwd();
-			const windowName = buildWindowName(parentCwd, {
-				homedir: os.homedir(),
-				topic: ctx?.sessionManager?.getSessionName(),
-				firstPrompt: firstUserPrompt(ctx?.sessionManager),
-			});
-
-			// Private transcripts live outside the per-call artifact directory so
-			// artifact cleanup can never remove them (design: 0700 dirs, 0600 files).
-			const transcriptRoot = "/tmp/pi-subagent-transcripts";
-			const transcriptParentDir = path.join(
-				transcriptRoot,
-				parentSessionId.replace(/[^A-Za-z0-9._-]/g, "_"),
-			);
-			const transcriptDir = path.join(
-				transcriptParentDir,
-				path.basename(runDir),
-			);
-			await fs.promises.mkdir(transcriptParentDir, {
-				recursive: true,
-				mode: 0o700,
-			});
-			await fs.promises.mkdir(transcriptDir, { recursive: true, mode: 0o700 });
-			await fs.promises.chmod(transcriptParentDir, 0o700);
-			await fs.promises.chmod(transcriptDir, 0o700);
-
-			const session = SHARED_SESSION;
-			let windowId = "";
-			let layoutWarning: string | undefined;
-			const runner = getRunnerInvocation();
-			const piInvocation = getPiInvocation();
-			const requests: RunnerRequest[] = [];
-			const promptContents = new Map<
-				string,
-				{ system: string; task: string }
-			>();
-			const statuses: TaskStatus[] = prepared.map(
-				(item: (typeof prepared)[number]) => ({
-					taskId: item.taskId,
-					agent: item.task.agent,
-					state: "starting",
-					startedAt: new Date().toISOString(),
-					model: item.profile.model,
-				}),
-			);
-			let keepArtifacts = true;
-			let launchedPaneIds: string[] = [];
-			const tmuxExec: TmuxExecutor = (args) => runCommand("tmux", args);
-
-			const getAttachCommand = () =>
-				windowId
-					? `tmux attach -t ${session}:${windowId}`
-					: `tmux attach -t ${session}`;
-
-			const emitUpdate = () => {
-				onUpdate?.({
-					content: [
-						{
-							type: "text",
-							text: renderProgress(session, windowName, windowId, statuses),
-						},
-					],
-					details: {
-						session,
-						attachCommand: getAttachCommand(),
-						windowId,
-						windowName,
-						transcriptDir,
-						layoutWarning,
-						artifactsPath: runDir,
-						results: [...statuses],
-					} satisfies SubagentDetails,
-				});
-			};
-
-			try {
-				// Defensive: the research-session module may be absent (e.g. not
-				// registered in tests); treat it as no active budgets.
-				const activeResearchBudgets = getActiveResearchBudgets() ?? {
-					maxSearchesPerAgent: null,
-					maxFetchesPerAgent: null,
-				};
-				const controlCommand = [
-					runner.command,
-					...runner.args,
-					"--control",
-					session,
-				]
-					.map(shellQuote)
-					.join(" ");
-				const panes: PaneSpec[] = [];
-
-				for (let index = 0; index < prepared.length; index++) {
-					const item = prepared[index];
-					const promptPath = path.join(
-						runDir,
-						"request",
-						`${item.taskId}-prompt.md`,
-					);
-					const taskPath = path.join(
-						runDir,
-						"request",
-						`${item.taskId}-task.md`,
-					);
-					await fs.promises.writeFile(promptPath, item.profile.systemPrompt, {
-						mode: 0o600,
-					});
-					const taskPrompt = buildTaskPrompt(item.task, returnMode);
-					await fs.promises.writeFile(taskPath, taskPrompt, {
-						mode: 0o600,
-					});
-					promptContents.set(item.taskId, {
-						system: item.profile.systemPrompt,
-						task: taskPrompt,
-					});
-					const request: RunnerRequest = {
-						taskId: item.taskId,
-						agent: item.task.agent,
-						model: item.profile.model,
-						thinking: item.profile.thinking,
-						tools: item.profile.tools,
-						cwd: item.cwd,
-						timeoutMs: item.timeoutSeconds * 1000,
-						promptPath,
-						taskPath,
-						outputPath: path.join(runDir, "output", `${item.taskId}.jsonl`),
-						stderrPath: path.join(runDir, "stderr", `${item.taskId}.log`),
-						statusPath: path.join(runDir, "status", `${item.taskId}.json`),
-						transcriptPath: path.join(transcriptDir, `${item.taskId}.log`),
-						pi: piInvocation,
-						childExtensions: config.childExtensions,
-						loadContextFiles: config.loadContextFiles,
-						webSearchMaxLookups:
-							// Active budget 0 = unlimited (falls through to task arg / config);
-							// a positive active budget is a hard cap task args cannot exceed.
-							activeResearchBudgets.maxSearchesPerAgent != null &&
-							activeResearchBudgets.maxSearchesPerAgent > 0
-								? Math.min(
-										item.task.webSearchMaxLookups ?? Infinity,
-										activeResearchBudgets.maxSearchesPerAgent,
-									)
-								: (item.task.webSearchMaxLookups ?? config.webSearchMaxLookups),
-						webSearchMaxFetches:
-							activeResearchBudgets.maxFetchesPerAgent != null &&
-							activeResearchBudgets.maxFetchesPerAgent > 0
-								? Math.min(
-										item.task.webSearchMaxFetches ?? Infinity,
-										activeResearchBudgets.maxFetchesPerAgent,
-									)
-								: (item.task.webSearchMaxFetches ?? config.webSearchMaxFetches),
-					};
-					requests.push(request);
-					const requestPath = path.join(
-						runDir,
-						"request",
-						`${item.taskId}.json`,
-					);
-					await fs.promises.writeFile(
-						requestPath,
-						JSON.stringify(request, null, 2),
-						{ mode: 0o600 },
-					);
-					const taskCommand = [runner.command, ...runner.args, requestPath]
-						.map(shellQuote)
-						.join(" ");
-					panes.push({
-						runId: path.basename(runDir),
-						taskId: item.taskId,
-						agent: item.task.agent,
-						command: taskCommand,
-						cwd: item.cwd,
-						order: index,
-					});
-				}
-
-				// Launch everything through the shared session orchestrator: the
-				// session is created once, the parent window holds one pane per task,
-				// and completed panes stay visible via remain-on-exit.
-				const launchResult = await launchBatch(tmuxExec, {
-					sessionId: parentSessionId,
-					pid: process.pid,
-					cwd: parentCwd,
-					windowName,
-					controlCommand,
-					panes,
-				});
-				windowId = launchResult.window.id;
-				layoutWarning = launchResult.layoutWarning;
-				launchedPaneIds = launchResult.paneIds;
-				emitUpdate();
-
-				let lastProgress = "";
-				let deadlineHit = false;
-				const overallDeadline =
-					Date.now() +
-					Math.max(...prepared.map((item) => item.timeoutSeconds)) * 1000 +
-					15_000;
-				while (true) {
-					if (signal?.aborted) throw new Error("Subagent run cancelled");
-
-					for (let index = 0; index < requests.length; index++) {
-						const latest = await readStatus(requests[index].statusPath);
-						if (latest) statuses[index] = latest;
-					}
-
-					const progress = statuses
-						.map((status) => `${status.taskId}:${status.state}`)
-						.join("|");
-					if (progress !== lastProgress) {
-						lastProgress = progress;
-						emitUpdate();
-					}
-
-					if (statuses.every((status) => TERMINAL_STATES.has(status.state)))
-						break;
-					if (Date.now() > overallDeadline) {
-						deadlineHit = true;
-						for (let index = 0; index < statuses.length; index++) {
-							if (TERMINAL_STATES.has(statuses[index].state)) continue;
-							statuses[index] = {
-								...statuses[index],
-								state: "timed_out",
-								finishedAt: new Date().toISOString(),
-								errorMessage:
-									"Supervisor deadline exceeded before the runner published a final status.",
-							};
-						}
-						break;
-					}
-					await delay(POLL_INTERVAL_MS, signal);
-				}
-				// A supervisor timeout means the runners are still live: kill only the
-				// panes this call launched so their process groups terminate.
-				if (deadlineHit) {
-					try {
-						await cancelPanes(tmuxExec, launchedPaneIds);
-					} catch {
-						// Best-effort: never mask the timeout result.
-					}
-				}
-
-				for (let index = 0; index < statuses.length; index++) {
-					if (statuses[index].state === "succeeded") continue;
-					const stderr = await readStderrTail(requests[index].stderrPath);
-					if (stderr)
-						statuses[index].errorMessage =
-							statuses[index].errorMessage || stderr;
-				}
-
-				// Summary mode: validate coordinator-summary and export artifacts.
-				if (returnMode === "summary") {
-					await validateAndExportSummaryResults(statuses, prepared);
-				}
-
-				const failed = statuses.some((status) => status.state !== "succeeded");
-				keepArtifacts =
-					retainArtifacts === "always" ||
-					(retainArtifacts === "on_failure" && failed);
-				const details: SubagentDetails = {
-					session,
-					attachCommand: getAttachCommand(),
-					windowId,
-					windowName,
-					transcriptDir,
-					layoutWarning,
-					artifactsPath: keepArtifacts ? runDir : null,
-					results: statuses,
-				};
-				const rendered =
-					returnMode === "summary"
-						? renderSummaryResults(statuses, details.artifactsPath)
-						: renderResults(
-								statuses,
-								details.artifactsPath,
-								Object.fromEntries(promptContents),
-							);
-				return {
-					content: [
-						{
-							type: "text",
-							text: `${rendered}\n\n${renderTmuxInfo(details)}`,
-						},
-					],
-					details,
-					usage: aggregateUsage(statuses),
-				};
-			} catch (error) {
-				// Batch-local cancellation: aborts, supervisor timeouts, and launch
-				// failures kill only the panes this call created (idempotent).
-				try {
-					await cancelPanes(tmuxExec, launchedPaneIds);
-				} catch {
-					// Best-effort; the original error is the reportable one.
-				}
-				keepArtifacts = retainArtifacts !== "never";
-				const message = error instanceof Error ? error.message : String(error);
-				const artifactNote = keepArtifacts
-					? ` Artifacts retained at: ${runDir}`
-					: "";
-				throw new Error(`${message}${artifactNote}`);
-			} finally {
-				if (!keepArtifacts || retainArtifacts === "never") {
-					try {
-						await fs.promises.rm(runDir, { recursive: true, force: true });
-					} catch {
-						// Best-effort cleanup.
-					}
-				}
-			}
-		},
-	});
+	// Advertise the tmux-subagent provider descriptor through pi.events so that
+	// the subagent-dispatch façade can discover it during provider enumeration.
+	const provider = new TmuxSubagentProvider(profiles);
+	if (pi.events) {
+		const envelope: { descriptors: import("../subagent-dispatch/contract.ts").ProviderDescriptor[] } =
+			{ descriptors: [] };
+		pi.events.emit(
+			"subagent-dispatch-provider-discovered",
+			{ envelope },
+		);
+		envelope.descriptors.push(provider.descriptor);
+	}
 
 	// Parent window lifecycle: keep the window's display name in sync with
 	// /name changes and close only this parent's window on shutdown. Both are
@@ -1005,7 +522,7 @@ export default function (pi: ExtensionAPI) {
 				const name = buildWindowName(ctx.cwd, {
 					homedir: os.homedir(),
 					topic: (event as { name?: string }).name,
-					firstPrompt: firstUserPrompt(ctx.sessionManager),
+					firstPrompt: firstUserPrompt(ctx?.sessionManager),
 				});
 				await renameWindow(lifecycleExec, parentWindow.id, name);
 			} catch {

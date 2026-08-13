@@ -59,7 +59,9 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeDescriptor(overrides: Partial<ProviderDescriptor> = {}): ProviderDescriptor {
+function makeDescriptor(
+	overrides: Partial<ProviderDescriptor> = {},
+): ProviderDescriptor {
 	return {
 		id: overrides.id ?? "test-provider",
 		adapterVersion: overrides.adapterVersion ?? "0.0.1",
@@ -70,12 +72,6 @@ function makeDescriptor(overrides: Partial<ProviderDescriptor> = {}): ProviderDe
 		maxAttemptsPerTask: overrides.maxAttemptsPerTask ?? 100,
 		...overrides,
 	};
-}
-
-function makeSerializedError(
-	msg: string,
-): SerializedError {
-	return { message: msg };
 }
 
 function buildMockPi() {
@@ -172,7 +168,10 @@ describe("types — ProviderDescriptor", () => {
 	});
 
 	it("may omit protocol/version fields", () => {
-		const d = makeDescriptor({ protocolVersion: undefined, executionSpecVersion: undefined });
+		const d = makeDescriptor({
+			protocolVersion: undefined,
+			executionSpecVersion: undefined,
+		});
 		expect(d.protocolVersion).toBeUndefined();
 		expect(d.executionSpecVersion).toBeUndefined();
 	});
@@ -290,11 +289,15 @@ describe("FakeSubagentProvider", () => {
 	it("records a successful executeAttempt", async () => {
 		const provider = new FakeSubagentProvider();
 		const plan = { attemptId: "a1", planId: "p1", index: 0 };
-		const result = await provider.executeAttempt(plan, new AbortController().signal);
+		const result = await provider.executeAttempt(
+			plan,
+			new AbortController().signal,
+		);
 
 		expect(result.output).toBeDefined();
 		expect(provider.records.length).toBe(1);
-		const record: FakeProviderRecord = provider.records[0] as FakeProviderRecord;
+		const record: FakeProviderRecord = provider
+			.records[0] as FakeProviderRecord;
 		expect(record.attemptId).toBe("a1");
 		expect(record.planId).toBe("p1");
 		expect(record.index).toBe(0);
@@ -310,7 +313,10 @@ describe("FakeSubagentProvider", () => {
 			throw new Error("boom");
 		};
 
-		const result = await provider.executeAttempt(plan, new AbortController().signal);
+		const result = await provider.executeAttempt(
+			plan,
+			new AbortController().signal,
+		);
 		expect(result).toBeDefined();
 		expect(provider.records.length).toBe(1);
 		expect(provider.records[0].outcome.status).toBe("failed");
@@ -361,7 +367,6 @@ describe("discovery — after façade load", () => {
 	});
 });
 
-
 // ---------------------------------------------------------------------------
 // Façade — run_subagents tool registration
 // ---------------------------------------------------------------------------
@@ -400,13 +405,16 @@ describe("usage aggregation", () => {
 		// Simulate aggregating usage from multiple attempts.
 		const usages = [
 			{ totalTokens: 100, input: 50, output: 50, cacheRead: 0, cacheWrite: 0 },
-			{ totalTokens: 200, input: 100, output: 100, cacheRead: 10, cacheWrite: 5 },
+			{
+				totalTokens: 200,
+				input: 100,
+				output: 100,
+				cacheRead: 10,
+				cacheWrite: 5,
+			},
 			{ totalTokens: 50, input: 25, output: 25, cacheRead: 0, cacheWrite: 0 },
 		];
-		const total = usages.reduce(
-			(sum, u) => sum + u.totalTokens,
-			0,
-		);
+		const total = usages.reduce((sum, u) => sum + u.totalTokens, 0);
 		expect(total).toBe(350);
 	});
 
@@ -461,6 +469,87 @@ describe("discovery — load-order independence", () => {
 	});
 });
 
+describe("discovery — event-bus provider registration", () => {
+	afterEach(() => {
+		resetFacade();
+	});
+
+	it("discovers a provider registered after façade load via lazy re-discovery", () => {
+		// In-memory event bus mirroring pi.events' emit/on contract: emit is
+		// synchronous and passes a caller-owned envelope listeners push into.
+		const listeners = new Map<string, ((data: unknown) => void)[]>();
+		const bus = {
+			emit: (channel: string, data: unknown) => {
+				for (const handler of listeners.get(channel) ?? []) handler(data);
+			},
+			on: (channel: string, handler: (data: unknown) => void) => {
+				const list = listeners.get(channel) ?? [];
+				list.push(handler);
+				listeners.set(channel, list);
+			},
+		};
+
+		// Façade loads first — initial discovery finds nothing (no listeners yet).
+		const facade = createFacade({ eventBus: bus });
+		expect(facade.registry.get("tmux-subagent")).toBeUndefined();
+
+		// A provider (e.g. tmux-subagent) registers its listener *after* the
+		// façade loaded — simulating the tmux extension loading later.
+		bus.on("subagent-dispatch-provider-discovered", (data: unknown) => {
+			const envelope = (data as { envelope?: { providers?: unknown[] } })
+				?.envelope;
+			envelope?.providers?.push({
+				descriptor: makeDescriptor({
+					id: "tmux-subagent",
+					capabilities: ["tmux"],
+				}),
+				instance: {
+					executeAttempt: async () => ({
+						output: { result: "done" },
+						usage: { totalTokens: 0 },
+					}),
+				},
+			});
+		});
+
+		// Lazy re-discovery (invoked at dispatch time) picks it up.
+		facade.discover?.();
+		expect(facade.registry.get("tmux-subagent")).toBeDefined();
+		expect(facade.registry.getInstance("tmux-subagent")).toBeDefined();
+	});
+
+	it("lazy re-discovery is idempotent — duplicate ids are ignored", () => {
+		const listeners = new Map<string, ((data: unknown) => void)[]>();
+		const bus = {
+			emit: (channel: string, data: unknown) => {
+				for (const handler of listeners.get(channel) ?? []) handler(data);
+			},
+			on: (channel: string, handler: (data: unknown) => void) => {
+				const list = listeners.get(channel) ?? [];
+				list.push(handler);
+				listeners.set(channel, list);
+			},
+		};
+		const facade = createFacade({ eventBus: bus });
+		bus.on("subagent-dispatch-provider-discovered", (data: unknown) => {
+			const envelope = (data as { envelope?: { providers?: unknown[] } })
+				?.envelope;
+			envelope?.providers?.push({
+				descriptor: makeDescriptor({
+					id: "tmux-subagent",
+					capabilities: ["tmux"],
+				}),
+				instance: { executeAttempt: async () => ({ output: {} }) },
+			});
+		});
+
+		facade.discover?.();
+		const sizeAfter = facade.registry.size;
+		facade.discover?.(); // second discovery must not throw or duplicate
+		expect(facade.registry.size).toBe(sizeAfter);
+	});
+});
+
 // ---------------------------------------------------------------------------
 // Fix Round 1 — Real behavioral tests for the execute loop
 // ---------------------------------------------------------------------------
@@ -484,7 +573,9 @@ function dispatch(
 	mockPi: ReturnType<typeof buildMockPiWithTool>,
 	params: { tasks: { id: string; objective: string }[] },
 ) {
-	const tool = mockPi._getRegisteredTools().find((t: any) => t.name === "run_subagents") as any;
+	const tool = mockPi
+		._getRegisteredTools()
+		.find((t: any) => t.name === "run_subagents") as any;
 	return tool.execute("test-call-id", params as any);
 }
 
@@ -502,7 +593,10 @@ describe("MockDispatchPolicy — records calls", () => {
 		});
 		expect(reservation.reservationId).toBe("res-att-1");
 
-		const outcome: AttemptOutcome = { status: "completed", result: { output: "ok" } };
+		const outcome: AttemptOutcome = {
+			status: "completed",
+			result: { output: "ok" },
+		};
 		await policy.exportArtifact(reservation, outcome.result);
 		await policy.releaseAttempt(reservation, outcome);
 
@@ -517,9 +611,13 @@ describe("MockDispatchPolicy — records calls", () => {
 		const policy = new MockDispatchPolicy();
 		policy.onReserveAttemptFailure = new Error("no slot");
 
-		await expect(policy.reserveAttempt({
-			attemptId: "att-1", planId: "plan-1", index: 0,
-		})).rejects.toThrow("no slot");
+		await expect(
+			policy.reserveAttempt({
+				attemptId: "att-1",
+				planId: "plan-1",
+				index: 0,
+			}),
+		).rejects.toThrow("no slot");
 
 		const record = policy.records[policy.records.length - 1];
 		expect(record.method).toBe("reserveAttempt");
@@ -658,7 +756,9 @@ describe("execute loop — reserve before every attempt", () => {
 			],
 		});
 
-		const reserveCalls = mockPolicy.records.filter((r) => r.method === "reserveAttempt");
+		const reserveCalls = mockPolicy.records.filter(
+			(r) => r.method === "reserveAttempt",
+		);
 		expect(reserveCalls.length).toBe(3);
 	});
 });
@@ -716,12 +816,16 @@ describe("execute loop — releaseAttempt called exactly once per outcome", () =
 		registerFaçadeTools(mockPi, facade, mockPolicy);
 
 		await dispatch(mockPi, { tasks: [{ id: "t1", objective: "ok" }] });
-		expect(mockPolicy.records.filter((r) => r.method === "releaseAttempt").length).toBe(1);
+		expect(
+			mockPolicy.records.filter((r) => r.method === "releaseAttempt").length,
+		).toBe(1);
 	});
 
 	it("releaseAttempt called once for failed outcome (provider throws)", async () => {
 		const fake = new FakeSubagentProvider();
-		fake.onExecuteAttempt = () => { throw new Error("boom"); };
+		fake.onExecuteAttempt = () => {
+			throw new Error("boom");
+		};
 		const mockPolicy = new MockDispatchPolicy();
 
 		const reg = new ProviderRegistry();
@@ -731,13 +835,17 @@ describe("execute loop — releaseAttempt called exactly once per outcome", () =
 		registerFaçadeTools(mockPi, facade, mockPolicy);
 
 		await dispatch(mockPi, { tasks: [{ id: "t1", objective: "fail" }] });
-		expect(mockPolicy.records.filter((r) => r.method === "releaseAttempt").length).toBe(1);
+		expect(
+			mockPolicy.records.filter((r) => r.method === "releaseAttempt").length,
+		).toBe(1);
 	});
 
 	it("releaseAttempt called once even when export fails", async () => {
 		const fake = new FakeSubagentProvider();
 		const mockPolicy = new MockDispatchPolicy();
-		mockPolicy.exportArtifact = async () => { throw new Error("export failed"); };
+		mockPolicy.exportArtifact = async () => {
+			throw new Error("export failed");
+		};
 
 		const reg = new ProviderRegistry();
 		reg.registerWithInstance(FakeSubagentProvider.DESCRIPTOR, fake);
@@ -745,8 +853,12 @@ describe("execute loop — releaseAttempt called exactly once per outcome", () =
 		const mockPi = buildMockPiWithTool();
 		registerFaçadeTools(mockPi, facade, mockPolicy);
 
-		await dispatch(mockPi, { tasks: [{ id: "t1", objective: "export fails" }] });
-		expect(mockPolicy.records.filter((r) => r.method === "releaseAttempt").length).toBe(1);
+		await dispatch(mockPi, {
+			tasks: [{ id: "t1", objective: "export fails" }],
+		});
+		expect(
+			mockPolicy.records.filter((r) => r.method === "releaseAttempt").length,
+		).toBe(1);
 	});
 });
 
@@ -759,7 +871,7 @@ describe("execute loop — usage aggregation via tool result", () => {
 
 	it("usage.totalTokens aggregates across multiple attempts", async () => {
 		const fake = new FakeSubagentProvider();
-		fake.executeAttempt = async (plan: any, signal: AbortSignal) => ({
+		fake.executeAttempt = async (plan: any, _signal: AbortSignal) => ({
 			output: { attemptId: plan.attemptId },
 			usage: { totalTokens: 42 },
 		});
@@ -772,7 +884,10 @@ describe("execute loop — usage aggregation via tool result", () => {
 		registerFaçadeTools(mockPi, facade, mockPolicy);
 
 		const result = await dispatch(mockPi, {
-			tasks: [{ id: "t1", objective: "1" }, { id: "t2", objective: "2" }],
+			tasks: [
+				{ id: "t1", objective: "1" },
+				{ id: "t2", objective: "2" },
+			],
 		});
 
 		expect((result.usage as { totalTokens: number }).totalTokens).toBe(84);
@@ -789,9 +904,12 @@ describe("execute loop — taskInfo preserved in ResolvedAttempt", () => {
 	it("provider.executeAttempt receives full ResolvedAttempt with taskInfo", async () => {
 		const fake = new FakeSubagentProvider();
 		let capturedPlan: any = null;
-		fake.executeAttempt = async (plan: any, signal: AbortSignal) => {
+		fake.executeAttempt = async (plan: any, _signal: AbortSignal) => {
 			capturedPlan = { ...plan };
-			return { output: { attemptId: plan.attemptId }, usage: { totalTokens: 0 } };
+			return {
+				output: { attemptId: plan.attemptId },
+				usage: { totalTokens: 0 },
+			};
 		};
 		const mockPolicy = new MockDispatchPolicy();
 
@@ -801,7 +919,9 @@ describe("execute loop — taskInfo preserved in ResolvedAttempt", () => {
 		const mockPi = buildMockPiWithTool();
 		registerFaçadeTools(mockPi, facade, mockPolicy);
 
-		await dispatch(mockPi, { tasks: [{ id: "unique-task", objective: "test objective" }] });
+		await dispatch(mockPi, {
+			tasks: [{ id: "unique-task", objective: "test objective" }],
+		});
 
 		expect(capturedPlan.taskInfo).toBeDefined();
 		expect(capturedPlan.taskInfo.taskId).toBe("unique-task");
@@ -820,9 +940,13 @@ describe("execute loop — tool description is concise", () => {
 		const facade = createFacade();
 		const mockPi = buildMockPiWithTool();
 		registerFaçadeTools(mockPi, facade);
-		const tool = mockPi._getRegisteredTools().find((t: any) => t.name === "run_subagents");
+		const tool = mockPi
+			._getRegisteredTools()
+			.find((t: any) => t.name === "run_subagents");
 		expect(tool.description.length).toBeLessThan(200);
-		expect(tool.description).not.toContain("The façade owns batching expansion");
+		expect(tool.description).not.toContain(
+			"The façade owns batching expansion",
+		);
 	});
 });
 
@@ -875,8 +999,12 @@ describe("execute loop — multiple tasks get independent reserve/release cycles
 			],
 		});
 
-		expect(mockPolicy.records.filter((r) => r.method === "reserveAttempt").length).toBe(4);
-		expect(mockPolicy.records.filter((r) => r.method === "releaseAttempt").length).toBe(4);
+		expect(
+			mockPolicy.records.filter((r) => r.method === "reserveAttempt").length,
+		).toBe(4);
+		expect(
+			mockPolicy.records.filter((r) => r.method === "releaseAttempt").length,
+		).toBe(4);
 		expect(fake.records.length).toBe(4);
 	});
 });

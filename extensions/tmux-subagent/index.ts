@@ -493,19 +493,23 @@ export async function validateAndExportSummaryResults(
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI) {
-	// Advertise the tmux-subagent provider descriptor through pi.events so that
-	// the subagent-dispatch façade can discover it during provider enumeration.
+	// Discover the tmux-subagent provider: the subagent-dispatch façade emits a
+	// discovery channel with a caller-owned envelope; this listener pushes our
+	// descriptor + instance so the façade can register and execute attempts.
+	// Listening (rather than emitting) makes discovery load-order independent:
+	// whether this extension loads before or after the façade, the next
+	// discovery emit collects us.
 	const provider = new TmuxSubagentProvider();
 	if (pi.events) {
-		const envelope: { descriptors: import("../subagent-dispatch/contract.ts").ProviderDescriptor[] } =
-			{ descriptors: [] };
-		// F6: push descriptor before emitting so synchronous listeners see a
-		// complete envelope (no stale empty-descriptors window).
-		envelope.descriptors.push(provider.descriptor);
-		pi.events.emit(
-			"subagent-dispatch-provider-discovered",
-			{ envelope },
-		);
+		pi.events.on("subagent-dispatch-provider-discovered", (data: unknown) => {
+			const envelope = (data as { envelope?: { providers?: unknown[] } })
+				?.envelope;
+			if (!envelope?.providers) return;
+			envelope.providers.push({
+				descriptor: provider.descriptor,
+				instance: provider,
+			});
+		});
 	}
 
 	// Parent window lifecycle: keep the window's display name in sync with

@@ -10,22 +10,26 @@
 // ---------------------------------------------------------------------------
 
 export interface SerializedError {
-  message: string;
-  code?: string;
-  stack?: string;
-  [key: string]: unknown;
+	message: string;
+	code?: string;
+	stack?: string;
+	[key: string]: unknown;
 }
 
-export type AttemptOutcomeStatus = "completed" | "failed" | "cancelled" | "interrupted";
+export type AttemptOutcomeStatus =
+	| "completed"
+	| "failed"
+	| "cancelled"
+	| "interrupted";
 
 export interface AttemptCompleted {
-  status: "completed";
-  result: AttemptResult;
+	status: "completed";
+	result: AttemptResult;
 }
 
 export interface AttemptFailed {
-  status: "failed" | "cancelled" | "interrupted";
-  error: SerializedError;
+	status: "failed" | "cancelled" | "interrupted";
+	error: SerializedError;
 }
 
 /** Normalised result of any physical attempt — the façade normalises
@@ -37,27 +41,27 @@ export type AttemptOutcome = AttemptCompleted | AttemptFailed;
 // ---------------------------------------------------------------------------
 
 export interface AttemptResult {
-  /** Arbitrary structured output — typically tool results or artifacts. */
-  output: unknown;
-  /** Token usage reported by the provider, if available. */
-  usage?: AttemptUsage;
-  /** Optional metadata the provider wishes to attach. */
-  metadata?: Record<string, unknown>;
+	/** Arbitrary structured output — typically tool results or artifacts. */
+	output: unknown;
+	/** Token usage reported by the provider, if available. */
+	usage?: AttemptUsage;
+	/** Optional metadata the provider wishes to attach. */
+	metadata?: Record<string, unknown>;
 }
 
 export interface AttemptUsage {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  totalTokens: number;
-  cost?: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    total: number;
-  };
+	input?: number;
+	output?: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+	totalTokens: number;
+	cost?: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		total: number;
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -76,13 +80,28 @@ export interface AttemptUsage {
  * - `maxAttemptsPerTask` hard ceiling on attempts for a single task.
  */
 export interface ProviderDescriptor {
-  id: string;
-  adapterVersion: string;
-  protocolVersion?: string;
-  executionSpecVersion?: string;
-  capabilities: string[];
-  maxConcurrentAttempts?: number;
-  maxAttemptsPerTask?: number;
+	id: string;
+	adapterVersion: string;
+	protocolVersion?: string;
+	executionSpecVersion?: string;
+	capabilities: string[];
+	maxConcurrentAttempts?: number;
+	maxAttemptsPerTask?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Discovery envelope — what providers publish when the façade collects them
+// ---------------------------------------------------------------------------
+
+/**
+ * A provider published during discovery. Carries the descriptor plus an
+ * optional instance so the façade can both negotiate capabilities and
+ * execute attempts without a second lookup or factory call.
+ */
+export interface DiscoveredProvider {
+	descriptor: ProviderDescriptor;
+	/** Optional provider instance (implements executeAttempt). */
+	instance?: SubagentProvider;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,8 +117,11 @@ export interface ProviderDescriptor {
  *   responsibility.
  */
 export interface SubagentProvider {
-  readonly descriptor: ProviderDescriptor;
-  executeAttempt(plan: ResolvedAttempt, signal: AbortSignal): Promise<AttemptResult>;
+	readonly descriptor: ProviderDescriptor;
+	executeAttempt(
+		plan: ResolvedAttempt,
+		signal: AbortSignal,
+	): Promise<AttemptResult>;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,52 +129,52 @@ export interface SubagentProvider {
 // ---------------------------------------------------------------------------
 
 export interface DispatchContext {
-  /** Arbitrary context the policy can use to decide whether to claim. */
-  readonly context: Record<string, unknown>;
+	/** Arbitrary context the policy can use to decide whether to claim. */
+	readonly context: Record<string, unknown>;
 }
 
 export interface RequestedPlan {
-  /** Provider the caller wants to use (may be null for auto). */
-  providerId: string | null;
-  /** Capabilities required by the task. */
-  requiredCapabilities: string[];
-  /** Number of concurrent attempts needed. */
-  concurrency: number;
-  /** Total attempts planned (after batching expansion). */
-  totalAttempts: number;
-  /** Active research policy forces a frozen provider if set. */
-  activePolicy?: string | null;
+	/** Provider the caller wants to use (may be null for auto). */
+	providerId: string | null;
+	/** Capabilities required by the task. */
+	requiredCapabilities: string[];
+	/** Number of concurrent attempts needed. */
+	concurrency: number;
+	/** Total attempts planned (after batching expansion). */
+	totalAttempts: number;
+	/** Active research policy forces a frozen provider if set. */
+	activePolicy?: string | null;
 }
 
 export interface ResolvedDispatch {
-  /** The provider that will handle this dispatch. */
-  providerId: string;
-  /** The descriptor the provider published. */
-  descriptor: ProviderDescriptor;
-  /** Expanded attempts after batching. */
-  attempts: ResolvedAttempt[];
-  /** Total attempts after expansion. */
-  totalAttempts: number;
+	/** The provider that will handle this dispatch. */
+	providerId: string;
+	/** The descriptor the provider published. */
+	descriptor: ProviderDescriptor;
+	/** Expanded attempts after batching. */
+	attempts: ResolvedAttempt[];
+	/** Total attempts after expansion. */
+	totalAttempts: number;
 }
 
 export interface ResolvedAttempt {
-  attemptId: string;
-  planId: string;
-  index: number;
-  taskInfo?: Record<string, unknown>;
+	attemptId: string;
+	planId: string;
+	index: number;
+	taskInfo?: Record<string, unknown>;
 }
 
 export interface AttemptReservation {
-  reservationId: string;
-  attempt: ResolvedAttempt;
-  providerId: string;
+	reservationId: string;
+	attempt: ResolvedAttempt;
+	providerId: string;
 }
 
 export interface ArtifactMetadata {
-  /** Path or identifier of the exported artifact. */
-  artifactId: string;
-  /** Arbitrary metadata the façade should pass through. */
-  metadata?: Record<string, unknown>;
+	/** Path or identifier of the exported artifact. */
+	artifactId: string;
+	/** Arbitrary metadata the façade should pass through. */
+	metadata?: Record<string, unknown>;
 }
 
 /**
@@ -164,11 +186,17 @@ export interface ArtifactMetadata {
  *  - `exportArtifact` — called for successful (completed) attempts.
  */
 export interface DispatchPolicy {
-  claim(context: DispatchContext): Promise<boolean>;
-  resolve(plan: RequestedPlan): Promise<ResolvedDispatch>;
-  reserveAttempt(attempt: ResolvedAttempt): Promise<AttemptReservation>;
-  releaseAttempt(reservation: AttemptReservation, outcome: AttemptOutcome): Promise<void>;
-  exportArtifact(reservation: AttemptReservation, result: AttemptResult): Promise<ArtifactMetadata | undefined>;
+	claim(context: DispatchContext): Promise<boolean>;
+	resolve(plan: RequestedPlan): Promise<ResolvedDispatch>;
+	reserveAttempt(attempt: ResolvedAttempt): Promise<AttemptReservation>;
+	releaseAttempt(
+		reservation: AttemptReservation,
+		outcome: AttemptOutcome,
+	): Promise<void>;
+	exportArtifact(
+		reservation: AttemptReservation,
+		result: AttemptResult,
+	): Promise<ArtifactMetadata | undefined>;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,34 +213,36 @@ export interface DispatchPolicy {
  * @returns { providerId, descriptor } or throws if negotiation fails
  */
 export function negotiateProvider(
-  registry: ReadonlyArray<ProviderDescriptor>,
-  selection: string | null,
-  requirements: string[],
+	registry: ReadonlyArray<ProviderDescriptor>,
+	selection: string | null,
+	requirements: string[],
 ): { providerId: string; descriptor: ProviderDescriptor } {
-  // Default: if no specific provider selected, return the first provider
-  // that satisfies all requirements.
-  if (selection) {
-    const found = registry.find((p) => p.id === selection);
-    if (!found) {
-      throw new Error(`Provider "${selection}" not found in registry`);
-    }
-    const missing = requirements.filter((req) => !found.capabilities.includes(req));
-    if (missing.length > 0) {
-      throw new Error(
-        `Provider "${selection}" lacks capabilities: ${missing.join(", ")}`,
-      );
-    }
-    return { providerId: selection, descriptor: found };
-  }
+	// Default: if no specific provider selected, return the first provider
+	// that satisfies all requirements.
+	if (selection) {
+		const found = registry.find((p) => p.id === selection);
+		if (!found) {
+			throw new Error(`Provider "${selection}" not found in registry`);
+		}
+		const missing = requirements.filter(
+			(req) => !found.capabilities.includes(req),
+		);
+		if (missing.length > 0) {
+			throw new Error(
+				`Provider "${selection}" lacks capabilities: ${missing.join(", ")}`,
+			);
+		}
+		return { providerId: selection, descriptor: found };
+	}
 
-  // Auto: find first provider that satisfies all requirements
-  const match = registry.find((p) =>
-    requirements.every((req) => p.capabilities.includes(req)),
-  );
-  if (!match) {
-    throw new Error(
-      `No provider found satisfying capabilities: ${requirements.join(", ")}`,
-    );
-  }
-  return { providerId: match.id, descriptor: match };
+	// Auto: find first provider that satisfies all requirements
+	const match = registry.find((p) =>
+		requirements.every((req) => p.capabilities.includes(req)),
+	);
+	if (!match) {
+		throw new Error(
+			`No provider found satisfying capabilities: ${requirements.join(", ")}`,
+		);
+	}
+	return { providerId: match.id, descriptor: match };
 }

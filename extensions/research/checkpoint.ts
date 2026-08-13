@@ -2,12 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import type { Workspace } from "./workspace.ts";
-import type { RunState, StateConflict } from "./state.ts";
+import type { RunState, StateConflict, Verdict } from "./state.ts";
 import {
 	newRunState,
 	readRunState,
 	updateRunState,
-	Verdict,
 } from "./state.ts";
 import { loadPackagedConfig } from "./config.ts";
 

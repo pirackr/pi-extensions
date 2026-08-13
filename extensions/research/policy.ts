@@ -292,18 +292,48 @@ export class ResearchPolicy {
 	// -----------------------------------------------------------------------
 
 	async resolve(plan: RequestedPlan): Promise<ResolvedDispatch> {
+		const roleNames = Object.keys(this.frozenConfig.roles);
+
+		// F2: Enforce manifest role whitelist — reject non-manifest providers
+		if (plan.providerId !== null && !roleNames.includes(plan.providerId)) {
+			throw new Error(
+				`Provider '${plan.providerId}' is not a manifest role. Allowed: ${roleNames.join(", ")}`,
+			);
+		}
+
+		const providerId = plan.providerId ?? (roleNames.length > 0 ? roleNames[0] : null);
+		if (!providerId) {
+			throw new Error("No manifest roles configured for this workspace.");
+		}
+
+		const role = this.frozenConfig.roles[providerId];
+
+		// F3: Strip caller operational overrides and inject frozen settings
 		const attempts: ResolvedAttempt[] = [];
 		for (let i = 0; i < plan.totalAttempts; i++) {
 			attempts.push({
 				attemptId: `att-${this.workspace.runId}-${i}-${Date.now()}`,
 				planId: `plan-${this.workspace.runId}`,
 				index: i,
+				taskInfo: {
+					role: providerId,
+					timeoutSeconds: role.timeoutSeconds,
+					retention: role.retention,
+					maxSearches: role.maxSearches,
+					maxFetches: role.maxFetches,
+				},
 			});
 		}
 
-		const roleNames = Object.keys(this.frozenConfig.roles);
-		const firstRoleName = roleNames.length > 0 ? roleNames[0] : null;
-		const providerId = plan.providerId ?? firstRoleName ?? "default";
+		// F4: Provider-wide concurrent ceiling = sum of all role concurrentDispatch
+		// (not Math.max — Math.max silently undercounts capacity when multiple roles exist)
+		const providerCeiling = Object.values(this.frozenConfig.roles)
+			.reduce((sum, r) => sum + r.concurrentDispatch, 0);
+
+		// F5: maxConcurrentAttempts = max per-role concurrentDispatch (a concurrency count, not seconds)
+		const maxConcurrent = Math.max(
+			...Object.values(this.frozenConfig.roles).map((r) => r.concurrentDispatch),
+		);
 
 		return {
 			providerId,
@@ -311,7 +341,7 @@ export class ResearchPolicy {
 				id: providerId,
 				adapterVersion: "1.0.0",
 				capabilities: ["local"],
-				maxConcurrentAttempts: this.hardTimeoutSeconds,
+				maxConcurrentAttempts: maxConcurrent,
 				maxAttemptsPerTask: 100,
 			},
 			attempts,
@@ -367,19 +397,20 @@ export class ResearchPolicy {
 			this.buckets.set(roleKey, bucket);
 		}
 
-		// Check conditions (in-memory, may have stale data but serialization
-		// + optimistic locking via updateRunState handles contention)
+		// F4: Provider-wide concurrent ceiling = sum of all role concurrentDispatch
+		const providerCeiling = Object.values(this.frozenConfig.roles)
+			.reduce((sum, r) => sum + r.concurrentDispatch, 0);
+
+		// Check in-memory bucket total cap
 		if (bucket.total >= role.totalDispatch) return undefined;
+		// Check in-memory bucket concurrent cap
 		if (bucket.concurrent >= role.concurrentDispatch) return undefined;
 
-		const totalConcurrent = Array.from(this.buckets.values())
-			.reduce((sum, b) => sum + b.concurrent, 0);
-		const providerCeiling = Math.max(
-			...Object.values(this.frozenConfig.roles).map((r) => r.concurrentDispatch),
-		);
-		if (totalConcurrent >= providerCeiling) return undefined;
+		// F1: Check state-based concurrent count for accuracy
+		const stateConcurrent = state.concurrentReservations ?? 0;
+		if (stateConcurrent >= providerCeiling) return undefined;
 
-		// All checks passed — now atomically commit via updateRunState.
+		// All checks passed — atomically commit via updateRunState.
 		// We do NOT throw inside the mutate callback to avoid breaking the
 		// serialization chain. Instead we check, then write a small state
 		// increment and update the in-memory bucket afterwards.
@@ -390,7 +421,7 @@ export class ResearchPolicy {
 			try {
 				await updateRunState(this.workspace, revision, (current) => ({
 					...current,
-					nestedUsage: current.nestedUsage + 1,
+					concurrentReservations: (current.concurrentReservations ?? 0) + 1,
 				}));
 
 				// Create reservation in in-memory bucket
@@ -433,13 +464,26 @@ export class ResearchPolicy {
 			return; // idempotent: already released
 		}
 
-		bucket.reservations.delete(reservation.reservationId);
-
-		// Release concurrency slot
-		bucket.concurrent = Math.max(0, bucket.concurrent - 1);
-
 		// IMPORTANT: Do NOT decrement total — it's consumed and stays consumed
 		// for failure, cancellation, interruption outcomes
+		bucket.reservations.delete(reservation.reservationId);
+
+		// Release concurrency slot (in-memory — immediate response)
+		bucket.concurrent = Math.max(0, bucket.concurrent - 1);
+
+		// F1: Release concurrency through the SAME transactional state API
+		// used by reserveAttempt (updateRunState). Idempotent by reservationId
+		// and retains consumed counts for failure/cancellation/interruption.
+		try {
+			const state = readRunState(this.workspace);
+			await updateRunState(this.workspace, state.revision, (current) => ({
+					...current,
+					concurrentReservations: Math.max(0, (current.concurrentReservations ?? 0) - 1),
+				}));
+		} catch {
+			// Best-effort — in-memory bucket already released; state update
+			// provides durable backup for crash recovery.
+		}
 	}
 
 	private _findBucket(reservation: AttemptReservation): ReservationBucket | null {
@@ -463,12 +507,16 @@ export class ResearchPolicy {
 		const roleKey = roleInfo?.role ?? Object.keys(this.frozenConfig.roles)[0] ?? "scout";
 		const role = this.frozenConfig.roles[roleKey];
 
-		// Validate frozen role schema — JSON output must be serializable
+		// F8: Validate frozen role schema — JSON output must be serializable.
+		// Throws a structured error instead of silently returning undefined.
 		if (role && result.output && role.resultFormat === "json") {
 			try {
 				JSON.stringify(result.output);
-			} catch {
-				return undefined;
+			} catch (err) {
+				throw new Error(
+					`Artifact JSON serialization failed for role '${roleKey}': ` +
+						(err instanceof Error ? err.message : String(err)),
+				);
 			}
 		}
 

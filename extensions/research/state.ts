@@ -31,6 +31,8 @@ export interface RunState {
 	nestedUsage: number;
 	/** Total tokens consumed. */
 	tokensUsed: number;
+	/** In-flight reservation count (used by ResearchPolicy releaseAttempt F1). */
+	concurrentReservations: number;
 }
 
 export interface RunLease {
@@ -90,6 +92,7 @@ export function newRunState(ws: Workspace): RunState {
 		coordinatorUsage: 0,
 		nestedUsage: 0,
 		tokensUsed: 0,
+		concurrentReservations: 0,
 	};
 }
 

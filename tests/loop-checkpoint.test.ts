@@ -3,6 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import piLoop from "../extensions/loop/index.ts";
+import { readRunState, updateRunState } from "../extensions/research/state.ts";
+import { computeEvidenceDigest } from "../extensions/research/checkpoint.ts";
+import type { Workspace } from "../extensions/research/workspace.ts";
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
 	getAgentDir: vi.fn().mockReturnValue("/mock/agent/dir"),
@@ -685,7 +688,52 @@ describe("complete_loop enforces research verification gates", () => {
 			undefined,
 			mockCtx(cwd),
 		);
-		return { text: result.content?.[0]?.text ?? "", isError: result.isError };
+		const text = result.content?.[0]?.text ?? "";
+		// Task 11: complete_loop's researchCompletionGate reads the checkpoint
+		// from the workspace run-state on disk, so persist the recorded verdict
+		// + evidence digest here (mirrors evaluateCheckpoint's persistence).
+		const verdict: "PROCEED" | "PROCEED_WITH_GAPS" | "CONTINUE" = text.includes(
+			"PROCEED_WITH_GAPS",
+		)
+			? "PROCEED_WITH_GAPS"
+			: text.includes("PROCEED")
+				? "PROCEED"
+				: "CONTINUE";
+		await persistCheckpoint(dir, profile, verdict);
+		return { text, isError: result.isError };
+	}
+
+	/** Authoritative runId from the workspace run-state on disk. */
+	function diskRunId(dir: string): string {
+		return readRunState({ path: dir } as Workspace).runId;
+	}
+
+	/** Persist a checkpoint verdict + evidence digest to run-state.json. */
+	async function persistCheckpoint(
+		dir: string,
+		profile: string,
+		verdict: "PROCEED" | "PROCEED_WITH_GAPS" | "CONTINUE",
+	): Promise<void> {
+		const ws = { path: dir } as Workspace;
+		const state = readRunState(ws);
+		const score = fs.readFileSync(path.join(dir, "score.md"), "utf8");
+		let notes = "";
+		try {
+			notes = fs.readFileSync(path.join(dir, "notes.md"), "utf8");
+		} catch {
+			// notes.md is optional in these gate tests
+		}
+		const digest = computeEvidenceDigest(score, notes);
+		await updateRunState(ws, state.revision, (c) => ({
+			...c,
+			checkpointVerdict: verdict,
+			checkpointDigest: digest,
+			checkpointUnmet: [],
+			checkpointUniqueSources: 20,
+			researchRound: c.researchRound,
+			loopIteration: 1,
+			checkpointProfile: profile,
+		}));
 	}
 
 	it("rejects completion for stale checkpoint (runId mismatch)", async () => {
@@ -803,8 +851,7 @@ describe("complete_loop enforces research verification gates", () => {
 			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "quick", 10, 20);
-		const ls = latestLoopState();
-		writeJudge(dir, ls!.loop!.id!, { pass: false, verdict: "FAIL" });
+		writeJudge(dir, diskRunId(dir), { pass: false, verdict: "FAIL" });
 		fs.writeFileSync(path.join(dir, "report.org"), "* Report\n");
 		const result = await completeLoop();
 		expect(result.isError).toBe(true);
@@ -821,8 +868,7 @@ describe("complete_loop enforces research verification gates", () => {
 			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "quick", 10, 20);
-		const ls = latestLoopState();
-		writeJudge(dir, ls!.loop!.id!, { verdict: "CONDITIONAL_PASS" });
+		writeJudge(dir, diskRunId(dir), { verdict: "CONDITIONAL_PASS" });
 		fs.writeFileSync(path.join(dir, "report.org"), "* Report\n");
 		const result = await completeLoop();
 		expect(result.isError).toBe(true);
@@ -863,10 +909,9 @@ describe("complete_loop enforces research verification gates", () => {
 			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "intermediate", 10, 40);
-		const ls = latestLoopState();
-		writeJudge(dir, ls!.loop!.id!);
-		writeCitations(dir, ls!.loop!.id!, { unsupported: ["claim x"] });
-		writeSources(dir, ls!.loop!.id!);
+		writeJudge(dir, diskRunId(dir));
+		writeCitations(dir, diskRunId(dir), { unsupported: ["claim x"] });
+		writeSources(dir, diskRunId(dir));
 		fs.writeFileSync(path.join(dir, "report.org"), "* Report\n");
 		const result = await completeLoop();
 		expect(result.isError).toBe(true);
@@ -886,10 +931,9 @@ describe("complete_loop enforces research verification gates", () => {
 			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "intermediate", 10, 40);
-		const ls = latestLoopState();
-		writeJudge(dir, ls!.loop!.id!);
-		writeCitations(dir, ls!.loop!.id!);
-		writeSources(dir, ls!.loop!.id!, { unresolved: ["url1"] });
+		writeJudge(dir, diskRunId(dir));
+		writeCitations(dir, diskRunId(dir));
+		writeSources(dir, diskRunId(dir), { unresolved: ["url1"] });
 		fs.writeFileSync(path.join(dir, "report.org"), "* Report\n");
 		const result = await completeLoop();
 		expect(result.isError).toBe(true);
@@ -909,11 +953,10 @@ describe("complete_loop enforces research verification gates", () => {
 			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "deep", 20, 250);
-		const ls = latestLoopState();
-		writeJudge(dir, ls!.loop!.id!);
-		writeCitations(dir, ls!.loop!.id!);
-		writeSources(dir, ls!.loop!.id!);
-		writeContradictions(dir, ls!.loop!.id!, { unhandled: ["contradiction 1"] });
+		writeJudge(dir, diskRunId(dir));
+		writeCitations(dir, diskRunId(dir));
+		writeSources(dir, diskRunId(dir));
+		writeContradictions(dir, diskRunId(dir), { unhandled: ["contradiction 1"] });
 		fs.writeFileSync(path.join(dir, "report.org"), "* Report\n");
 		const result = await completeLoop();
 		expect(result.isError).toBe(true);
@@ -933,11 +976,10 @@ describe("complete_loop enforces research verification gates", () => {
 			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "deep", 20, 250);
-		const ls = latestLoopState();
-		writeJudge(dir, ls!.loop!.id!);
-		writeCitations(dir, ls!.loop!.id!);
-		writeSources(dir, ls!.loop!.id!);
-		writeContradictions(dir, ls!.loop!.id!, {
+		writeJudge(dir, diskRunId(dir));
+		writeCitations(dir, diskRunId(dir));
+		writeSources(dir, diskRunId(dir));
+		writeContradictions(dir, diskRunId(dir), {
 			unhandled: [],
 			acknowledged: [{ claim: "c1", whereInReport: "Section 3" }],
 		});
@@ -961,10 +1003,9 @@ describe("complete_loop enforces research verification gates", () => {
 			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "deep", 20, 250);
-		const ls = latestLoopState();
-		writeJudge(dir, ls!.loop!.id!);
-		writeCitations(dir, ls!.loop!.id!);
-		writeSources(dir, ls!.loop!.id!);
+		writeJudge(dir, diskRunId(dir));
+		writeCitations(dir, diskRunId(dir));
+		writeSources(dir, diskRunId(dir));
 		// contradictions.json intentionally missing
 		fs.writeFileSync(path.join(dir, "report.org"), "* Report\n");
 		const result = await completeLoop();
@@ -999,8 +1040,7 @@ describe("complete_loop enforces research verification gates", () => {
 			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "quick", 10, 20);
-		const ls = latestLoopState();
-		writeJudge(dir, ls!.loop!.id!);
+		writeJudge(dir, diskRunId(dir));
 		fs.writeFileSync(path.join(dir, "report.org"), "* Report\nSome content.\n");
 		const result = await completeLoop();
 		// Success path does not set isError; verify via final state instead.
@@ -1020,11 +1060,10 @@ describe("complete_loop enforces research verification gates", () => {
 			{ id: "q5", score: 90 },
 		]);
 		await checkpoint(dir, "deep", 20, 250);
-		const ls = latestLoopState();
-		writeJudge(dir, ls!.loop!.id!);
-		writeCitations(dir, ls!.loop!.id!);
-		writeSources(dir, ls!.loop!.id!);
-		writeContradictions(dir, ls!.loop!.id!);
+		writeJudge(dir, diskRunId(dir));
+		writeCitations(dir, diskRunId(dir));
+		writeSources(dir, diskRunId(dir));
+		writeContradictions(dir, diskRunId(dir));
 		fs.writeFileSync(path.join(dir, "report.org"), "* Report\nSome content.\n");
 		const result = await completeLoop();
 		expect(result.isError).not.toBe(true);

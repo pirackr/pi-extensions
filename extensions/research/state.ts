@@ -50,6 +50,14 @@ export interface RunState {
 	loopIteration: number;
 	/** Profile used for last checkpoint evaluation. */
 	checkpointProfile: string;
+	/** Final completion outcome recorded by finalizeSuccess (Task 11). */
+	finalOutcome?: string;
+	/** Final run/manifest/evidence/report digests recorded at completion. */
+	finalDigests?: {
+		manifest: string | null;
+		evidence: string;
+		report: string | null;
+	};
 }
 
 export interface RunLease {
@@ -150,42 +158,56 @@ export async function updateRunState(
 	const queue = getStateQueue(ws);
 
 	const next = queue.then(async (current) => {
-		// Read fresh from disk to catch external mutations
-		const fresh = readRunState(ws);
-
-		// Revision check — stale revision means another update happened
-		if (fresh.revision !== expectedRevision) {
-			throw { expected: expectedRevision, actual: fresh.revision } as StateConflict;
-		}
-
-		// Apply mutation
-		const updated = mutate(fresh);
-		updated.revision = fresh.revision + 1;
-		updated.updatedAt = Date.now();
-
-		// Atomic write: temp file → flush → rename
-		const statePath = path.join(ws.path, ".research", STATE_FILE);
-		const tmpPath = statePath + ".tmp";
-		const content = JSON.stringify(updated, null, 2);
-
-		fs.writeFileSync(tmpPath, content, "utf-8");
-
-		// If the platform supports fdatasync/fsync, do it here for durability
-		// (fs.writeFileSync already flushes on Node, but we're explicit)
 		try {
-			const fd = fs.openSync(tmpPath, "r");
-			fs.fdatasyncSync(fd);
-			fs.closeSync(fd);
-		} catch {
-			// fdatasync not supported on all platforms — best-effort
+			// Read fresh from disk to catch external mutations
+			const fresh = readRunState(ws);
+
+			// Revision check — stale revision means another update happened
+			if (fresh.revision !== expectedRevision) {
+				throw { expected: expectedRevision, actual: fresh.revision } as StateConflict;
+			}
+
+			// Apply mutation
+			const updated = mutate(fresh);
+			updated.revision = fresh.revision + 1;
+			updated.updatedAt = Date.now();
+
+			// Atomic write: temp file → flush → rename
+			const statePath = path.join(ws.path, ".research", STATE_FILE);
+			const tmpPath = statePath + ".tmp";
+			const content = JSON.stringify(updated, null, 2);
+
+			fs.writeFileSync(tmpPath, content, "utf-8");
+
+			// If the platform supports fdatasync/fsync, do it here for durability
+			// (fs.writeFileSync already flushes on Node, but we're explicit)
+			try {
+				const fd = fs.openSync(tmpPath, "r");
+				fs.fdatasyncSync(fd);
+				fs.closeSync(fd);
+			} catch {
+				// fdatasync not supported on all platforms — best-effort
+			}
+
+			fs.renameSync(tmpPath, statePath);
+
+			// Update the queue with the new state
+			stateQueues.set(ws.path, Promise.resolve(updated));
+
+			return updated;
+		} catch (err) {
+			// A rejected update (e.g. StateConflict) must not poison the
+			// per-workspace queue: recover by re-reading fresh disk state so
+			// the next caller can retry (re-audit) instead of inheriting a
+			// stale rejection forever.
+			try {
+				stateQueues.set(ws.path, Promise.resolve(readRunState(ws)));
+			} catch {
+				// State unreadable — leave the queue as-is; the next caller
+				// will surface the underlying error itself.
+			}
+			throw err;
 		}
-
-		fs.renameSync(tmpPath, statePath);
-
-		// Update the queue with the new state
-		stateQueues.set(ws.path, Promise.resolve(updated));
-
-		return updated;
 	});
 
 	// Enqueue this update behind any pending ones

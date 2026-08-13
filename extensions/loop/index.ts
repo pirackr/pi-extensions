@@ -14,11 +14,6 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { loadPackagedConfig } from "../research/config.ts";
-import {
-  verificationDefinitions,
-  getProfileVerifications,
-  getVerificationDefinition,
-} from "../research/verification.ts";
 import { parseScoreTable } from "../research/checkpoint.ts";
 import { LoopEngine, LoopEngineOptions } from "./engine.ts";
 import { registerLoopCommand } from "./command.ts";
@@ -38,8 +33,10 @@ import {
 	commitStaging,
 	reconcileTransition,
 	ensureGitExclude,
+	type Workspace,
 } from "../research/workspace.ts";
-import { newRunState, acquireLease } from "../research/state.ts";
+import { newRunState, acquireLease, readRunState, type StateConflict } from "../research/state.ts";
+import { researchCompletionGate, finalizeSuccess } from "../research/completion.ts";
 import { createRunManifest } from "../research/manifest.ts";
 import { ResearchPolicy } from "../research/policy.ts";
 import { evaluateCheckpoint } from "../research/checkpoint.ts";
@@ -50,8 +47,6 @@ import {
 	LoopState,
 	LoopStatus,
 	LoopUsage,
-	CompletionFailure,
-	CompletionPolicy,
 	normalizeState,
 	addCoordinatorUsage,
 	addNestedUsage,
@@ -72,7 +67,8 @@ const RESEARCH_PROGRAM_PATH = path.resolve(
 // --- Research configuration (loaded once at init time) ----------------------
 
 /**
- * Research config shape for the completion policy.
+ * Research config shape (used by the legacy research_checkpoint tool;
+ * completion gates now read from the retained workspace on disk).
  * Derived from the ResolvedResearchConfig packaged config.
  */
 interface ResearchConfigShape {
@@ -97,118 +93,9 @@ interface ResearchConfigShape {
 let researchConfig: ResearchConfigShape | null = null;
 let resolvedResearchConfig: ResolvedResearchConfig | null = null;
 
-// --- Research-specific completion policy -----------------------------------
-
-/**
- * Research completion policy: validates checkpoint evidence, report.org,
- * and verification artifacts against code-enforced thresholds.
- * Used by /research; the generic /loop uses makeGenericPolicy (no gates).
- */
-class ResearchCompletionPolicy implements CompletionPolicy {
-	private config: ResearchConfigShape;
-	private workingDir: string;
-	private loopId: string;
-	private profile: string;
-
-	constructor(
-		config: ResearchConfigShape,
-		state: Readonly<LoopState>,
-	) {
-		this.config = config;
-		this.workingDir = state.workingDir!;
-		this.loopId = state.id;
-		this.profile = state.profile ?? "standard";
-	}
-
-	async audit(state: Readonly<LoopState>): Promise<CompletionFailure[]> {
-		const failures: CompletionFailure[] = [];
-
-		// Gate 1: valid checkpoint evidence
-		const ce = state.checkpointEvidence;
-		if (!ce) {
-			failures.push({ code: "checkpoint", message: "missing (no evidence recorded)" });
-		} else if (ce.runId !== state.id) {
-			failures.push({ code: "checkpoint", message: `stale (run ${ce.runId}, expected ${state.id})` });
-		} else if (ce.round < 1) {
-			failures.push({ code: "checkpoint", message: `invalid round ${ce.round} (must be >= 1)` });
-		} else if (ce.verdict !== "PROCEED" && ce.verdict !== "PROCEED_WITH_GAPS") {
-			failures.push({ code: "checkpoint", message: `verdict is '${ce.verdict}' (need PROCEED or PROCEED_WITH_GAPS)` });
-		}
-
-		// Gate 2: report.org exists and is non-empty
-		if (!this.workingDir) {
-			failures.push({ code: "report", message: "no workingDir (report.org cannot be found)" });
-		} else {
-			const reportPath = path.join(this.workingDir, "report.org");
-			let reportExists = false;
-			try {
-				const stat = fs.statSync(reportPath);
-				reportExists = stat.isFile();
-				if (reportExists) {
-					const content = fs.readFileSync(reportPath, "utf8");
-					if (content.trim().length === 0) {
-						failures.push({ code: "report", message: "report.org is empty" });
-					}
-				}
-			} catch {
-				failures.push({ code: "report", message: "report.org missing" });
-			}
-		}
-
-		// Gate 3: verification artifacts
-		const profileCfg = this.config.profiles[this.profile];
-		const requiredAgents = profileCfg?.verification ?? [];
-
-		for (const agentName of requiredAgents) {
-			const def = getVerificationDefinition(agentName);
-			if (!def) {
-				failures.push({ code: "verification", message: `unknown agent '${agentName}'` });
-				continue;
-			}
-			// artifact path from definition's outputPath
-			const fileName = path.basename(def.outputPath);
-			if (!this.workingDir) {
-				failures.push({ code: "verification", message: `${fileName} missing (no workingDir)` });
-				continue;
-			}
-			const filePath = path.join(this.workingDir, "verification", fileName);
-			try {
-				let artifactResult: unknown;
-				let artifactPass = false;
-				try {
-					const content = fs.readFileSync(filePath, "utf8");
-					artifactResult = JSON.parse(content);
-					// Use the definition's pass predicate
-					artifactPass = def.passPredicate(artifactResult);
-				} catch (readErr) {
-					const msg = readErr instanceof Error ? readErr.message : String(readErr);
-					failures.push({ code: "verification", message: `${fileName} read error — ${msg}` });
-					continue;
-				}
-				// Check runId if present in artifact
-				const artifactRunId = (artifactResult as Record<string, unknown>)?.runId as string | undefined;
-				if (artifactRunId && artifactRunId !== state.id) {
-					failures.push({ code: "verification", message: `${fileName} runId mismatch (${artifactRunId} ≠ ${state.id})` });
-				} else if (!artifactPass) {
-					failures.push({ code: "verification", message: `${fileName} failed (pass predicate false)` });
-				}
-			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
-				failures.push({ code: "verification", message: `${fileName} malformed — ${msg}` });
-			}
-		}
-
-		return failures;
-	}
-}
-
 // --- Reusable tool execute functions (avoids duplication in registration) --
 
-function makeCompleteLoopExecute(
-	pi: ExtensionAPI,
-	engine: LoopEngine,
-	researchConfig: ResearchConfigShape | null,
-) {
+function makeCompleteLoopExecute(pi: ExtensionAPI, engine: LoopEngine) {
 	return async (
 		_toolCallId: string,
 		params: unknown,
@@ -240,24 +127,39 @@ function makeCompleteLoopExecute(
 			};
 		}
 
-		// Research-specific completion gates
+		// Research-specific completion gates — audit the retained workspace on
+		// disk (never the in-memory LoopState). Typed failures leave the loop
+		// active; a clean audit finalizes the run transactionally.
 		if (engine.state.commandName === "research") {
-			if (!researchConfig) {
+			const workingDir = engine.state.workingDir;
+			if (!workingDir) {
 				return {
 					content: [
 						{
 							type: "text",
-							text: "No research config loaded — cannot enforce verification gates.",
+							text: "No research workspace (workingDir) — cannot enforce completion gates.",
 						},
 					],
 					isError: true,
 				};
 			}
-			const policy = new ResearchCompletionPolicy(
-				researchConfig,
-				engine.state,
-			);
-			const failures = await policy.audit(engine.state);
+			const ws: Workspace = {
+				path: workingDir,
+				projectRoot: path.dirname(workingDir),
+				mission: engine.state.mission,
+				runId: "", // filled from the authoritative disk state below
+				transitionId: "",
+			};
+			let expectedRevision = -1;
+			try {
+				const diskState = readRunState(ws);
+				ws.runId = diskState.runId;
+				expectedRevision = diskState.revision;
+			} catch {
+				// Unreadable run-state — the gate below reports the precise failure.
+			}
+
+			const failures = await researchCompletionGate(ws);
 			if (failures.length > 0) {
 				return {
 					content: [
@@ -265,6 +167,32 @@ function makeCompleteLoopExecute(
 							type: "text",
 							text: "Research completion gates not met:\n" +
 								failures.map((f) => `  • ${f.code}: ${f.message}`).join("\n"),
+						},
+					],
+					isError: true,
+				};
+			}
+
+			// All gates pass — record the final outcome + digests in one
+			// transactional state write. A stale revision (concurrent write since
+			// the audit) re-audits instead of blind-retrying.
+			try {
+				const outcome = readRunState(ws).checkpointVerdict ?? "PROCEED";
+				await finalizeSuccess(ws, expectedRevision, outcome);
+			} catch (err) {
+				const conflict = err as Partial<StateConflict> | null;
+				const isConflict =
+					conflict != null &&
+					typeof conflict === "object" &&
+					typeof conflict.expected === "number" &&
+					typeof conflict.actual === "number";
+				return {
+					content: [
+						{
+							type: "text",
+							text: isConflict
+								? "Research state changed during the completion audit — re-audit the gates and retry."
+								: `Research completion finalize failed: ${err instanceof Error ? err.message : String(err)}`,
 						},
 					],
 					isError: true,
@@ -545,7 +473,7 @@ export default function piLoop(pi: ExtensionAPI) {
 			status: Type.String(),
 			guardId: Type.Optional(Type.String()),
 		}),
-		execute: makeCompleteLoopExecute(pi, engine, researchConfig),
+		execute: makeCompleteLoopExecute(pi, engine),
 	});
 
 	// --- Register research_checkpoint tool -------------------------------

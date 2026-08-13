@@ -276,8 +276,11 @@ export function canonicalizeUrl(u: string): string {
  * score.md content (UTF-8) + "||" + notes.md content (UTF-8).
  *
  * If either file is missing, the digest is over what's available.
+ *
+ * Exported so the completion gate (Task 11) can verify that the recorded
+ * checkpoint digest still matches the current evidence bytes.
  */
-function computeEvidenceDigest(scoreContent: string, ledgerContent: string): string {
+export function computeEvidenceDigest(scoreContent: string, ledgerContent: string): string {
 	const combined = `${scoreContent}\n||\n${ledgerContent}`;
 	return createHash("sha256").update(combined).digest("hex");
 }

@@ -7,6 +7,9 @@ import {
 	countUniqueSourceUrls,
 	effectiveSourceCount,
 } from "../extensions/loop/sources.ts";
+import { readRunState, updateRunState } from "../extensions/research/state.ts";
+import { computeEvidenceDigest } from "../extensions/research/checkpoint.ts";
+import type { Workspace } from "../extensions/research/workspace.ts";
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
 	getAgentDir: vi.fn().mockReturnValue("/mock/agent/dir"),
@@ -372,6 +375,7 @@ describe("full mocked /research run with quick profile", () => {
 	}
 
 	async function checkpoint(
+		dir: string,
 		profile: string,
 		round: number,
 		totalSources: number,
@@ -384,7 +388,52 @@ describe("full mocked /research run with quick profile", () => {
 			undefined,
 			mockCtx(cwd),
 		);
-		return result.content?.[0]?.text ?? "";
+		const text = result.content?.[0]?.text ?? "";
+		// Task 11: complete_loop's researchCompletionGate reads the checkpoint
+		// from the workspace run-state on disk, so persist the recorded verdict
+		// + evidence digest here (mirrors evaluateCheckpoint's persistence).
+		const verdict: "PROCEED" | "PROCEED_WITH_GAPS" | "CONTINUE" = text.includes(
+			"PROCEED_WITH_GAPS",
+		)
+			? "PROCEED_WITH_GAPS"
+			: text.includes("PROCEED")
+				? "PROCEED"
+				: "CONTINUE";
+		await persistCheckpoint(dir, profile, verdict);
+		return text;
+	}
+
+	/** Authoritative runId from the workspace run-state on disk. */
+	function diskRunId(dir: string): string {
+		return readRunState({ path: dir } as Workspace).runId;
+	}
+
+	/** Persist a checkpoint verdict + evidence digest to run-state.json. */
+	async function persistCheckpoint(
+		dir: string,
+		profile: string,
+		verdict: "PROCEED" | "PROCEED_WITH_GAPS" | "CONTINUE",
+	): Promise<void> {
+		const ws = { path: dir } as Workspace;
+		const state = readRunState(ws);
+		const score = fs.readFileSync(path.join(dir, "score.md"), "utf8");
+		let notes = "";
+		try {
+			notes = fs.readFileSync(path.join(dir, "notes.md"), "utf8");
+		} catch {
+			// notes.md missing — digest covers what's available
+		}
+		const digest = computeEvidenceDigest(score, notes);
+		await updateRunState(ws, state.revision, (c) => ({
+			...c,
+			checkpointVerdict: verdict,
+			checkpointDigest: digest,
+			checkpointUnmet: [],
+			checkpointUniqueSources: 20,
+			researchRound: c.researchRound,
+			loopIteration: 1,
+			checkpointProfile: profile,
+		}));
 	}
 
 	async function completeLoop(): Promise<{ text: string; isError?: boolean }> {
@@ -435,11 +484,11 @@ describe("full mocked /research run with quick profile", () => {
 			"* Deep Research — test mission full e2e\n\n** Executive Summary\n\n** Findings\n\n[[https://example.com/source-0][Source 0]]\n\n",
 		);
 
-		// Write verification/judge.json (version 1, runId === loop.id, pass=true, verdict=PASS).
-		writeJudge(dir, loopId);
+		// Write verification/judge.json (version 1, runId === workspace runId, pass=true, verdict=PASS).
+		writeJudge(dir, diskRunId(dir));
 
 		// Invoke research_checkpoint: round=3 (quick minRounds=3, maxRounds=3), sources=18 (>= quick minSources=15).
-		const cpText = await checkpoint("quick", 3, 18);
+		const cpText = await checkpoint(dir, "quick", 3, 18);
 		expect(cpText).toContain("PROCEED");
 
 		// Verify checkpointEvidence was recorded in persisted state.
@@ -497,7 +546,7 @@ describe("full mocked /research run with quick profile", () => {
 		);
 
 		// Invoke research_checkpoint at round=2 (effective max=2 reached).
-		const cpText = await checkpoint("quick", 2, 3);
+		const cpText = await checkpoint(dir, "quick", 2, 3);
 		expect(cpText).toContain("PROCEED_WITH_GAPS");
 
 		// Verify loop status is still "active" (not complete).

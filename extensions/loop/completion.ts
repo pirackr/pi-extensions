@@ -12,8 +12,8 @@ export interface CompletionPolicy {
 /**
  * Default (generic) policy: always permits completion.
  * No verification gates for the generic /loop command.
- * Research supplies its own policy (e.g. with checkpoints and verification
- * artifacts) — Task 11 replaces the default for /research.
+ * /research supplies its own gates via extensions/research/completion.ts
+ * (researchCompletionGate + finalizeSuccess) — Task 11.
  */
 export function makeGenericPolicy(): CompletionPolicy {
 	return {

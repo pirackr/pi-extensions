@@ -10,6 +10,21 @@
 import type { ProviderDescriptor } from "./contract.ts";
 
 // ---------------------------------------------------------------------------
+// Provider instance storage
+// ---------------------------------------------------------------------------
+
+/**
+ * Lightweight descriptor wrapper that can optionally carry a provider instance.
+ * The façade uses `instance` to call `executeAttempt` without a factory.
+ */
+export interface ProviderEntry {
+  descriptor: ProviderDescriptor;
+  /** Optional provider instance — used when the registry is used as the
+   * provider lookup for the façade's execute path. */
+  instance?: unknown;
+}
+
+// ---------------------------------------------------------------------------
 // EventBus — synchronous, no internal state
 // ---------------------------------------------------------------------------
 
@@ -29,37 +44,64 @@ interface EventBus {
 // ---------------------------------------------------------------------------
 
 class ProviderRegistry {
-  private descriptors = new Map<string, ProviderDescriptor>();
+  private entries = new Map<string, ProviderEntry>();
 
   /** Register a provider descriptor directly. Used by the façade's own
    * provider or by tests. */
   register(descriptor: ProviderDescriptor): void {
-    if (this.descriptors.has(descriptor.id)) {
+    if (this.entries.has(descriptor.id)) {
       throw new Error(
         `Duplicate provider id: "${descriptor.id}". Providers must have unique IDs.`,
       );
     }
-    this.descriptors.set(descriptor.id, descriptor);
+    this.entries.set(descriptor.id, { descriptor });
+  }
+
+  /** Register a provider descriptor with an optional instance. */
+  registerWithInstance(descriptor: ProviderDescriptor, instance: unknown): void {
+    if (this.entries.has(descriptor.id)) {
+      throw new Error(
+        `Duplicate provider id: "${descriptor.id}". Providers must have unique IDs.`,
+      );
+    }
+    this.entries.set(descriptor.id, { descriptor, instance });
   }
 
   /** Get all descriptors (load-order independent). */
   getAll(): ReadonlyArray<ProviderDescriptor> {
-    return Array.from(this.descriptors.values());
+    return Array.from(this.entries.values()).map((e) => e.descriptor);
   }
 
   /** Get a specific provider by id. */
   get(id: string): ProviderDescriptor | undefined {
-    return this.descriptors.get(id);
+    return this.entries.get(id)?.descriptor;
+  }
+
+  /** Get a provider instance by id (for the façade's execute path). */
+  getInstance(id: string): unknown {
+    return this.entries.get(id)?.instance;
   }
 
   /** Remove all entries (for test teardown). */
-  clear(): void {
-    this.descriptors.clear();
+  clear(): {
+    descriptors: Map<string, ProviderDescriptor>;
+    instances: Map<string, unknown>;
+  } {
+    const descriptors = new Map<string, ProviderDescriptor>();
+    const instances = new Map<string, unknown>();
+    for (const [id, entry] of this.entries) {
+      descriptors.set(id, entry.descriptor);
+      if (entry.instance) {
+        instances.set(id, entry.instance);
+      }
+    }
+    this.entries.clear();
+    return { descriptors, instances };
   }
 
   /** Count registered providers. */
   get size(): number {
-    return this.descriptors.size;
+    return this.entries.size;
   }
 }
 

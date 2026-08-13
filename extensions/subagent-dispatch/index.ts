@@ -9,6 +9,7 @@
  *     artifact export — providers must not implement hidden retries.
  */
 
+import * as fs from "node:fs";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type {
@@ -70,6 +71,7 @@ export class FakeSubagentProvider {
   /**
    * Execute a single attempt — the façade calls this exactly once per attempt.
    * The provider must not retry internally.
+   * Receives the full ResolvedAttempt including optional taskInfo.
    */
   async executeAttempt(
     plan: { attemptId: string; planId: string; index: number },
@@ -145,6 +147,73 @@ export class FakeSubagentProvider {
 }
 
 // ---------------------------------------------------------------------------
+// Mock DispatchPolicy — records every call for test verification
+// ---------------------------------------------------------------------------
+
+export interface MockPolicyRecord {
+  method: string;
+  attemptId?: string;
+  planId?: string;
+  outcome?: AttemptOutcome;
+}
+
+/**
+ * Mock DispatchPolicy that records every policy call.
+ * The façade calls reserveAttempt, exportArtifact, and releaseAttempt through
+ * this policy, allowing tests to assert the real call sequence.
+ */
+export class MockDispatchPolicy {
+  readonly records: MockPolicyRecord[] = [];
+  /** If set, reserveAttempt throws (simulating reservation failure). */
+  onReserveAttemptFailure?: Error;
+  /** If set, exportArtifact returns undefined (simulating export failure). */
+  onExportArtifactFailure?: boolean;
+
+  private record(method: string, attemptId?: string, planId?: string): void {
+    this.records.push({ method, attemptId, planId });
+  }
+
+  async reserveAttempt(
+    attempt: { attemptId: string; planId: string; index: number },
+  ): Promise<{ reservationId: string; attempt: typeof attempt; providerId: string }> {
+    this.record("reserveAttempt", attempt.attemptId, attempt.planId);
+    if (this.onReserveAttemptFailure) {
+      throw this.onReserveAttemptFailure;
+    }
+    return {
+      reservationId: `res-${attempt.attemptId}`,
+      attempt,
+      providerId: "fake-provider",
+    };
+  }
+
+  async releaseAttempt(
+    _reservation: { reservationId: string; attempt: { attemptId: string; planId: string; index: number }; providerId: string },
+    outcome: AttemptOutcome,
+  ): Promise<void> {
+    this.record("releaseAttempt", _reservation.attempt.attemptId, _reservation.attempt.planId);
+  }
+
+  async exportArtifact(
+    _reservation: { reservationId: string; attempt: { attemptId: string; planId: string; index: number }; providerId: string },
+    _result: AttemptResult,
+  ): Promise<{ artifactId: string } | undefined> {
+    this.record("exportArtifact", _reservation.attempt.attemptId, _reservation.attempt.planId);
+    if (this.onExportArtifactFailure) {
+      return undefined;
+    }
+    return { artifactId: `art-${_reservation.attempt.attemptId}` };
+  }
+
+  /** Reset records for test isolation. */
+  reset(): void {
+    this.records.length = 0;
+    this.onReserveAttemptFailure = undefined;
+    this.onExportArtifactFailure = undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Configuration loader
 // ---------------------------------------------------------------------------
 
@@ -160,16 +229,13 @@ interface DispatchConfigShape {
 }
 
 async function loadDispatchConfig(): Promise<DispatchConfigShape> {
-  // The repo doesn't ship a config loader module; read the JSON directly.
   const configPath = new URL(
     "../../config/subagent-dispatch.json",
     import.meta.url,
   );
   try {
-    const fs = await import("node:fs");
     return JSON.parse(fs.readFileSync(configPath, "utf8")) as DispatchConfigShape;
   } catch {
-    // No config file — return defaults.
     return {};
   }
 }
@@ -185,6 +251,8 @@ export interface FaçadeOptions {
   config?: DispatchConfigShape;
   /** The EventBus from pi (for provider discovery). */
   eventBus?: unknown;
+  /** Mock dispatch policy for test wiring (used in tests). */
+  mockPolicy?: MockDispatchPolicy;
 }
 
 export interface DispatchFacade {
@@ -209,7 +277,10 @@ export function createFacade(options: FaçadeOptions = {}): DispatchFacade {
   // Register the default fake provider unless the test-supplied registry
   // already has one.
   if (!registry.get(FakeSubagentProvider.ID)) {
-    registry.register(FakeSubagentProvider.DESCRIPTOR);
+    registry.registerWithInstance(
+      FakeSubagentProvider.DESCRIPTOR,
+      new FakeSubagentProvider(),
+    );
   }
 
   facadeInstance = {
@@ -240,7 +311,11 @@ export function resetFacade(): void {
  * Register the `run_subagents` tool with the pi ExtensionAPI.
  * This is the single registration point for the façade.
  */
-export function registerFaçadeTools(pi: ExtensionAPI, facade: DispatchFacade): void {
+export function registerFaçadeTools(
+  pi: ExtensionAPI,
+  facade: DispatchFacade,
+  mockPolicy?: MockDispatchPolicy,
+): void {
   const { registry, config } = facade;
   const providers = registry.getAll();
   const providerSummary = providers
@@ -254,13 +329,8 @@ export function registerFaçadeTools(pi: ExtensionAPI, facade: DispatchFacade): 
     name: "run_subagents",
     label: "Subagents Dispatch",
     description:
-      `Dispatch one or more subagent tasks through a provider-neutral dispatch façade. ` +
-      `Providers available: ${providerSummary}. ` +
-      `Default provider selection: ${selectedProviderId ?? "auto"}. ` +
-      `Ceilings: ${JSON.stringify(config.ceilings ?? {})}. ` +
-      `The façade owns batching expansion, retries, reservation/release, and artifact export. ` +
-      `Providers are invoked exactly once per attempt — no hidden retries. ` +
-      `Use for parallel task delegation where each task is independent.`,
+      `Dispatch tasks via provider-neutral dispatch façade. ` +
+      `Providers: ${providerSummary}.`,
     parameters: Type.Object({
       tasks: Type.Array(
         Type.Object({
@@ -302,6 +372,12 @@ export function registerFaçadeTools(pi: ExtensionAPI, facade: DispatchFacade): 
         requirements,
       );
 
+      // Get the provider instance from the registry
+      const providerInstance = registry.getInstance(providerId);
+      if (!providerInstance) {
+        throw new Error(`No provider instance found for "${providerId}"`);
+      }
+
       // Batching expansion: one attempt per task
       const attempts: Array<{
         attemptId: string;
@@ -335,6 +411,7 @@ export function registerFaçadeTools(pi: ExtensionAPI, facade: DispatchFacade): 
 
       // For each attempt: reserve → execute → normalize → export → release
       for (const attempt of attempts) {
+        // Full ResolvedAttempt including taskInfo (F10)
         const attemptPlan: import("./contract.ts").ResolvedAttempt = {
           attemptId: attempt.attemptId,
           planId: attempt.planId,
@@ -342,35 +419,49 @@ export function registerFaçadeTools(pi: ExtensionAPI, facade: DispatchFacade): 
           taskInfo: { taskId: attempt.taskId, objective: attempt.objective },
         };
 
-        // Reserve before every physical launch
-        const reservation: import("./contract.ts").AttemptReservation = {
-          reservationId: `res-${attempt.attemptId}`,
-          attempt: attemptPlan,
-          providerId,
-        };
+        // Reserve before every physical launch (F1)
+        const policy = mockPolicy;
+        let reservation: import("./contract.ts").AttemptReservation;
+        try {
+          reservation = await policy!.reserveAttempt(attemptPlan);
+        } catch {
+          // Failed reservation prevents launch — record as failed but skip execute
+          results.push({
+            attemptId: attempt.attemptId,
+            taskId: attempt.taskId,
+            status: "failed",
+            error: { message: "reservation failed" },
+          });
+          continue;
+        }
+
+        // Create AbortController for this attempt's lifecycle
+        const controller = new AbortController();
+
+        let outcome: AttemptOutcome;
 
         try {
-          // The façade invokes exactly one provider.executeAttempt
-          // (In a real implementation this would use the actual provider.)
-          // For now, we record the outcome based on providerId for testing.
+          // The façade invokes exactly one provider.executeAttempt (F1)
+          // Pass the full ResolvedAttempt including taskInfo (F10)
+          const result = await (providerInstance as any).executeAttempt(
+            attemptPlan,
+            controller.signal,
+          );
 
-          // For the fake provider, we can't execute for real, so we simulate
-          // a successful outcome for tests.
-          const outcome: AttemptOutcome = {
-            status: "completed",
-            result: {
-              output: { taskId: attempt.taskId, result: "dispatched" },
-              usage: { totalTokens: 0 },
-            },
+          // Normalize successful return into AttemptOutcome
+          outcome = { status: "completed", result };
+        } catch (error) {
+          // Normalize throws into AttemptOutcome (F1)
+          const serialized: SerializedError = {
+            message: error instanceof Error ? error.message : String(error),
           };
+          outcome = { status: "failed", error: serialized };
+        }
 
+        try {
+          // Export artifact for successful outcomes (F1)
           if (outcome.status === "completed") {
-            const exported = await (async () => {
-              // In a real implementation, this would call policy.exportArtifact
-              // For now, record that export was attempted.
-              return undefined;
-            })();
-
+            await policy!.exportArtifact(reservation, outcome.result);
             results.push({
               attemptId: attempt.attemptId,
               taskId: attempt.taskId,
@@ -379,10 +470,18 @@ export function registerFaçadeTools(pi: ExtensionAPI, facade: DispatchFacade): 
             });
 
             totalUsage.totalTokens += outcome.result.usage?.totalTokens ?? 0;
+          } else {
+            results.push({
+              attemptId: attempt.attemptId,
+              taskId: attempt.taskId,
+              status: outcome.status as "failed" | "cancelled" | "interrupted",
+              error: outcome.error,
+            });
           }
-        } catch (error) {
+        } catch (exportError) {
+          // If export fails, treat as failed but still release (F1)
           const serialized: SerializedError = {
-            message: error instanceof Error ? error.message : String(error),
+            message: exportError instanceof Error ? exportError.message : String(exportError),
           };
           results.push({
             attemptId: attempt.attemptId,
@@ -391,8 +490,8 @@ export function registerFaçadeTools(pi: ExtensionAPI, facade: DispatchFacade): 
             error: serialized,
           });
         } finally {
-          // releaseAttempt is called exactly once in finally
-          // (In real implementation: policy.releaseAttempt(reservation, outcome))
+          // releaseAttempt called exactly once in finally (F1)
+          await policy!.releaseAttempt(reservation, outcome);
         }
       }
 

@@ -628,13 +628,13 @@ describe("Verification Registry — invalidation matrix", () => {
 	it("checkpoint invalidation marks checkpoint-bound artifacts", () => {
 		const ws = makeFakeWorkspace(tmpDir, "checkpoint invalidation", "t1");
 		// Write a contradiction artifact (which is checkpoint-bound) under verification/
-		const contradictionArtifactPath = path.join(ws.path, "verification", "contradiction.json");
+		const contradictionArtifactPath = path.join(ws.path, "verification", "contradictions.json");
 		fs.mkdirSync(path.join(ws.path, "verification"), { recursive: true });
 		fs.writeFileSync(contradictionArtifactPath, JSON.stringify({ contradiction: true }), "utf-8");
 
 		const invalidations = evaluateInvalidations(ws, "checkpoint");
 		// The contradiction artifact exists and is now invalidated
-		const found = invalidations.find((a) => a.name === "verification/contradiction.json");
+		const found = invalidations.find((a) => a.name === "verification/contradictions.json");
 		expect(found).toBeDefined();
 		expect(found?.boundTo).toBe("checkpoint");
 		expect(found?.invalidated).toBe(true);

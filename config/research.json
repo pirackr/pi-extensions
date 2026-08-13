@@ -8,8 +8,8 @@
     "noProgress": 2,
     "scoreThreshold": 80,
     "retryCount": 1,
-    "maxSearches": 30,
-    "maxFetches": 30
+    "maxSearches": 20,
+    "maxFetches": 20
   },
   "profiles": {
     "quick": {

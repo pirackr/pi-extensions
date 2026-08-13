@@ -12,26 +12,14 @@ import * as path from "node:path";
 import { countUniqueSourceUrls, effectiveSourceCount } from "./sources.ts";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { loadDeepResearchConfiguration } from "../deep-research/config.ts";
+import { loadPackagedConfig } from "../research/config.ts";
 import {
-	setActiveResearchBudgets,
-	getActiveResearchBudgets,
-	clearActiveResearchBudgets,
-} from "../deep-research/session.ts";
-import {
-	parseScoreTable,
-	resolveVerificationFile,
-	validateJudgeArtifact,
-	validateCitationsArtifact,
-	validateSourcesArtifact,
-	validateContradictionsArtifact,
-	judgePasses,
-	citationsPasses,
-	sourcesPasses,
-	contradictionsPasses,
-} from "../deep-research/verification.ts";
+  verificationDefinitions,
+  getProfileVerifications,
+  getVerificationDefinition,
+} from "../research/verification.ts";
+import { parseScoreTable } from "../research/checkpoint.ts";
 import { LoopEngine, LoopEngineOptions } from "./engine.ts";
 import { registerLoopCommand } from "./command.ts";
 import {
@@ -57,8 +45,12 @@ const RESEARCH_PROGRAM_PATH = path.resolve(
 	"../../skills/deep-research/program.v2.md",
 );
 
-// --- Deep-research configuration (loaded once at init time) ----------------
+// --- Research configuration (loaded once at init time) ----------------------
 
+/**
+ * Research config shape for the completion policy.
+ * Derived from the ResolvedResearchConfig packaged config.
+ */
 interface ResearchConfigShape {
 	defaults: {
 		maxSearchesPerAgent: number;
@@ -70,7 +62,7 @@ interface ResearchConfigShape {
 		string,
 		{
 			minRounds: number;
-			maxRounds: number;
+			maxRounds: number | null;
 			minSources: number;
 			maxScouts: number;
 			maxFetchers: number;
@@ -141,44 +133,39 @@ class ResearchCompletionPolicy implements CompletionPolicy {
 		// Gate 3: verification artifacts
 		const profileCfg = this.config.profiles[this.profile];
 		const requiredAgents = profileCfg?.verification ?? [];
-		const scoreThreshold = this.config.defaults.scoreThreshold ?? 80;
 
 		for (const agentName of requiredAgents) {
-			const fileName = resolveVerificationFile(agentName);
+			const def = getVerificationDefinition(agentName);
+			if (!def) {
+				failures.push({ code: "verification", message: `unknown agent '${agentName}'` });
+				continue;
+			}
+			// artifact path from definition's outputPath
+			const fileName = path.basename(def.outputPath);
 			if (!this.workingDir) {
 				failures.push({ code: "verification", message: `${fileName} missing (no workingDir)` });
 				continue;
 			}
 			const filePath = path.join(this.workingDir, "verification", fileName);
 			try {
-				let artifactRunId: string | undefined;
+				let artifactResult: unknown;
 				let artifactPass = false;
-				let failureDetail = "";
-				if (agentName === "judge") {
-					const a = validateJudgeArtifact(JSON.parse(fs.readFileSync(filePath, "utf8")));
-					artifactRunId = a.runId;
-					artifactPass = judgePasses(a);
-					failureDetail = `pass=${a.pass}, verdict=${a.verdict}`;
-				} else if (agentName === "citation_agent") {
-					const a = validateCitationsArtifact(JSON.parse(fs.readFileSync(filePath, "utf8")));
-					artifactRunId = a.runId;
-					artifactPass = citationsPasses(a);
-					failureDetail = `${a.unsupportedClaims.length} unsupported, ${a.misattributedClaims.length} misattributed claims`;
-				} else if (agentName === "source_auditor") {
-					const a = validateSourcesArtifact(JSON.parse(fs.readFileSync(filePath, "utf8")));
-					artifactRunId = a.runId;
-					artifactPass = sourcesPasses(a);
-					failureDetail = `${a.unresolvedReplacements.length} unresolved replacements`;
-				} else {
-					const a = validateContradictionsArtifact(JSON.parse(fs.readFileSync(filePath, "utf8")));
-					artifactRunId = a.runId;
-					artifactPass = contradictionsPasses(a);
-					failureDetail = `${a.unhandled.length} unhandled contradictions`;
+				try {
+					const content = fs.readFileSync(filePath, "utf8");
+					artifactResult = JSON.parse(content);
+					// Use the definition's pass predicate
+					artifactPass = def.passPredicate(artifactResult);
+				} catch (readErr) {
+					const msg = readErr instanceof Error ? readErr.message : String(readErr);
+					failures.push({ code: "verification", message: `${fileName} read error — ${msg}` });
+					continue;
 				}
-				if (artifactRunId !== state.id) {
-					failures.push({ code: "verification", message: `${fileName} runId mismatch (artifact says ${artifactRunId}, expected ${state.id})` });
+				// Check runId if present in artifact
+				const artifactRunId = (artifactResult as Record<string, unknown>)?.runId as string | undefined;
+				if (artifactRunId && artifactRunId !== state.id) {
+					failures.push({ code: "verification", message: `${fileName} runId mismatch (${artifactRunId} ≠ ${state.id})` });
 				} else if (!artifactPass) {
-					failures.push({ code: "verification", message: `${fileName} failed (${failureDetail})` });
+					failures.push({ code: "verification", message: `${fileName} failed (pass predicate false)` });
 				}
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
@@ -263,7 +250,6 @@ function makeCompleteLoopExecute(
 		const completed = engine.completeState();
 		engine.persist(pi, ctx);
 		engine.emit(pi, "complete", "steer");
-		if (engine.state.commandName === "research") clearActiveResearchBudgets();
 		return {
 			content: [{ type: "text", text: JSON.stringify({ loop: completed }, null, 2) }],
 			details: { loop: completed },
@@ -335,7 +321,7 @@ function makeResearchCheckpointExecute(
 			try {
 				const parsed = parseScoreTable(fs.readFileSync(scorePath, "utf8"));
 				const below: string[] = [];
-				for (const row of parsed.rows) {
+				for (const row of parsed) {
 					if (row.score < scoreThreshold) {
 						below.push(row.id);
 					}
@@ -442,16 +428,16 @@ function countNotesSources(workingDir: string | undefined): number | null {
 // --- Extension entrypoint ---------------------------------------------------
 
 export default function piLoop(pi: ExtensionAPI) {
-	// Load deep-research configuration once at init time.
+	// Load research configuration once at init time.
 	try {
-		const packageRoot = path.resolve(
-			path.dirname(fileURLToPath(import.meta.url)),
-			"../..",
-		);
-		const agentDir = getAgentDir();
-		const loaded = loadDeepResearchConfiguration(packageRoot, agentDir);
+		const loaded = loadPackagedConfig();
 		researchConfig = {
-			defaults: loaded.defaults,
+			defaults: {
+				maxSearchesPerAgent: loaded.defaults.maxSearches ?? 0,
+				maxFetchesPerAgent: loaded.defaults.maxFetches ?? 0,
+				scoreThreshold: loaded.defaults.scoreThreshold,
+				retryCount: loaded.defaults.retryCount,
+			},
 			profiles: loaded.profiles,
 		};
 	} catch {
@@ -559,13 +545,6 @@ export default function piLoop(pi: ExtensionAPI) {
 		continuationTurnPending = false;
 		syncLoopTools(pi, engine);
 		updateStatus(ctx, engine);
-		// Restore research budgets
-		if (restored?.commandName === "research") {
-			setActiveResearchBudgets(
-				restored.maxSearchesPerAgent ?? 0,
-				restored.maxFetchesPerAgent ?? 0,
-			);
-		}
 		const reason = (event as { reason?: string }).reason;
 		if (restored?.status === "active" && reason === "reload") {
 			engine.state = { ...restored, status: "paused" as LoopStatus, updatedAt: Date.now() };

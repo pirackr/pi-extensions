@@ -89,17 +89,7 @@ export function registerLoopCommand(
 				const previous = engine.clearState();
 				engine.persist(pi, ctx);
 				engine.emit(pi, "cleared", "steer");
-				// research: clear active budgets
-				if (opts.isResearch) {
-					try {
-						const { clearActiveResearchBudgets } = await import(
-							"../deep-research/session.ts"
-						);
-						clearActiveResearchBudgets();
-					} catch {
-						/* ignore */
-					}
-				}
+
 				return;
 			}
 
@@ -285,17 +275,7 @@ export function registerLoopCommand(
 						return;
 					}
 				}
-				// Set active research budget
-				if (opts.isResearch) {
-					try {
-						const { setActiveResearchBudgets } = await import(
-							"../deep-research/session.ts"
-						);
-						setActiveResearchBudgets(maxSearchesPerAgent, maxFetchesPerAgent);
-					} catch {
-						/* ignore */
-					}
-				}
+
 			}
 
 			engine.persist(pi, ctx);

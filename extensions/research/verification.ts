@@ -166,6 +166,14 @@ export const verificationDefinitions: VerificationDefinition[] = [
     passPredicate: (result: unknown): boolean => {
       if (!result || typeof result !== "object") return false;
       const obj = result as Record<string, unknown>;
+      // Support old format ({ pass: boolean, verdict: "PASS" | "FAIL" | "CONDITIONAL_PASS" })
+      // and new format ({ score: number })
+      if (typeof obj.pass === "boolean") {
+        // Old format: pass=true only when verdict is "PASS"
+        const verdict = obj.verdict;
+        if (typeof verdict === "string") return obj.pass && verdict === "PASS";
+        return obj.pass;
+      }
       const score = obj.score;
       if (typeof score !== "number") return false;
       return score >= 80;
@@ -175,14 +183,26 @@ export const verificationDefinitions: VerificationDefinition[] = [
   {
     name: "citation_agent",
     description: "Map claims to exact source locations — returns claim→URL→snippet mapping",
-    outputPath: "verification/citation.json",
+    outputPath: "verification/citations.json",
     schemaVersion: "1.1.0",
     validatorId: "citation-v1",
     passPredicate: (result: unknown): boolean => {
       if (!result || typeof result !== "object") return false;
       const obj = result as Record<string, unknown>;
+      // Support old format ({ pass: boolean, unsupportedClaims, misattributedClaims })
+      // and new format ({ unverifiedClaims })
+      if (typeof obj.pass === "boolean") {
+        // Old format: pass=true only when claim fields are clean
+        const unsupported = obj.unsupportedClaims;
+        if (Array.isArray(unsupported) && unsupported.length > 0) return false;
+        const misattributed = obj.misattributedClaims;
+        if (Array.isArray(misattributed) && misattributed.length > 0) return false;
+        return obj.pass;
+      }
+      // If no unverifiedClaims field, treat as passing (no claims to verify)
+      if (!Object.prototype.hasOwnProperty.call(obj, "unverifiedClaims")) return true;
       const unverified = obj.unverifiedClaims;
-      if (!Array.isArray(unverified)) return true; // no claims to verify = pass
+      if (!Array.isArray(unverified)) return false;
       return unverified.length === 0;
     },
     profiles: ["intermediate", "deep"],
@@ -190,18 +210,23 @@ export const verificationDefinitions: VerificationDefinition[] = [
   {
     name: "source_auditor",
     description: "Rate all sources used in research — flag low-quality sources, suggest replacements",
-    outputPath: "verification/source.json",
+    outputPath: "verification/sources.json",
     schemaVersion: "1.1.1",
     validatorId: "source-auditor-v1",
     passPredicate: (result: unknown): boolean => {
       if (!result || typeof result !== "object") return false;
       const obj = result as Record<string, unknown>;
-      // Fail if any low-quality sources exist
+      // Support old format ({ pass: boolean, unresolvedReplacements })
+      // and new format ({ lowQualityCount, averageCredibility })
+      if (typeof obj.pass === "boolean") {
+        const unresolved = obj.unresolvedReplacements;
+        if (Array.isArray(unresolved) && unresolved.length > 0) return false;
+        return obj.pass;
+      }
       const lowQualityCount = obj.lowQualityCount;
       if (typeof lowQualityCount === "number" && lowQualityCount > 0) {
         return false;
       }
-      // Fail if average credibility is below the domain threshold
       const avgCred = obj.averageCredibility;
       if (typeof avgCred === "number" && avgCred < SOURCE_CREDIBILITY_THRESHOLD) {
         return false;
@@ -213,15 +238,35 @@ export const verificationDefinitions: VerificationDefinition[] = [
   {
     name: "contradiction_resolver",
     description: "Investigate and resolve contradictions between sources — returns resolution or flags as unresolved",
-    outputPath: "verification/contradiction.json",
+    outputPath: "verification/contradictions.json",
     schemaVersion: "1.2.0",
     validatorId: "contradiction-v1",
     passPredicate: (result: unknown): boolean => {
       if (!result || typeof result !== "object") return false;
       const obj = result as Record<string, unknown>;
-      const unresolved = obj.unresolvedContradictions;
-      if (!Array.isArray(unresolved)) return false;
-      return unresolved.length === 0;
+      // Support old format ({ pass: boolean, unhandled }) and new format ({ unresolvedContradictions })
+      if (typeof obj.pass === "boolean") {
+        // Old format: check that unhandled array is empty
+        const unhandled = obj.unhandled;
+        if (Array.isArray(unhandled) && unhandled.length > 0) return false;
+        const acknowledged = obj.acknowledged;
+        // If there are acknowledged contradictions, they must have whereInReport
+        if (Array.isArray(acknowledged)) {
+          for (const ack of acknowledged) {
+            if (typeof ack === "object" && ack !== null && !(ack as any).whereInReport) {
+              return false;
+            }
+          }
+        }
+        return obj.pass;
+      }
+      // Check new format fields
+      if (typeof obj.unresolvedContradictions !== "undefined") {
+        const unresolved = obj.unresolvedContradictions;
+        if (!Array.isArray(unresolved)) return false;
+        return unresolved.length === 0;
+      }
+      return false;
     },
     profiles: ["deep"],
   },

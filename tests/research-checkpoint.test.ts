@@ -565,6 +565,17 @@ describe("evaluateCheckpoint", () => {
 		expect(result.unmet.length).toBeGreaterThan(0);
 	});
 
+	it("fails closed when run-state is missing", async () => {
+		const ws = buildWs(tmpDir, "no-run-state", "nr");
+		// Note: no initWorkspace — no run-state.json exists.
+
+		const result = await evaluateCheckpoint(ws, 1, 1);
+		expect(result.verdict).toBe("CONTINUE");
+		expect(result.round).toBe(0); // no increment
+		expect(result.unmet).toContain("run-state not found");
+		expect(result.state).toBeUndefined();
+	});
+
 	it("fails closed when score.md is malformed", async () => {
 		const ws = buildWs(tmpDir, "malformed-score", "ms");
 		initWorkspace(ws, "standard");

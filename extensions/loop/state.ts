@@ -43,6 +43,8 @@ export interface LoopState {
 	workingDir?: string;
 	programSig?: string;
 	programInjected?: boolean;
+	/** Program content snapshot captured on first read (F5: never reread during a run). */
+	programSnapshot?: string;
 	maxSearchesPerAgent?: number;
 	maxFetchesPerAgent?: number;
 	checkpointEvidence?: {

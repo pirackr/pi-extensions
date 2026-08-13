@@ -84,7 +84,7 @@ interface ReservationBucket {
 }
 
 /** Frozen configuration snapshot loaded at construction. */
-interface FrozenConfig {
+export interface FrozenConfig {
 	/** Map of role name → resolved role config. */
 	roles: Record<string, ResolvedRole>;
 	/** Hard timeout ceiling in seconds (default 1800). */
@@ -144,7 +144,7 @@ function isStateConflict(err: unknown): err is StateConflict {
 // Role validation
 // ---------------------------------------------------------------------------
 
-function validateRoleConfig(name: string, role: Record<string, unknown>): void {
+function validateRoleConfig(name: string, role: ResolvedRole): void {
 	for (const key of Object.keys(role)) {
 		if (!KNOWN_ROLE_FIELDS.has(key)) {
 			throw new Error(`Unknown field '${key}' in role '${name}'.`);

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import type { Workspace } from "./workspace.ts";
-import type { RunState, StateConflict, Verdict } from "./state.ts";
+import type { RunState, StateConflict } from "./state.ts";
 import {
 	newRunState,
 	readRunState,
@@ -29,7 +29,7 @@ export interface LedgerRow {
 }
 
 export interface CheckpointResult {
-	state: RunState;
+	state: RunState | undefined;
 	verdict: Verdict;
 	round: number;
 	unmet: string[];
@@ -319,7 +319,7 @@ export async function evaluateCheckpoint(
 	const statePath = path.join(ws.path, ".research", "run-state.json");
 
 	// Read current state
-	let currentState: RunState;
+	let currentState: RunState | undefined;
 	try {
 		currentState = readRunState(ws);
 	} catch {

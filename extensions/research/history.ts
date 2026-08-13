@@ -18,6 +18,7 @@ import type { Workspace } from "./workspace.ts";
 import {
   newRunState,
   readRunState,
+  type RunState,
 } from "./state.ts";
 import type { LifecycleState } from "./lifecycle.ts";
 import {
@@ -119,7 +120,7 @@ function readWorkspaceLifecycle(
  * - For each candidate, tries to read its lifecycle/state
  * - Reports malformed workspaces without aborting
  */
-export function discoverWorkspaces(projectRoot: string): WorkspaceEntry[] {
+export function discoverWorkspaces(projectRoot: string): WorkspaceList {
   const entries: WorkspaceEntry[] = [];
   const malformed: Array<{ path: string; reason: string }> = [];
 
@@ -183,7 +184,7 @@ function buildWorkspaceEntry(workspacePath: string): WorkspaceEntry | null {
       const snapshot = JSON.parse(
         fs.readFileSync(lifecyclePath, "utf-8"),
       ) as { current: string; reason?: string | null; timestamp: number; history: Array<{ from: string | null; to: string; reason: string; timestamp: number }> };
-      lifecycle = snapshot.current;
+      lifecycle = snapshot.current as LifecycleState;
       reason = snapshot.reason ?? null;
       createdAt = snapshot.history[0]?.timestamp ?? createdAt;
       updatedAt = snapshot.timestamp;

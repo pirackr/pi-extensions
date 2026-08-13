@@ -828,7 +828,9 @@ function validateLayer(
 			// layer that supplies both profiles and roles.  The merged result
 			// is still validated exhaustively in validateFinalConfig.
 			const roleNames =
-				"roles" in raw ? new Set(Object.keys(raw.roles as Record<string, unknown>)) : new Set();
+				"roles" in raw
+					? new Set(Object.keys(raw.roles as Record<string, unknown>))
+					: new Set<string>();
 			validatePartialProfiles(raw, sourceLabel, roleNames);
 		}
 	}
@@ -880,7 +882,7 @@ export function resolveResearchConfig(
 	}
 
 	// Final schema validation
-	return validateFinalConfig(merged) as ResolvedResearchConfig;
+	return validateFinalConfig(merged) as unknown as ResolvedResearchConfig;
 }
 
 function validateFinalConfig(raw: Record<string, unknown>): Record<string, unknown> {

@@ -52,7 +52,7 @@ import {
 	addNestedUsage,
 } from "./state.ts";
 import { makeGenericPolicy } from "./completion.ts";
-import { programBlockFor } from "./program.ts";
+import { programBlockFor, truncate } from "./program.ts";
 
 const CUSTOM_TYPE = "pi-loop";
 const EVENT_TYPE = "pi-loop-event";
@@ -100,10 +100,15 @@ function makeCompleteLoopExecute(pi: ExtensionAPI, engine: LoopEngine) {
 	return async (
 		_toolCallId: string,
 		params: unknown,
-		_signal: AbortSignal,
-		_onUpdate: () => void,
+		_signal: AbortSignal | undefined,
+		_onUpdate:
+			| ((update: {
+					content: { type: string; text: string }[];
+					details?: unknown;
+			  }) => void)
+			| undefined,
 		ctx: ExtensionContext,
-	): Promise<{ content?: { type: string; text: string }[]; isError?: boolean; details?: unknown }> => {
+	): Promise<{ content: { type: string; text: string }[]; isError?: boolean; details?: unknown }> => {
 		const p = params as { status?: string; guardId?: string };
 		if (p.status !== "complete") {
 			return {
@@ -219,10 +224,15 @@ function makeResearchCheckpointExecute(
 	return async (
 		_toolCallId: string,
 		params: unknown,
-		_signal: AbortSignal,
-		_onUpdate: () => void,
+		_signal: AbortSignal | undefined,
+		_onUpdate:
+			| ((update: {
+					content: { type: string; text: string }[];
+					details?: unknown;
+			  }) => void)
+			| undefined,
 		ctx: ExtensionContext,
-	): Promise<{ content?: { type: string; text: string }[]; isError?: boolean }> => {
+	): Promise<{ content: { type: string; text: string }[]; isError?: boolean }> => {
 		const p = params as {
 			profile?: string;
 			round?: number;
@@ -308,7 +318,8 @@ function makeResearchCheckpointExecute(
 		}
 
 		const effectiveMax = engine.state?.maxRounds ?? profileCfg.maxRounds;
-		if (round >= effectiveMax) {
+		// null maxRounds = open-ended profile (no cap) — never treat as reached.
+		if (effectiveMax !== null && round >= effectiveMax) {
 			const verdict = issues.length > 0 ? "PROCEED_WITH_GAPS" : "PROCEED";
 			const verdictText =
 				verdict === "PROCEED_WITH_GAPS"

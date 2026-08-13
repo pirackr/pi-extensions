@@ -200,7 +200,7 @@ export class LoopEngine {
 	/**
 	 * Clear (cancel) the loop.
 	 */
-	clearState(): null {
+	clearState(): LoopState | null {
 		const result = this.loop;
 		this.loop = null;
 		return result;
@@ -300,7 +300,11 @@ export class LoopEngine {
 		this.emit(pi, kind, "followUp");
 	}
 
-	private emit(
+	/**
+	 * Emit a loop event message (public engine API — used by command.ts and
+	 * the wiring layer to notify the agent of state transitions).
+	 */
+	emit(
 		pi: ExtensionAPI,
 		kind: string,
 		deliverAs?: "steer" | "followUp" | "nextTurn",

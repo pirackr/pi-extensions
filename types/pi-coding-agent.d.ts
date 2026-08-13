@@ -68,6 +68,17 @@ declare module "@earendil-works/pi-coding-agent" {
 		hasUI: boolean;
 		cwd: string;
 		model: Model<any> | undefined;
+		/** Model registry for API-key resolution and model/provider enumeration. */
+		modelRegistry: {
+			getAll(): Array<{
+				id: string;
+				name: string;
+				provider: string;
+				reasoning: boolean;
+				input: Array<"text" | "image">;
+			}>;
+			getRegisteredProviderIds(): readonly string[];
+		};
 		sessionManager: {
 			getEntries(): SessionEntry[];
 			getBranch(fromId?: string): SessionEntry[];
@@ -247,6 +258,11 @@ declare module "@earendil-works/pi-coding-agent" {
 		): void;
 		getActiveTools(): string[];
 		setActiveTools(toolNames: string[]): void;
+		/** Extension event bus (runtime-provided; used for cross-extension discovery). */
+		events: {
+			emit(channel: string, data: unknown): void;
+			on(channel: string, handler: (data: unknown) => void): void;
+		};
 	}
 
 	export function getAgentDir(): string;

@@ -2,11 +2,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import type { Workspace } from "./workspace.ts";
-import type { RunState, StateConflict } from "./state.ts";
+import type { RunState, StateConflict, Verdict } from "./state.ts";
 import {
 	newRunState,
 	readRunState,
 	updateRunState,
+	Verdict,
 } from "./state.ts";
 import { loadPackagedConfig } from "./config.ts";
 
@@ -14,7 +15,8 @@ import { loadPackagedConfig } from "./config.ts";
 // Types
 // ---------------------------------------------------------------------------
 
-export type Verdict = "CONTINUE" | "PROCEED" | "PROCEED_WITH_GAPS";
+/** @deprecated Verdict is now defined in state.ts; re-exported for backwards compat. */
+export type { Verdict };
 
 export interface ScoreRow {
 	id: string;
@@ -45,13 +47,9 @@ const LEDGER_SEPARATOR = "| --- | --- | --- | --- | --- |";
 const MIN_SCORE_ROWS = 5;
 const MAX_SCORE_ROWS = 8;
 
-// Params to strip from URLs
+// Params to strip from URLs (non-UTM tracking params only —
+// all utm_* params are caught by startsWith("utm_") below)
 const STRIPPED_PARAMS = new Set([
-	"utm_source",
-	"utm_medium",
-	"utm_campaign",
-	"utm_term",
-	"utm_content",
 	"fbclid",
 	"gclid",
 	"dclid",
@@ -236,7 +234,7 @@ export function canonicalizeUrl(u: string): string {
 		// Delete tracked ad/UTM params (collect keys first to avoid mutation during iteration)
 		const allKeys = Array.from(params.keys());
 		for (const key of allKeys) {
-			if (STRIPPED_PARAMS.has(key) || key.startsWith("utm_")) {
+			if (key.startsWith("utm_") || STRIPPED_PARAMS.has(key)) {
 				params.delete(key);
 			}
 		}
@@ -332,15 +330,35 @@ export async function evaluateCheckpoint(
 		};
 	}
 
+	// ── F1: Verify run identity against the immutable manifest ────────────
+	const manifestPath = path.join(ws.path, ".research", "run.json");
+	if (fs.existsSync(manifestPath)) {
+		const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
+			runId: string;
+			workspace: string;
+		};
+		if (manifest.runId !== currentState.runId) {
+			throw new Error(
+				`Run-identity mismatch: manifest runId="${manifest.runId}" but state runId="${currentState.runId}". ` +
+					"Possible stale state from a different run.",
+			);
+		}
+		if (manifest.workspace !== ws.path) {
+			throw new Error(
+				`Run-identity mismatch: manifest workspace="${manifest.workspace}" but workspace="${ws.path}". ` +
+					"Possible stale state from a different run.",
+			);
+		}
+	}
+
 	// Check if we already have a recorded verdict for this loop iteration
-	// by checking loopIteration in the state (we'll store it)
-	const lastLoopIteration = (currentState as unknown as Record<string, unknown>)["loopIteration"] as number | undefined;
+	const lastLoopIteration = currentState.loopIteration;
 	if (lastLoopIteration === loopIteration) {
 		// Already evaluated this iteration — return recorded result
-		const unmet = ((currentState as unknown as Record<string, unknown>)["checkpointUnmet"] as string[]) ?? [];
-		const digest = ((currentState as unknown as Record<string, unknown>)["checkpointDigest"] as string) ?? "";
-		const verdict = ((currentState as unknown as Record<string, unknown>)["checkpointVerdict"] as Verdict) ?? "CONTINUE";
-		const round = (currentState as unknown as Record<string, unknown>)["researchRound"] as number ?? 0;
+		const unmet = currentState.checkpointUnmet ?? [];
+		const digest = currentState.checkpointDigest ?? "";
+		const verdict = currentState.checkpointVerdict ?? "CONTINUE";
+		const round = currentState.researchRound ?? 0;
 		return {
 			state: currentState,
 			verdict,
@@ -400,7 +418,7 @@ export async function evaluateCheckpoint(
 
 	// Load profile thresholds from config
 	const config = loadPackagedConfig();
-	const profileName = ((currentState as unknown as Record<string, unknown>)["checkpointProfile"] as string) ?? "standard";
+	const profileName = currentState.checkpointProfile ?? "standard";
 	const profileCfg = config.profiles[profileName];
 	if (!profileCfg) {
 		// Unknown profile — treat as having no thresholds (will fail all checks)
@@ -479,10 +497,10 @@ export async function evaluateCheckpoint(
 		// Retry with the fresh state's revision — but do NOT increment round
 		// on retry, as the first call already incremented (the queue serializes)
 		const freshState = readRunState(ws);
-		const unmetRetry = ((freshState as unknown as Record<string, unknown>)["checkpointUnmet"] as string[]) ?? [];
-		const digestRetry = ((freshState as unknown as Record<string, unknown>)["checkpointDigest"] as string) ?? "";
-		const verdictRetry = ((freshState as unknown as Record<string, unknown>)["checkpointVerdict"] as Verdict) ?? "CONTINUE";
-		const roundRetry = (freshState as unknown as Record<string, unknown>)["researchRound"] as number ?? currentRound;
+		const unmetRetry = freshState.checkpointUnmet ?? [];
+		const digestRetry = freshState.checkpointDigest ?? "";
+		const verdictRetry = freshState.checkpointVerdict ?? "CONTINUE";
+		const roundRetry = freshState.researchRound ?? currentRound;
 		return {
 			state: freshState,
 			verdict: verdictRetry,
@@ -501,7 +519,7 @@ export async function evaluateCheckpoint(
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Re-export from config for loadPackagedConfig
-// ---------------------------------------------------------------------------
+// ── Re-export from config for loadPackagedConfig ───────────────────────
+// Exported so consumers of checkpoint.ts can access the packaged config
+// without importing config.ts directly (backwards-compatibility surface).
 export { loadPackagedConfig } from "./config.ts";

@@ -1,11 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Workspace } from "./workspace.ts";
-import type { Verdict } from "./checkpoint.ts";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/** Verdict returned by checkpoint evaluation. */
+export type Verdict = "CONTINUE" | "PROCEED" | "PROCEED_WITH_GAPS";
 
 /** Typed conflict returned by `updateRunState` on stale revision. */
 export interface StateConflict {

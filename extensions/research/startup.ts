@@ -11,6 +11,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import type { ResolvedResearchConfig } from "./config.ts";
 import type {
 	Workspace,
@@ -395,7 +396,7 @@ export async function validateStartupContract(
 		);
 	}
 
-	const transitionId = `tr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+	const transitionId = `tr-${randomUUID().slice(0, 8)}`;
 	const runId = `${transitionId}-${profileName}`;
 
 	return {
@@ -489,6 +490,11 @@ export async function prepareAndActivateResearch(
 
 		// In a real implementation, this would prompt for confirmation.
 		// For now we throw to signal the caller needs to confirm.
+		// TODO [F4 — integration layer]: Replace this throw with an actual
+		// `ctx.ui.confirm()` call in the command handler that invokes this
+		// module. The handler should catch CONTRACT_REQUIRES_CONFIRMATION,
+		// present the contract to the user, and re-invoke with `yes: true`
+		// when confirmed (or clean up staging on rejection).
 		throw new Error(
 			`CONTRACT_REQUIRES_CONFIRMATION: ${display}`,
 		);

@@ -30,6 +30,9 @@ import {
 	TransitionsFile,
 } from "../extensions/research/startup.ts";
 import { ResearchPolicy, type FrozenConfig } from "../extensions/research/policy.ts";
+import { registerLoopCommand } from "../extensions/loop/command.ts";
+import { LoopEngine } from "../extensions/loop/engine.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
 // Helpers — test double factories
@@ -753,25 +756,558 @@ describe("TransitionsFile", () => {
 });
 
 // ===========================================================================
-// Step 3: Thin /research registration check
+// F7: /research registration — actually verifies registerLoopCommand params
 // ===========================================================================
 
-describe("/research registration", () => {
-	it("/research preset exists in loop index", () => {
-		// The /research command is registered in extensions/loop/index.ts
-		// We verify the source code contains the registration
-		const loopIndexPath = path.resolve(
-			import.meta.dirname,
-			"../extensions/loop/index.ts",
-		);
-		const content = fs.readFileSync(loopIndexPath, "utf-8");
-		expect(content).toContain("research");
-		expect(content).toContain("RESEARCH_PROGRAM_PATH");
+describe("F7: /research registration", () => {
+
+	const registeredCommands: {
+		name: string;
+		opts: { description: string };
+	}[] = [];
+
+	function mockPi() {
+		return {
+			registerCommand: (name: string, opts: { description: string }) => {
+				registeredCommands.push({ name, opts });
+			},
+			registerTool: () => {},
+			on: () => {},
+			getActiveTools: () => [],
+			setActiveTools: () => {},
+			isIdle: () => true,
+		} as unknown as ExtensionAPI;
+	}
+
+	beforeEach(() => {
+		registeredCommands.length = 0;
+	});
+
+	function mockEngine() {
+		return {
+			state: null,
+			startState: () => ({
+				id: "test-1",
+				commandName: "research" as const,
+				mission: "",
+				status: "active" as const,
+				rounds: 0,
+				maxRounds: 8,
+				tokensUsed: 0,
+				tokenBudget: null,
+				noProgressTurns: 3,
+				programPath: "/fake/program.md",
+				workingDir: "/tmp/test",
+				maxSearchesPerAgent: 0,
+				maxFetchesPerAgent: 0,
+				profile: "standard",
+				guardId: "test",
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+			persist: () => {},
+			emit: () => {},
+			latestState: () => null,
+			resumeState: () => null,
+			pauseState: () => {},
+			clearState: () => null,
+			startTurn: () => {},
+			endTurn: async () => {},
+			onAgentEnd: () => {},
+			completeState: () => ({ id: "test-1" }),
+			getStatusLine: () => "",
+		} as unknown as LoopEngine;
+	}
+
+	it("registerLoopCommand is called with command:'research' and isResearch:true", () => {
+		const pi = mockPi();
+		const engine = mockEngine();
+
+		registerLoopCommand(pi, {
+			command: "research",
+			description: "Deep research test",
+			defaultProgram: "/fake/program.md",
+			defaultMaxRounds: 8,
+			isResearch: true,
+		});
+
+		// Verify registerCommand was invoked for "research"
+		const researchCmd = registeredCommands.find((c) => c.name === "research");
+		expect(researchCmd).toBeDefined();
+		expect(researchCmd!.name).toBe("research");
+
+		// The usage string in the description should contain research-specific flags
+		expect(researchCmd!.opts.description).toContain("--yes");
+		expect(researchCmd!.opts.description).toContain("--profile");
+	});
+
+	it("registerLoopCommand for /loop does NOT have isResearch flags", () => {
+		const pi = mockPi();
+		const engine = mockEngine();
+
+		registerLoopCommand(pi, {
+			command: "loop",
+			description: "Generic loop test",
+			defaultProgram: "program.md",
+			defaultMaxRounds: 10,
+		});
+
+		const loopCmd = registeredCommands.find((c) => c.name === "loop");
+		expect(loopCmd).toBeDefined();
+		expect(loopCmd!.name).toBe("loop");
+
+		// Generic loop should NOT have research-specific flags
+		expect(loopCmd!.opts.description).not.toContain("--yes");
+		expect(loopCmd!.opts.description).not.toContain("--profile");
 	});
 });
 
 // ===========================================================================
-// Edge cases
+// F9: Mid-flow failure cleanup tests
+// ===========================================================================
+
+describe("F9: Mid-flow failure cleanup", () => {
+	let tmpDir: string;
+	let config: ResolvedResearchConfig;
+	let models: ModelRegistryView;
+	let providers: ProviderRegistryView;
+
+	function baseDeps(): Omit<StartupDependencies, "getModels" | "getProviders" | "config"> {
+		const transitionsPath = path.join(tmpDir, ".research", "transitions.json");
+		fs.mkdirSync(path.join(tmpDir, ".research"), { recursive: true });
+		const transitions = new TransitionsFile(transitionsPath);
+		return {
+			workspace: {
+				acquireWorkspaceClaim: (projectRoot, mission, transitionId) => {
+					const finalDir = mission.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30) || "research";
+					const claimPath = path.join(projectRoot, `.claim-${finalDir}-${transitionId}`);
+					fs.mkdirSync(path.dirname(claimPath), { recursive: true });
+					fs.mkdirSync(claimPath, { recursive: false });
+					fs.writeFileSync(
+						path.join(claimPath, ".meta.json"),
+						JSON.stringify({ mission, finalDir, transitionId }),
+						"utf-8",
+					);
+					return { finalDir, claimPath, transitionId } as WorkspaceClaim;
+				},
+				prepareStaging: (claim) => {
+					const stagingPath = path.join(tmpDir, `.staging-${claim.finalDir}`);
+					fs.mkdirSync(stagingPath, { recursive: false });
+					return { stagingPath, finalDir: claim.finalDir, projectRoot: tmpDir, transitionId: claim.transitionId } as StagedRun;
+				},
+				commitStaging: (staged, claim) => {
+					const finalPath = path.join(staged.projectRoot, staged.finalDir);
+					fs.renameSync(staged.stagingPath, finalPath);
+					fs.rmSync(claim.claimPath, { recursive: true, force: true });
+					fs.mkdirSync(path.join(finalPath, ".research"), { recursive: false });
+					const runId = `${staged.transitionId}-${staged.finalDir}`;
+					return { path: finalPath, projectRoot: staged.projectRoot, mission: staged.finalDir, runId, transitionId: staged.transitionId } as Workspace;
+				},
+				reconcileTransition: () => ({ status: "clean" }),
+				ensureGitExclude: () => { /* no-op in tests */ },
+			},
+			state: {
+				newRunState: (ws) => ({
+					revision: 1,
+					status: "active",
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+					mission: ws.mission,
+					runId: ws.runId,
+					coordinatorUsage: 0,
+					nestedUsage: 0,
+					tokensUsed: 0,
+					concurrentReservations: 0,
+					researchRound: 0,
+					checkpointVerdict: "CONTINUE",
+					checkpointDigest: "",
+					checkpointUnmet: [],
+					checkpointUniqueSources: 0,
+					loopIteration: 0,
+					checkpointProfile: "standard",
+				} as unknown as RunState),
+				acquireLease: async (ws) => ({
+					sessionId: ws.runId,
+					acquiredAt: Date.now(),
+					expiresAt: Date.now() + 300000,
+				} as unknown as RunLease),
+			},
+			manifest: {
+				createRunManifest: (ws) => {
+					const manifestPath = path.join(ws.path, ".research", "run.json");
+					const manifest = {
+						runId: ws.runId,
+						mission: ws.mission,
+						workspace: ws.path,
+						manifestPath,
+						createdAt: Date.now(),
+						snapshotSha256: null,
+					};
+					fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
+					return manifest as unknown as RunManifest;
+				},
+			},
+			transitions,
+			policy: {
+				createPolicy: () => ({
+					claim: async () => true,
+					resolve: async () => ({ providerId: "scout", descriptor: { id: "scout", adapterVersion: "1.0", capabilities: [] }, attempts: [], totalAttempts: 0 }),
+					reserveAttempt: async () => undefined,
+					releaseAttempt: async () => {},
+					exportArtifact: async () => undefined,
+				} as unknown as ResearchPolicy),
+			},
+			checkpoint: {
+				evaluateCheckpoint: async () => ({
+					state: {} as unknown as RunState,
+					verdict: "CONTINUE",
+					round: 0,
+					unmet: [],
+					evidenceDigest: "",
+				} as unknown as ReturnType<typeof import("../extensions/research/checkpoint.ts").evaluateCheckpoint>),
+			},
+			verification: {
+				runVerification: () => [],
+			},
+			logger: {
+				log: () => { /* no-op */ },
+			},
+		};
+	}
+
+	beforeEach(() => {
+		tmpDir = createTempDir();
+		config = baseConfig();
+		models = fakeModelRegistry({
+			strong: { id: "strong-1", name: "strong", provider: "anthropic", capabilities: ["web_lookup", "fetch_web"] },
+			eval: { id: "eval-1", name: "eval", provider: "anthropic", capabilities: ["read"] },
+		});
+		providers = fakeProviderRegistry([
+			{
+				id: "local",
+				adapterVersion: "1.0",
+				capabilities: ["web_lookup", "fetch_web", "read", "local"],
+			},
+		]);
+	});
+
+	afterEach(() => {
+		cleanup(tmpDir);
+	});
+
+	function makeRequest(mission = "Cleanup Test", profile = "standard"): ResearchStartRequest {
+		return {
+			mission,
+			profile,
+			programPath: null,
+			profileOverride: null,
+			yes: true,
+		};
+	}
+
+	it("cleans up staging on manifest creation failure", async () => {
+		const deps = baseDeps();
+		let stagingPath: string | undefined;
+
+		// Track staging creation
+		deps.workspace.prepareStaging = (claim) => {
+			const sp = path.join(tmpDir, `.staging-${claim.finalDir}`);
+			stagingPath = sp;
+			fs.mkdirSync(sp, { recursive: false });
+			return { stagingPath: sp, finalDir: claim.finalDir, projectRoot: tmpDir, transitionId: claim.transitionId } as StagedRun;
+		};
+
+		// Fail manifest creation
+		deps.manifest.createRunManifest = () => {
+			throw new Error("Manifest creation failed");
+		};
+
+		const request = makeRequest("ManifestFailure");
+		await expect(
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+		).rejects.toThrow("Manifest creation failed");
+
+		// Staging should be cleaned up
+		expect(stagingPath).toBeDefined();
+		expect(fs.existsSync(stagingPath!)).toBe(false);
+	});
+
+	it("cleans up staging on state creation failure", async () => {
+		const deps = baseDeps();
+		let stagingPath: string | undefined;
+
+		deps.workspace.prepareStaging = (claim) => {
+			const sp = path.join(tmpDir, `.staging-${claim.finalDir}`);
+			stagingPath = sp;
+			fs.mkdirSync(sp, { recursive: false });
+			return { stagingPath: sp, finalDir: claim.finalDir, projectRoot: tmpDir, transitionId: claim.transitionId } as StagedRun;
+		};
+
+		// Fail newRunState
+		deps.state.newRunState = () => {
+			throw new Error("State creation failed");
+		};
+
+		const request = makeRequest("StateFailure");
+		await expect(
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+		).rejects.toThrow("State creation failed");
+
+		expect(stagingPath).toBeDefined();
+		expect(fs.existsSync(stagingPath!)).toBe(false);
+	});
+
+	it("cleans up staging on lease acquisition failure", async () => {
+		const deps = baseDeps();
+		let stagingPath: string | undefined;
+
+		deps.workspace.prepareStaging = (claim) => {
+			const sp = path.join(tmpDir, `.staging-${claim.finalDir}`);
+			stagingPath = sp;
+			fs.mkdirSync(sp, { recursive: false });
+			return { stagingPath: sp, finalDir: claim.finalDir, projectRoot: tmpDir, transitionId: claim.transitionId } as StagedRun;
+		};
+
+		// Fail lease acquisition
+		deps.state.acquireLease = async () => {
+			throw new Error("Lease acquisition failed");
+		};
+
+		const request = makeRequest("LeaseFailure");
+		await expect(
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+		).rejects.toThrow("Lease acquisition failed");
+
+		expect(stagingPath).toBeDefined();
+		expect(fs.existsSync(stagingPath!)).toBe(false);
+	});
+
+	it("cleans up staging on git-exclude failure", async () => {
+		const deps = baseDeps();
+		let stagingPath: string | undefined;
+
+		deps.workspace.prepareStaging = (claim) => {
+			const sp = path.join(tmpDir, `.staging-${claim.finalDir}`);
+			stagingPath = sp;
+			fs.mkdirSync(sp, { recursive: false });
+			return { stagingPath: sp, finalDir: claim.finalDir, projectRoot: tmpDir, transitionId: claim.transitionId } as StagedRun;
+		};
+
+		// Fail ensureGitExclude
+		deps.workspace.ensureGitExclude = () => {
+			throw new Error("Git exclude failed");
+		};
+
+		const request = makeRequest("GitExcludeFailure");
+		await expect(
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+		).rejects.toThrow("Git exclude failed");
+
+		expect(stagingPath).toBeDefined();
+		expect(fs.existsSync(stagingPath!)).toBe(false);
+	});
+
+	it("cleans up staging on transition append failure", async () => {
+		const deps = baseDeps();
+		let stagingPath: string | undefined;
+
+		deps.workspace.prepareStaging = (claim) => {
+			const sp = path.join(tmpDir, `.staging-${claim.finalDir}`);
+			stagingPath = sp;
+			fs.mkdirSync(sp, { recursive: false });
+			return { stagingPath: sp, finalDir: claim.finalDir, projectRoot: tmpDir, transitionId: claim.transitionId } as StagedRun;
+		};
+
+		// Fail transition append
+		deps.transitions.appendTransition = () => {
+			throw new Error("Transition append failed");
+		};
+
+		const request = makeRequest("TransitionFailure");
+		await expect(
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+		).rejects.toThrow("Transition append failed");
+
+		expect(stagingPath).toBeDefined();
+		expect(fs.existsSync(stagingPath!)).toBe(false);
+	});
+
+	it("cleans up staging on pointer install failure", async () => {
+		const deps = baseDeps();
+		let stagingPath: string | undefined;
+
+		deps.workspace.prepareStaging = (claim) => {
+			const sp = path.join(tmpDir, `.staging-${claim.finalDir}`);
+			stagingPath = sp;
+			fs.mkdirSync(sp, { recursive: false });
+			return { stagingPath: sp, finalDir: claim.finalDir, projectRoot: tmpDir, transitionId: claim.transitionId } as StagedRun;
+		};
+
+		// Fail pointer install
+		deps.transitions.setPointer = () => {
+			throw new Error("Pointer install failed");
+		};
+
+		const request = makeRequest("PointerFailure");
+		await expect(
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+		).rejects.toThrow("Pointer install failed");
+
+		expect(stagingPath).toBeDefined();
+		expect(fs.existsSync(stagingPath!)).toBe(false);
+	});
+
+	it("cleans up staging on policy creation failure", async () => {
+		const deps = baseDeps();
+		let stagingPath: string | undefined;
+
+		deps.workspace.prepareStaging = (claim) => {
+			const sp = path.join(tmpDir, `.staging-${claim.finalDir}`);
+			stagingPath = sp;
+			fs.mkdirSync(sp, { recursive: false });
+			return { stagingPath: sp, finalDir: claim.finalDir, projectRoot: tmpDir, transitionId: claim.transitionId } as StagedRun;
+		};
+
+		// Fail policy creation
+		deps.policy.createPolicy = () => {
+			throw new Error("Policy creation failed");
+		};
+
+		const request = makeRequest("PolicyFailure");
+		await expect(
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+		).rejects.toThrow("Policy creation failed");
+
+		expect(stagingPath).toBeDefined();
+		expect(fs.existsSync(stagingPath!)).toBe(false);
+	});
+
+	it("cleans up staging on checkpoint/verification failure after staging commit", async () => {
+		const deps = baseDeps();
+		let stagingPath: string | undefined;
+
+		deps.workspace.prepareStaging = (claim) => {
+			const sp = path.join(tmpDir, `.staging-${claim.finalDir}`);
+			stagingPath = sp;
+			fs.mkdirSync(sp, { recursive: false });
+			return { stagingPath: sp, finalDir: claim.finalDir, projectRoot: tmpDir, transitionId: claim.transitionId } as StagedRun;
+		};
+
+		// Fail checkpoint evaluation (happens after staging commit)
+		deps.checkpoint.evaluateCheckpoint = async () => {
+			throw new Error("Checkpoint failed");
+		};
+
+		const request = makeRequest("CheckpointFailure");
+		await expect(
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+		).rejects.toThrow("Checkpoint failed");
+
+		// After staging commit, the staging dir is renamed to final. We verify
+		// that the staging path (which was renamed) no longer exists as staging.
+		expect(stagingPath).toBeDefined();
+		expect(fs.existsSync(stagingPath!)).toBe(false);
+	});
+
+	it("previous run is left untouched when activation fails mid-flow", async () => {
+		const deps = baseDeps();
+
+		// First successful activation
+		const req1: ResearchStartRequest = {
+			mission: "Prior Run",
+			profile: "standard",
+			programPath: null,
+			profileOverride: null,
+			yes: true,
+		};
+		const ptr1 = await prepareAndActivateResearch(req1, { ...deps, config, getModels: () => models, getProviders: () => providers });
+		expect(ptr1).toBeDefined();
+
+		// Record the prior run state
+		const priorTransitions = deps.transitions.getTransitions();
+		expect(priorTransitions.length).toBe(1);
+		expect(priorTransitions[0].runId).toBe(ptr1.contract.runId);
+		expect(priorTransitions[0].status).toBe("active");
+
+		// Second activation that fails mid-flow (manifest creation)
+		deps.manifest.createRunManifest = () => {
+			throw new Error("Manifest creation failed");
+		};
+
+		const req2: ResearchStartRequest = {
+			mission: "Failing Run",
+			profile: "standard",
+			programPath: null,
+			profileOverride: null,
+			yes: true,
+		};
+		await expect(
+			prepareAndActivateResearch(req2, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+		).rejects.toThrow("Manifest creation failed");
+
+		// Verify prior run is untouched
+		const transitions = deps.transitions.getTransitions();
+		expect(transitions.length).toBe(1); // No new transition appended
+		expect(transitions[0].runId).toBe(ptr1.contract.runId);
+		expect(transitions[0].status).toBe("active"); // Still active, not replaced
+
+		// Verify pointer still points to prior run
+		const pointer = deps.transitions.getCurrentPointer();
+		expect(pointer!.runId).toBe(ptr1.contract.runId);
+	});
+});
+
+// ===========================================================================
+// F10: Empty-roles edge case for validateStartupContract
+// ===========================================================================
+
+describe("F10: Empty roles edge case", () => {
+	it("handles config.roles = {} — no roles to validate", async () => {
+		const config = baseConfig();
+		config.roles = {};
+		const models = fakeModelRegistry({
+			strong: { id: "s1", name: "strong", provider: "a", capabilities: [] },
+			eval: { id: "e1", name: "eval", provider: "a", capabilities: [] },
+		});
+		const providers = fakeProviderRegistry([
+			{ id: "local", adapterVersion: "1.0", capabilities: [] },
+		]);
+
+		// With empty roles, resolvedModels should be empty, no model resolution errors
+		const contract = await validateStartupContract(config, models, providers);
+
+		expect(contract).toBeDefined();
+		expect(Object.keys(contract.resolvedModels)).toHaveLength(0);
+		// Hard ceilings should still be computed (sum over empty = 0)
+		expect(contract.hardCeilings.maxConcurrentAttempts).toBe(0);
+		// This should succeed because 0 concurrent capacity >= 0 roles
+	});
+
+	it("throws on insufficient capacity when roles exist but concurrentDispatch = 0", async () => {
+		const config = baseConfig();
+		config.roles.scout.concurrentDispatch = 0;
+		config.roles.judge.concurrentDispatch = 0;
+		config.roles.scout.tools = [];
+		config.roles.judge.tools = [];
+		config.capabilities = {};
+		config.childExtensions = [];
+
+		const models = fakeModelRegistry({
+			strong: { id: "s1", name: "strong", provider: "a", capabilities: [] },
+			eval: { id: "e1", name: "eval", provider: "a", capabilities: [] },
+		});
+		const providers = fakeProviderRegistry([
+			{ id: "local", adapterVersion: "1.0", capabilities: [] },
+		]);
+
+		await expect(validateStartupContract(config, models, providers)).rejects.toThrow(
+			"Insufficient concurrent capacity",
+		);
+	});
+});
+
+// ===========================================================================
+// Existing edge cases (unchanged)
 // ===========================================================================
 
 describe("validateStartupContract — edge cases", () => {

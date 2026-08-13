@@ -605,7 +605,7 @@ describe("LoopEngine — F3: addCoordinatorUsage wired into endTurn", () => {
 describe("LoopEngine — F5: programSnapshot prevents disk reread", () => {
 	it("first getProgramBlock captures snapshot from disk", () => {
 		const { engine, pi, ctx } = makeEngine();
-		const programPath = path.resolve(__dirname, "../skills/deep-research/program.v2.md");
+		const programPath = path.resolve(__dirname, "../skills/research/program.md");
 		const realProgram = fs.readFileSync(programPath, "utf8");
 		engine.startState({
 			commandName: "loop",
@@ -619,14 +619,14 @@ describe("LoopEngine — F5: programSnapshot prevents disk reread", () => {
 		(engine as never).getProgramBlock?.();
 		expect(engine.state?.programSnapshot).toBeDefined();
 		expect(engine.state?.programSnapshot).toContain("<program>");
-		expect(engine.state?.programSnapshot).toContain("Deep Research Program");
+		expect(engine.state?.programSnapshot).toContain("Research Program");
 	});
 
 	it("onAgentEnd uses snapshot for program block instead of reading disk", () => {
 		const { engine, pi, ctx } = makeEngine();
 		engine.startState({
 			commandName: "loop",
-			programPath: path.resolve(__dirname, "../skills/deep-research/program.v2.md"),
+			programPath: path.resolve(__dirname, "../skills/research/program.md"),
 			mission: "queue-snapshot test",
 			maxRounds: 5,
 			tokenBudget: null,

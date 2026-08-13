@@ -11,7 +11,7 @@ import { loadDeepResearchConfiguration } from "../extensions/deep-research/confi
 function createTempConfig(overrides?: Record<string, unknown>): string {
 	const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "deep-research-test-"));
 	const configDir = path.join(tmpDir, "config");
-	const agentsDir = path.join(tmpDir, "skills", "deep-research", "agents");
+	const agentsDir = path.join(tmpDir, "skills", "research", "agents");
 	fs.mkdirSync(configDir, { recursive: true });
 	fs.mkdirSync(agentsDir, { recursive: true });
 
@@ -87,7 +87,7 @@ function createTempConfig(overrides?: Record<string, unknown>): string {
 				tools: ["read", "grep", "find", "ls"],
 				access: "read",
 				timeoutSeconds: 300,
-				promptPath: "../skills/deep-research/agents/planner.md",
+				promptPath: "../skills/research/agents/planner.md",
 				resultFormat: "markdown",
 			},
 			scout_research: {
@@ -98,7 +98,7 @@ function createTempConfig(overrides?: Record<string, unknown>): string {
 				tools: ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 1800,
-				promptPath: "../skills/deep-research/agents/scout.md",
+				promptPath: "../skills/research/agents/scout.md",
 				resultFormat: "markdown",
 			},
 			fetcher: {
@@ -109,7 +109,7 @@ function createTempConfig(overrides?: Record<string, unknown>): string {
 				tools: ["read", "web_lookup", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 720,
-				promptPath: "../skills/deep-research/agents/fetcher.md",
+				promptPath: "../skills/research/agents/fetcher.md",
 				resultFormat: "markdown",
 			},
 			consolidator: {
@@ -120,7 +120,7 @@ function createTempConfig(overrides?: Record<string, unknown>): string {
 				tools: ["read", "write", "edit", "grep", "find", "ls"],
 				access: "write",
 				timeoutSeconds: 900,
-				promptPath: "../skills/deep-research/agents/consolidator.md",
+				promptPath: "../skills/research/agents/consolidator.md",
 				resultFormat: "markdown",
 			},
 			fragment_writer: {
@@ -131,7 +131,7 @@ function createTempConfig(overrides?: Record<string, unknown>): string {
 				tools: ["read", "grep", "find", "ls"],
 				access: "read",
 				timeoutSeconds: 1200,
-				promptPath: "../skills/deep-research/agents/fragment-writer.md",
+				promptPath: "../skills/research/agents/fragment-writer.md",
 				resultFormat: "org",
 			},
 			judge: {
@@ -142,7 +142,7 @@ function createTempConfig(overrides?: Record<string, unknown>): string {
 				tools: ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 1200,
-				promptPath: "../skills/deep-research/agents/judge.md",
+				promptPath: "../skills/research/agents/judge.md",
 				resultFormat: "markdown",
 			},
 			citation_agent: {
@@ -153,7 +153,7 @@ function createTempConfig(overrides?: Record<string, unknown>): string {
 				tools: ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 720,
-				promptPath: "../skills/deep-research/agents/citation-agent.md",
+				promptPath: "../skills/research/agents/citation-agent.md",
 				resultFormat: "markdown",
 			},
 			source_auditor: {
@@ -164,7 +164,7 @@ function createTempConfig(overrides?: Record<string, unknown>): string {
 				tools: ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 720,
-				promptPath: "../skills/deep-research/agents/source-auditor.md",
+				promptPath: "../skills/research/agents/source-auditor.md",
 				resultFormat: "markdown",
 			},
 			contradiction_resolver: {
@@ -175,7 +175,7 @@ function createTempConfig(overrides?: Record<string, unknown>): string {
 				tools: ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 960,
-				promptPath: "../skills/deep-research/agents/contradiction-resolver.md",
+				promptPath: "../skills/research/agents/contradiction-resolver.md",
 				resultFormat: "markdown",
 			},
 		},
@@ -233,7 +233,7 @@ describe("loadDeepResearchConfiguration", () => {
 			model: "strong",
 			access: "write",
 			promptPath: expect.stringContaining(
-				"skills/deep-research/agents/consolidator.md",
+				"skills/research/agents/consolidator.md",
 			),
 		});
 		fs.rmSync(agentDir, { recursive: true, force: true });
@@ -251,7 +251,7 @@ describe("loadDeepResearchConfiguration", () => {
 			model: "strong",
 			access: "read",
 			promptPath: expect.stringContaining(
-				"skills/deep-research/agents/fragment-writer.md",
+				"skills/research/agents/fragment-writer.md",
 			),
 		});
 		fs.rmSync(agentDir, { recursive: true, force: true });
@@ -356,7 +356,7 @@ describe("loadDeepResearchConfiguration", () => {
 				configDir,
 				"..",
 				"skills",
-				"deep-research",
+				"research",
 				"agents",
 				"scout.md",
 			),
@@ -366,7 +366,7 @@ describe("loadDeepResearchConfiguration", () => {
 				configDir,
 				"..",
 				"skills",
-				"deep-research",
+				"research",
 				"agents",
 				"judge.md",
 			),
@@ -398,7 +398,7 @@ describe("loadDeepResearchConfiguration", () => {
 					tools: ["read"],
 					access: "read",
 					timeoutSeconds: 300,
-					promptPath: "../skills/deep-research/agents/scout.md",
+					promptPath: "../skills/research/agents/scout.md",
 					resultFormat: "markdown",
 					unknownField: "should be rejected",
 				},
@@ -424,7 +424,7 @@ describe("loadDeepResearchConfiguration", () => {
 					tools: ["read"],
 					access: "read",
 					timeoutSeconds: 300,
-					promptPath: "../skills/deep-research/agents/scout.md",
+					promptPath: "../skills/research/agents/scout.md",
 					resultFormat: "markdown",
 				},
 			},
@@ -448,7 +448,7 @@ describe("loadDeepResearchConfiguration", () => {
 					tools: ["read"],
 					access: "read",
 					timeoutSeconds: 300,
-					promptPath: "../skills/deep-research/agents/scout.md",
+					promptPath: "../skills/research/agents/scout.md",
 					resultFormat: "markdown",
 				},
 			},
@@ -472,7 +472,7 @@ describe("loadDeepResearchConfiguration", () => {
 					tools: ["read"],
 					access: "admin",
 					timeoutSeconds: 300,
-					promptPath: "../skills/deep-research/agents/scout.md",
+					promptPath: "../skills/research/agents/scout.md",
 					resultFormat: "markdown",
 				},
 			},
@@ -497,7 +497,7 @@ describe("loadDeepResearchConfiguration", () => {
 					tools: "not-an-array",
 					access: "read",
 					timeoutSeconds: 300,
-					promptPath: "../skills/deep-research/agents/scout.md",
+					promptPath: "../skills/research/agents/scout.md",
 					resultFormat: "markdown",
 				},
 			},
@@ -522,7 +522,7 @@ describe("loadDeepResearchConfiguration", () => {
 					tools: ["read"],
 					access: "read",
 					timeoutSeconds: 300,
-					promptPath: "../skills/deep-research/agents/nonexistent.md",
+					promptPath: "../skills/research/agents/nonexistent.md",
 					resultFormat: "markdown",
 				},
 			},
@@ -546,7 +546,7 @@ describe("loadDeepResearchConfiguration", () => {
 					tools: ["read"],
 					access: "read",
 					timeoutSeconds: 5,
-					promptPath: "../skills/deep-research/agents/scout.md",
+					promptPath: "../skills/research/agents/scout.md",
 					resultFormat: "markdown",
 				},
 			},
@@ -570,7 +570,7 @@ describe("loadDeepResearchConfiguration", () => {
 					tools: ["read"],
 					access: "read",
 					timeoutSeconds: 300,
-					promptPath: "../skills/deep-research/agents/scout.md",
+					promptPath: "../skills/research/agents/scout.md",
 					resultFormat: "html",
 				},
 			},
@@ -604,7 +604,7 @@ describe("loadDeepResearchConfiguration", () => {
 					tools: ["read"],
 					access: "read",
 					timeoutSeconds: 1200,
-					promptPath: "../skills/deep-research/agents/judge.md",
+					promptPath: "../skills/research/agents/judge.md",
 					resultFormat: "markdown",
 				},
 			},
@@ -625,7 +625,7 @@ describe("loadDeepResearchConfiguration", () => {
 		const userAgentsDir = path.join(
 			agentDir,
 			"skills",
-			"deep-research",
+			"research",
 			"agents",
 		);
 		fs.mkdirSync(userAgentsDir, { recursive: true });
@@ -643,7 +643,7 @@ describe("loadDeepResearchConfiguration", () => {
 					tools: ["read"],
 					access: "read",
 					timeoutSeconds: 600,
-					promptPath: "../skills/deep-research/agents/scout.md",
+					promptPath: "../skills/research/agents/scout.md",
 					resultFormat: "markdown",
 				},
 			},
@@ -723,7 +723,7 @@ describe("loadDeepResearchConfiguration", () => {
 						tools: ["read"],
 						access: "write",
 						timeoutSeconds: 300,
-						promptPath: "../skills/deep-research/agents/scout.md",
+						promptPath: "../skills/research/agents/scout.md",
 						resultFormat: "markdown",
 					},
 				},

@@ -58,10 +58,11 @@ const CUSTOM_TYPE = "pi-loop";
 const EVENT_TYPE = "pi-loop-event";
 const DEFAULT_MAX_ROUNDS = 10;
 
-// Bundled deep-research program — the default program for /research.
+// Bundled research program — the default program for /research. Resolved
+// from this module's location so it works regardless of cwd.
 const RESEARCH_PROGRAM_PATH = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
-	"../../skills/deep-research/program.v2.md",
+	"../../skills/research/program.md",
 );
 
 // --- Research configuration (loaded once at init time) ----------------------
@@ -429,7 +430,7 @@ export default function piLoop(pi: ExtensionAPI) {
 	registerLoopCommand(pi, {
 		command: "research",
 		description:
-			"Deep research: run the bundled research program (program.v2.md) as an autonomous loop — searches, fetches sources, and compiles report.org (claim-level citations) into a retained per-run workspace under the project root.",
+			"Deep research: run the bundled research program (program.md) as an autonomous loop — searches, fetches sources, and compiles report.org (claim-level citations) into a retained per-run workspace under the project root.",
 		defaultProgram: RESEARCH_PROGRAM_PATH,
 		defaultMaxRounds: researchConfig?.profiles.standard?.maxRounds ?? 8,
 		isResearch: true,

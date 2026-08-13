@@ -48,7 +48,7 @@
       "tools": ["read", "grep", "find", "ls"],
       "access": "read",
       "timeoutSeconds": 300,
-      "promptPath": "../skills/deep-research/agents/planner.md",
+      "promptPath": "../skills/research/agents/planner.md",
       "resultFormat": "markdown"
     },
     "scout_research": {
@@ -58,7 +58,7 @@
       "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
       "access": "read",
       "timeoutSeconds": 1800,
-      "promptPath": "../skills/deep-research/agents/scout.md",
+      "promptPath": "../skills/research/agents/scout.md",
       "resultFormat": "markdown"
     },
     "fetcher": {
@@ -68,7 +68,7 @@
       "tools": ["read", "web_lookup", "fetch_web"],
       "access": "read",
       "timeoutSeconds": 720,
-      "promptPath": "../skills/deep-research/agents/fetcher.md",
+      "promptPath": "../skills/research/agents/fetcher.md",
       "resultFormat": "markdown"
     },
     "consolidator": {
@@ -78,7 +78,7 @@
       "tools": ["read", "write", "edit", "grep", "find", "ls"],
       "access": "write",
       "timeoutSeconds": 900,
-      "promptPath": "../skills/deep-research/agents/consolidator.md",
+      "promptPath": "../skills/research/agents/consolidator.md",
       "resultFormat": "markdown"
     },
     "fragment_writer": {
@@ -88,7 +88,7 @@
       "tools": ["read", "grep", "find", "ls"],
       "access": "read",
       "timeoutSeconds": 1200,
-      "promptPath": "../skills/deep-research/agents/fragment-writer.md",
+      "promptPath": "../skills/research/agents/fragment-writer.md",
       "resultFormat": "org"
     },
     "judge": {
@@ -98,7 +98,7 @@
       "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
       "access": "read",
       "timeoutSeconds": 1200,
-      "promptPath": "../skills/deep-research/agents/judge.md",
+      "promptPath": "../skills/research/agents/judge.md",
       "resultFormat": "markdown"
     },
     "citation_agent": {
@@ -108,7 +108,7 @@
       "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
       "access": "read",
       "timeoutSeconds": 720,
-      "promptPath": "../skills/deep-research/agents/citation-agent.md",
+      "promptPath": "../skills/research/agents/citation-agent.md",
       "resultFormat": "markdown"
     },
     "source_auditor": {
@@ -118,7 +118,7 @@
       "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
       "access": "read",
       "timeoutSeconds": 720,
-      "promptPath": "../skills/deep-research/agents/source-auditor.md",
+      "promptPath": "../skills/research/agents/source-auditor.md",
       "resultFormat": "markdown"
     },
     "contradiction_resolver": {
@@ -128,7 +128,7 @@
       "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
       "access": "read",
       "timeoutSeconds": 960,
-      "promptPath": "../skills/deep-research/agents/contradiction-resolver.md",
+      "promptPath": "../skills/research/agents/contradiction-resolver.md",
       "resultFormat": "markdown"
     }
   }

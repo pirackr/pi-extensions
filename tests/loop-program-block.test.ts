@@ -75,11 +75,11 @@ describe("programBlockFor", () => {
 // Prompt-discovery tests: verify agent prompt files contain the required
 // coordinator-summary, artifact, and verification-JSON instructions.
 // These live here because they exercise the same program-block loader path
-// (the loop injects program.v2.md each round; the agent prompts are
+// (the loop injects program.md each round; the agent prompts are
 // referenced from that document and must conform to the same contract).
-describe("deep-research prompt contract", () => {
-	const agentsDir = path.resolve("skills/deep-research/agents");
-	const programPath = path.resolve("skills/deep-research/program.v2.md");
+describe("research prompt contract", () => {
+	const agentsDir = path.resolve("skills/research/agents");
+	const programPath = path.resolve("skills/research/program.md");
 
 	const agentFiles = [
 		"planner.md",
@@ -116,7 +116,7 @@ describe("deep-research prompt contract", () => {
 		},
 	];
 
-	describe("program.v2.md", () => {
+	describe("program.md", () => {
 		const content = fs.readFileSync(programPath, "utf8");
 
 		it("contains coordinator-summary block reference", () => {

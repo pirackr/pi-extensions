@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-const REPO_ROOT = path.resolve("skills/deep-research");
+const REPO_ROOT = path.resolve("skills/research");
 const AGENTS_DIR = path.join(REPO_ROOT, "agents");
 
 const AGENT_FILES = [
@@ -41,8 +41,8 @@ const RESOLVABLE_AGENT_NAMES = new Set([
 ]);
 
 describe("deep-research-program contract", () => {
-	describe("program.v2.md — no embedded runtime configuration", () => {
-		const program = readMd("program.v2.md");
+	describe("program.md — no embedded runtime configuration", () => {
+		const program = readMd("program.md");
 
 		it("does not contain profile threshold tables with numeric values", () => {
 			// Match lines like "| quick | 10 | 15 | 10 |" etc.
@@ -86,14 +86,14 @@ describe("deep-research-program contract", () => {
 			// It's OK to reference the config file or "active profile's config";
 			// not OK to embed literal thresholds
 			const hasConfigRef =
-				program.includes("config/deep-research.json") ||
+				program.includes("config/research.json") ||
 				program.includes("active profile's config");
 			expect(hasConfigRef).toBe(true);
 		});
 
 		it("does not embed per-agent runtime config (model/tools/access/timeout) adjacent to dispatches", () => {
 			// Within run_subagents code blocks, no per-agent runtime config fields
-			// are allowed — those belong in config/deep-research.json
+			// are allowed — those belong in config/research.json
 			const blockPattern = /```js\s*([\s\S]*?)```/g;
 			let block: RegExpExecArray | null;
 			while ((block = blockPattern.exec(program)) !== null) {
@@ -120,8 +120,8 @@ describe("deep-research-program contract", () => {
 		});
 	});
 
-	describe("program.v2.md — subagent retry and web-limit guardrails", () => {
-		const program = readMd("program.v2.md");
+	describe("program.md — subagent retry and web-limit guardrails", () => {
+		const program = readMd("program.md");
 
 		it("forbids coordinator-invented web search and fetch caps", () => {
 			expect(program).toContain("webSearchMaxLookups");
@@ -137,8 +137,8 @@ describe("deep-research-program contract", () => {
 		});
 	});
 
-	describe("program.v2.md — dispatch names resolve to registered profiles", () => {
-		const program = readMd("program.v2.md");
+	describe("program.md — dispatch names resolve to registered profiles", () => {
+		const program = readMd("program.md");
 
 		it('every agent: "..." literal in run_subagents examples is a registered profile', () => {
 			// Parse every agent: "..." literal in JS run_subagents examples
@@ -166,8 +166,8 @@ describe("deep-research-program contract", () => {
 		});
 	});
 
-	describe("program.v2.md — single-task run_subagents examples", () => {
-		const program = readMd("program.v2.md");
+	describe("program.md — single-task run_subagents examples", () => {
+		const program = readMd("program.md");
 
 		it("contains no multi-task arrays in run_subagents examples", () => {
 			// Multi-task would look like tasks: [\n    { ... },\n    { ... }\n  ]
@@ -177,8 +177,8 @@ describe("deep-research-program contract", () => {
 		});
 	});
 
-	describe("program.v2.md — valid org heading markers in report structure", () => {
-		const program = readMd("program.v2.md");
+	describe("program.md — valid org heading markers in report structure", () => {
+		const program = readMd("program.md");
 
 		it("contains valid org heading markers (*, **, ***) in report structure guidance", () => {
 			// The report structure section should use *, **, *** as heading markers
@@ -199,8 +199,8 @@ describe("deep-research-program contract", () => {
 		});
 	});
 
-	describe("program.v2.md — coordinator-summary and artifact-block instructions", () => {
-		const program = readMd("program.v2.md");
+	describe("program.md — coordinator-summary and artifact-block instructions", () => {
+		const program = readMd("program.md");
 
 		it("instructs returning the coordinator-summary block", () => {
 			expect(program).toMatch(/<coordinator-summary>/);

@@ -2,6 +2,12 @@
 #+DATE: 2026-08-05
 #+AUTHOR: /research run — Mission 2 (deep profile)
 
+* SUPERSEDED — see docs/006-deep-research-spec.md
+This report is a research-run artifact from the old engine. The authoritative
+feature documentation is [[./006-deep-research-spec.md]] (loop + research
+engine, config owner, completion gates, verification, lifecycle, resume);
+read that instead.
+
 * Executive Summary
 
 - Deep research quality is driven less by any single model and more by *system design*: externalized plans, isolated sub-agent contexts, filesystem handoff, and search-grounded verification move quality more than raw prompt cleverness. [[https://www.anthropic.com/engineering/multi-agent-research-system][Anthropic multi-agent system]] [[https://www.langchain.com/blog/open-deep-research][LangChain open deep research]]

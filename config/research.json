@@ -1,5 +1,5 @@
 {
-  "defaultProgram": "deep-research",
+  "defaultProgram": "skills/research/program.md",
   "defaultProfile": "standard",
   "defaultProvider": null,
   "defaults": {
@@ -83,21 +83,6 @@
       "maxSearches": 10,
       "maxFetches": 30,
       "retention": "ephemeral"
-    },
-    "assembler": {
-      "description": "Assemble and synthesize research fragments into a structured draft report with claim-level citations",
-      "model": "strong",
-      "thinking": "high",
-      "tools": ["read", "write", "edit", "grep", "find", "ls"],
-      "access": "write",
-      "timeoutSeconds": 1200,
-      "promptPath": "../skills/research/agents/assembler.md",
-      "resultFormat": "markdown",
-      "totalDispatch": 5,
-      "concurrentDispatch": 1,
-      "maxSearches": 5,
-      "maxFetches": 10,
-      "retention": "persistent"
     },
     "judge": {
       "description": "Evaluate draft research report against credibility rubric — returns pass/fail with specific findings",

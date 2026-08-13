@@ -168,7 +168,7 @@ describe("/research CLI flags and resolved config display", () => {
 		expect(mock.pi.appendEntry).toHaveBeenCalled();
 	});
 
-	it("defaults come from config/deep-research.json when flags are absent", async () => {
+	it("defaults come from config/research.json when flags are absent", async () => {
 		const ctx = mockCtx(cwd);
 		// Note: no --yes flag so the startup contract confirm is shown.
 		await mock.commands.research.handler("test mission", ctx);

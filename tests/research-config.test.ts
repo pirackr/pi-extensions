@@ -27,7 +27,7 @@ function createFixture(overrides: Record<string, unknown>): {
  */
 function makeBaseConfig(overrides?: Partial<Record<string, unknown>>): Record<string, unknown> {
 	return {
-		defaultProgram: "deep-research",
+		defaultProgram: "skills/research/program.md",
 		defaultProfile: "standard",
 		defaultProvider: null,
 		defaults: {
@@ -217,7 +217,7 @@ describe("resolveResearchConfig — layer precedence", () => {
 			path: "/pkg/config.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -348,7 +348,7 @@ describe("resolveResearchConfig — layer precedence", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -775,7 +775,7 @@ describe("resolveResearchConfig — atomic array replacement", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -882,7 +882,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "open-ended",
 				defaultProvider: null,
 				defaults: {
@@ -951,7 +951,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -1012,7 +1012,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -1072,7 +1072,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -1133,7 +1133,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: 123,
 				defaults: {
@@ -1193,7 +1193,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -1254,7 +1254,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -1317,7 +1317,7 @@ describe("resolveResearchConfig — path provenance", () => {
 		const { resolveResearchConfig } = await import("../extensions/research/config.ts");
 		const { tmpDir, configPath, cleanup } = createFixture(
 			{
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -1405,7 +1405,7 @@ describe("resolveResearchConfig — path provenance", () => {
 			path: "/config/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -1483,7 +1483,7 @@ describe("resolveResearchConfig — path provenance", () => {
 			path: "/config/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -1676,7 +1676,7 @@ describe("resolveResearchConfig — explicit child paths", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -1740,7 +1740,7 @@ describe("resolveResearchConfig — explicit child paths", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -1800,7 +1800,7 @@ describe("resolveResearchConfig — explicit child paths", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -1878,7 +1878,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -1954,7 +1954,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -2015,7 +2015,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -2078,7 +2078,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -2139,7 +2139,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -2200,7 +2200,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -2261,7 +2261,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -2347,7 +2347,7 @@ describe("resolveResearchConfig — unreadable paths", () => {
 			path: "/nonexistent/config/research.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -2399,7 +2399,7 @@ describe("resolveResearchConfig — unreadable paths", () => {
 
 		// This should succeed because the value is already provided
 		const result = resolveResearchConfig([layer]);
-		expect(result.defaultProgram).toBe("deep-research");
+		expect(result.defaultProgram).toBe("skills/research/program.md");
 	});
 
 	it("resolveCapability throws when config file is missing", async () => {
@@ -2483,7 +2483,7 @@ describe("validateResearchConfig — final validation", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -2579,7 +2579,7 @@ describe("resolveResearchConfig — role field validation", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -2654,7 +2654,7 @@ describe("resolveResearchConfig — role field validation", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -2729,7 +2729,7 @@ describe("resolveResearchConfig — role field validation", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -2804,7 +2804,7 @@ describe("resolveResearchConfig — role field validation", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -2879,7 +2879,7 @@ describe("resolveResearchConfig — role field validation", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				defaults: {
@@ -3111,7 +3111,7 @@ describe("resolveResearchConfig — resolvePaths does not mutate input (F2)", ()
 		);
 
 		const layerValue: Record<string, unknown> = {
-			defaultProgram: "deep-research",
+			defaultProgram: "skills/research/program.md",
 			defaultProfile: "standard",
 			defaultProvider: null,
 			defaults: {
@@ -3235,7 +3235,7 @@ describe("resolveResearchConfig — resolvePaths does not mutate input (F2)", ()
 		};
 
 		const baseConfig = {
-			defaultProgram: "deep-research",
+			defaultProgram: "skills/research/program.md",
 			defaultProfile: "standard",
 			defaultProvider: null,
 			defaults: {
@@ -3306,7 +3306,7 @@ describe("ConfigLayer kind discrimination", () => {
 			path: "/pkg.json",
 			kind: "packaged" as const,
 			value: {
-				defaultProgram: "deep-research",
+				defaultProgram: "skills/research/program.md",
 				defaultProfile: "standard",
 				defaultProvider: null,
 				// missing: defaults, profiles, roles, capabilities, childExtensions

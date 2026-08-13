@@ -1,3 +1,9 @@
+> **SUPERSEDED — see [docs/006-deep-research-spec.md](./006-deep-research-spec.md).**
+> These research notes predate the implemented research feature (loop +
+> research engine, `config/research.json` owner, retained workspaces,
+> completion gates, verification, lifecycle, resume). Read 006 for the
+> authoritative description.
+
 # Deep Research Tools & Methodologies — Research Notes
 
 Companion research for [`docs/001-deep-research.org`](./001-deep-research.org) ("Build a deep research extension for pi").

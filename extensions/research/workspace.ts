@@ -58,6 +58,18 @@ export function generateRunId(): string {
 	return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * Format the canonical run ID for a transition + final workspace dir.
+ *
+ * Single source of truth for run identity: the contract's runId, the
+ * workspace runId, the state runId, the manifest runId, and the loop id
+ * must all be `${transitionId}-${finalDir}` so resume and the completion
+ * gates can compare them.
+ */
+export function formatRunId(transitionId: string, finalDir: string): string {
+	return `${transitionId}-${finalDir}`;
+}
+
 // ---------------------------------------------------------------------------
 // Claim management
 // ---------------------------------------------------------------------------
@@ -220,7 +232,7 @@ export function commitStaging(
 		fs.mkdirSync(researchPath, { recursive: false });
 	}
 
-	const runId = `${staged.transitionId}-${staged.finalDir}`;
+	const runId = formatRunId(staged.transitionId, staged.finalDir);
 
 	return {
 		path: finalPath,

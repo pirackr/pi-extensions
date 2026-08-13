@@ -698,6 +698,9 @@ describe("loadSubagentConfiguration", () => {
 					agentDirs: [],
 				});
 			}
+			if (typeof path === "string" && path.includes("research.json")) {
+				return JSON.stringify({ roles: {} });
+			}
 			if (typeof path === "string" && path.includes(".md")) {
 				return "---\nname: worker\ndescription: Test worker\nmodel: gpt-4o\ntools: read\n---\n\nPrompt.";
 			}
@@ -744,6 +747,9 @@ describe("loadSubagentConfiguration", () => {
 			if (typeof path === "string" && path.includes("tmux-subagent.json")) {
 				return JSON.stringify({ maxTasks: 4, defaultTimeoutSeconds: 300 });
 			}
+			if (typeof path === "string" && path.includes("research.json")) {
+				return JSON.stringify({ roles: {} });
+			}
 			if (typeof path === "string" && path.includes("config.json")) {
 				const err = new Error("ENOENT") as NodeJS.ErrnoException;
 				err.code = "ENOENT";
@@ -763,6 +769,9 @@ describe("loadSubagentConfiguration", () => {
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
 			if (typeof path === "string" && path.includes("tmux-subagent.json")) {
 				return JSON.stringify({ maxTasks: 2, defaultTimeoutSeconds: 300 });
+			}
+			if (typeof path === "string" && path.includes("research.json")) {
+				return JSON.stringify({ roles: {} });
 			}
 			if (typeof path === "string" && path.includes("config.json")) {
 				return JSON.stringify({ maxTasks: 8 });
@@ -806,24 +815,7 @@ describe("loadResearchProfiles", () => {
 		mockExistsSync.mockReturnValue(true);
 		const result = loadResearchProfiles(
 			{
-				defaultProfile: "standard",
-				defaults: {
-					maxSearchesPerAgent: 20,
-					maxFetchesPerAgent: 20,
-					scoreThreshold: 80,
-					retryCount: 1,
-				},
-				profiles: {
-					quick: {
-						minRounds: 10,
-						maxRounds: 10,
-						minSources: 15,
-						maxScouts: 3,
-						maxFetchers: 1,
-						verification: ["judge"],
-					},
-				},
-				agents: {
+				roles: {
 					planner: {
 						description: "Plan research",
 						model: "strong",
@@ -948,15 +940,7 @@ describe("loadResearchProfiles", () => {
 		mockExistsSync.mockReturnValue(true);
 		const result = loadResearchProfiles(
 			{
-				defaultProfile: "standard",
-				defaults: {
-					maxSearchesPerAgent: 20,
-					maxFetchesPerAgent: 20,
-					scoreThreshold: 80,
-					retryCount: 1,
-				},
-				profiles: {},
-				agents: {
+				roles: {
 					test_agent: {
 						description: "Test",
 						model: "strong",
@@ -979,15 +963,7 @@ describe("loadResearchProfiles", () => {
 		mockExistsSync.mockReturnValue(true);
 		const result = loadResearchProfiles(
 			{
-				defaultProfile: "standard",
-				defaults: {
-					maxSearchesPerAgent: 20,
-					maxFetchesPerAgent: 20,
-					scoreThreshold: 80,
-					retryCount: 1,
-				},
-				profiles: {},
-				agents: {
+				roles: {
 					test_agent: {
 						description: "Test",
 						model: "strong",
@@ -1010,15 +986,7 @@ describe("loadResearchProfiles", () => {
 		expect(() =>
 			loadResearchProfiles(
 				{
-					defaultProfile: "standard",
-					defaults: {
-						maxSearchesPerAgent: 20,
-						maxFetchesPerAgent: 20,
-						scoreThreshold: 80,
-						retryCount: 1,
-					},
-					profiles: {},
-					agents: {
+					roles: {
 						worker: {
 							description: "Should collide",
 							model: "strong",

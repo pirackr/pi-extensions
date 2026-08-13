@@ -48,7 +48,7 @@ function cleanup(dir: string): void {
 
 function baseConfig(): ResolvedResearchConfig {
 	return {
-		defaultProgram: "deep-research",
+		defaultProgram: "skills/research/program.md",
 		defaultProfile: "standard",
 		defaultProvider: null,
 		defaults: {

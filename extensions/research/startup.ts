@@ -35,6 +35,7 @@ import type {
 	VerificationResult,
 } from "./verification.ts";
 import { ResearchPolicy, type FrozenConfig } from "./policy.ts";
+import { formatRunId, slugify } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -300,12 +301,19 @@ export class TransitionsFile {
  * Validates configuration, resolves models, negotiates providers,
  * and checks hard ceilings — returning a frozen run contract.
  *
+ * The contract's runId is derived from the canonical workspace formula
+ * (`transitionId-finalDir`) via formatRunId. When a mission is supplied
+ * the slug is mission-derived; `prepareAndActivateResearch` re-derives it
+ * from the actually-claimed final directory so it always matches the
+ * workspace runId even when a suffix was allocated.
+ *
  * Throws if any validation step fails.
  */
 export async function validateStartupContract(
 	config: ResolvedResearchConfig,
 	models: ModelRegistryView,
 	providers: ProviderRegistryView,
+	mission: string = "",
 ): Promise<ResolvedRunContract> {
 	const profileName = config.defaultProfile;
 	const profileConfig = config.profiles[profileName];
@@ -397,7 +405,7 @@ export async function validateStartupContract(
 	}
 
 	const transitionId = `tr-${randomUUID().slice(0, 8)}`;
-	const runId = `${transitionId}-${profileName}`;
+	const runId = formatRunId(transitionId, slugify(mission));
 
 	return {
 		runId,
@@ -465,6 +473,7 @@ export async function prepareAndActivateResearch(
 		deps.config,
 		deps.getModels!(),
 		deps.getProviders!(),
+		mission,
 	);
 
 	// Update mission in the contract
@@ -505,7 +514,6 @@ export async function prepareAndActivateResearch(
 	const transitionsPath = deps.transitions.getPath();
 	const projectRoot = path.dirname(transitionsPath);
 	const transitionId = contract.transitionId;
-	const runId = contract.runId;
 
 	// --- Step 4: Reconcile any interrupted transition ---
 
@@ -581,6 +589,12 @@ export async function prepareAndActivateResearch(
 	}
 
 	cleanupStaging = false;
+
+	// Canonical run identity: the workspace runId (transitionId-finalDir) is
+	// the single source of truth. Align the frozen contract with it so lease,
+	// transitions, pointer, loop id, state, and manifest all agree.
+	contract.runId = workspace.runId;
+	const runId = workspace.runId;
 
 	// --- Step 7: Create manifest ---
 

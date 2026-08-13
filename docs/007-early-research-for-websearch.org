@@ -2,6 +2,12 @@
 #+SUBTITLE: Notes on free capacity, provider limits, SearXNG, policy constraints, and a proposed Pi-controlled architecture
 #+OPTIONS: toc:3 num:nil
 
+* SUPERSEDED — see docs/006-deep-research-spec.md
+This document is an early /research run output. The authoritative research
+feature documentation is [[./006-deep-research-spec.md]] (loop + research
+engine, config owner, completion gates, verification, lifecycle, resume);
+read that instead.
+
 * Status
 
 These are working notes from the early research and brainstorming phase.  They

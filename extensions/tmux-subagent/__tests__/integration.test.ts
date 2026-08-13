@@ -60,15 +60,6 @@ vi.mock("node:fs", async () => {
 	};
 });
 
-vi.mock("../../deep-research/session.ts", () => ({
-	getActiveResearchBudgets: vi.fn().mockReturnValue({
-		maxSearchesPerAgent: null,
-		maxFetchesPerAgent: null,
-	}),
-	setActiveResearchBudgets: vi.fn(),
-	clearActiveResearchBudgets: vi.fn(),
-}));
-
 vi.mock("node:os", () => ({
 	homedir: vi.fn().mockReturnValue("/home/user"),
 	tmpdir: vi.fn().mockReturnValue("/tmp"),

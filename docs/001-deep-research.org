@@ -1,3 +1,10 @@
+#+STARTUP: showall
+
+* SUPERSEDED — see docs/006-deep-research-spec.md
+This early-stage description of a deep research extension is superseded by the
+implemented research feature. The authoritative spec is
+[[./006-deep-research-spec.md]]; read that instead.
+
 * Description
 Build a deep research extension for pi, reference:
 - Claude Deep Research

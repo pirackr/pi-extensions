@@ -1,3 +1,9 @@
+> **SUPERSEDED — see [docs/006-deep-research-spec.md](./006-deep-research-spec.md).**
+> This PoC describes the first `/loop` + `program.md` experiment. The
+> implemented research feature is documented authoritatively in 006
+> (config owner, retained workspaces, completion gates, verification,
+> lifecycle, resume).
+
 # PoC — `/loop` + `program.md` as the deep-research engine for pi
 
 Status: **Step 1 implemented** · Task refs: `docs/001-deep-research.org`, `docs/003-implement-loop.org`

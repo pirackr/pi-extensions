@@ -13,7 +13,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 }));
 
 // Integration coverage for research_checkpoint's honest source counting
-// (Task 3 of deep-research-program-v2). These tests drive the REAL extension
+// (Task 3 of research-program-v2). These tests drive the REAL extension
 // code — register it against a mock pi API, start a /research run (which
 // creates a real working dir under /tmp and sets the module-level loop
 // state), write notes.md into it, then invoke research_checkpoint's execute

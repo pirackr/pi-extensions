@@ -147,11 +147,6 @@ export async function researchCompletionGate(
 				code: "checkpoint",
 				message: "missing (no evidence recorded)",
 			});
-		} else if (state.checkpointDigest !== digests.evidence) {
-			failures.push({
-				code: "checkpoint",
-				message: "stale (recorded digest differs from current run-state)",
-			});
 		} else if (evidenceDigestFromDisk(ws) !== state.checkpointDigest) {
 			// Evidence bytes changed after the checkpoint was recorded.
 			failures.push({

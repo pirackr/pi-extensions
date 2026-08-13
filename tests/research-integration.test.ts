@@ -102,7 +102,7 @@ function cleanup(dir: string): void {
 
 function baseConfig(): ResolvedResearchConfig {
 	return {
-		defaultProgram: "deep-research",
+		defaultProgram: "skills/research/program.md",
 		defaultProfile: "standard",
 		defaultProvider: null,
 		defaults: {
@@ -571,10 +571,10 @@ describe("integration — startup and frozen snapshots", () => {
 		// Immutable: a second manifest creation must throw
 		expect(() => createRunManifest(pointer.workspace)).toThrow(/already exists/);
 
-		// Run-state: revision 1, active, zero counters. The workspace runId is
-		// derived by the real commitStaging (`transitionId-slug`); the frozen
-		// contract derives its own runId from the profile. Both are persisted
-		// verbatim by the real modules (noted as a production inconsistency).
+		// Run-state: revision 1, active, zero counters. Run identity is
+		// consistent end-to-end: contract runId == workspace runId == state
+		// runId == manifest runId == loop id (all `transitionId-finalDir`,
+		// derived from the workspace via formatRunId).
 		const state = readRunState(pointer.workspace);
 		expect(state.revision).toBe(1);
 		expect(state.status).toBe("active");
@@ -586,6 +586,7 @@ describe("integration — startup and frozen snapshots", () => {
 		// Frozen contract
 		expect(pointer.contract.profileConfig.maxRounds).toBe(5);
 		expect(pointer.contract.providerSelection.resolvedProvider.id).toBe("local");
+		expect(pointer.contract.runId).toBe(pointer.workspace.runId);
 		expect(pointer.policy.workspace.runId).toBe(pointer.workspace.runId);
 
 		// Transitions: appended + pointer installed

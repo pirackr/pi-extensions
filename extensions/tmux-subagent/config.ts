@@ -4,9 +4,10 @@ import * as path from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 /**
- * Minimal research-agent shape (inlined from the deep-research config so
- * tmux-subagent has no production dependency on deep-research/ — Task 14
- * deletes that directory). Only the fields loadResearchProfiles needs.
+ * Minimal research-agent shape (inlined from the research config so
+ * tmux-subagent has no production dependency on extensions/research/).
+ * Only the fields loadResearchProfiles needs. Structurally compatible
+ * with the `roles` entries of config/research.json.
  */
 export interface ResearchAgentConfig {
 	description: string;
@@ -20,11 +21,11 @@ export interface ResearchAgentConfig {
 }
 
 /**
- * Minimal deep-research config shape used by loadResearchProfiles.
- * Structurally compatible with the full ResolvedDeepResearchConfig.
+ * Minimal research config shape used by loadResearchProfiles — the
+ * `roles` section of config/research.json (the single config owner).
  */
 export interface ResearchProfilesConfig {
-	agents: Record<string, ResearchAgentConfig>;
+	roles: Record<string, ResearchAgentConfig>;
 }
 
 export type AgentAccess = "read" | "shell" | "write";
@@ -455,21 +456,18 @@ export function loadSubagentConfiguration(extensionDir: string): {
 		}
 	}
 
-	// Register research agents from the packaged deep-research config
-	try {
-		const packageRoot = path.resolve(extensionDir, "../..");
-		const agentDir = getAgentDir();
-		const deepConfig = loadResearchAgentConfig(packageRoot, agentDir);
-		const researchProfiles = loadResearchProfiles(
-			deepConfig,
-			config.models,
-			config.toolAccess,
-		);
-		for (const profile of researchProfiles) {
-			profileMap.set(profile.name, profile);
-		}
-	} catch {
-		// Deep-research config is optional; silently skip if unavailable.
+	// Register research agents from the packaged research config
+	// (config/research.json). The config is packaged and required: a
+	// missing or malformed research config throws a clear error rather
+	// than silently disabling research profiles (no silent inheritance).
+	const researchConfig = loadResearchAgentConfig(packageRoot, getAgentDir());
+	const researchProfiles = loadResearchProfiles(
+		researchConfig,
+		config.models,
+		config.toolAccess,
+	);
+	for (const profile of researchProfiles) {
+		profileMap.set(profile.name, profile);
 	}
 
 	if (profileMap.size === 0)
@@ -479,36 +477,43 @@ export function loadSubagentConfiguration(extensionDir: string): {
 }
 
 /**
- * Load the research agents portion of the deep-research config (packaged
- * defaults merged with the optional user override at
- * `$PI_AGENT_DIR/deep-research/config.json`), resolving relative prompt
- * paths against the config directory that supplied each agent.
+ * Load the research roles portion of the research config (packaged
+ * defaults in `config/research.json` merged with the optional user
+ * override at `$PI_AGENT_DIR/research/config.json`), resolving relative
+ * prompt paths against the config directory that supplied each role.
  *
- * Inlined here so tmux-subagent does not import deep-research/ (which is
- * slated for deletion). Validation of agents happens in loadResearchProfiles.
+ * The packaged config is required — a missing or malformed research
+ * config throws a clear error rather than silently disabling research
+ * profiles. Inlined here so tmux-subagent does not import
+ * extensions/research/. Validation of roles happens in loadResearchProfiles.
  */
 export function loadResearchAgentConfig(
 	packageRoot: string,
 	agentDir: string,
 ): ResearchProfilesConfig {
-	const packageConfigPath = path.join(
-		packageRoot,
-		"config",
-		"deep-research.json",
-	);
-	const userConfigPath = path.join(agentDir, "deep-research", "config.json");
+	const packageConfigPath = path.join(packageRoot, "config", "research.json");
+	const userConfigPath = path.join(agentDir, "research", "config.json");
 
 	const readJson = (
 		p: string,
-	): { agents?: Record<string, ResearchAgentConfig> } => {
+	): { roles?: Record<string, ResearchAgentConfig> } => {
 		const raw = JSON.parse(fs.readFileSync(p, "utf8")) as {
-			agents?: Record<string, ResearchAgentConfig>;
+			roles?: Record<string, ResearchAgentConfig>;
 		};
 		return raw ?? {};
 	};
 
-	const packaged = readJson(packageConfigPath);
-	let user: { agents?: Record<string, ResearchAgentConfig> } | null = null;
+	let packaged: { roles?: Record<string, ResearchAgentConfig> };
+	try {
+		packaged = readJson(packageConfigPath);
+	} catch (error) {
+		const message =
+			error instanceof Error ? error.message : String(error);
+		throw new Error(
+			`Cannot load packaged research configuration ${packageConfigPath}: ${message}`,
+		);
+	}
+	let user: { roles?: Record<string, ResearchAgentConfig> } | null = null;
 	try {
 		user = readJson(userConfigPath);
 	} catch (error) {
@@ -518,42 +523,43 @@ export function loadResearchAgentConfig(
 		// User override is optional
 	}
 
-	const mergedAgents: Record<string, ResearchAgentConfig> = {
-		...(packaged.agents ?? {}),
-		...(user?.agents ?? {}),
+	const mergedRoles: Record<string, ResearchAgentConfig> = {
+		...(packaged.roles ?? {}),
+		...(user?.roles ?? {}),
 	};
 
 	// Resolve prompt paths:
-	// - Packaged agents resolve relative to the packaged config directory
-	// - Override agents resolve relative to the override file directory
+	// - Packaged roles resolve relative to the packaged config directory
+	// - Override roles resolve relative to the override file directory
 	const packageConfigDir = path.dirname(packageConfigPath);
 	const userConfigDir = user ? path.dirname(userConfigPath) : null;
-	for (const [agentName, agent] of Object.entries(mergedAgents)) {
-		let resolvedPath = agent.promptPath;
+	for (const [roleName, role] of Object.entries(mergedRoles)) {
+		let resolvedPath = role.promptPath;
 		if (!path.isAbsolute(resolvedPath)) {
 			const isFromOverride =
-				user !== null && Object.hasOwn(user.agents ?? {}, agentName);
+				user !== null && Object.hasOwn(user.roles ?? {}, roleName);
 			const baseDir =
 				isFromOverride && userConfigDir ? userConfigDir : packageConfigDir;
 			resolvedPath = path.resolve(baseDir, resolvedPath);
 		}
-		mergedAgents[agentName] = { ...agent, promptPath: resolvedPath };
+		mergedRoles[roleName] = { ...role, promptPath: resolvedPath };
 	}
 
-	return { agents: mergedAgents };
+	return { roles: mergedRoles };
 }
 
 /**
- * Register research agents from the deep-research config as tmux-subagent
- * profiles. The profile names match the research registry names
- * (scout_research, fetcher, consolidator, fragment_writer, judge, citation_agent,
- * source_auditor, contradiction_resolver, planner) and do NOT collide with generic profiles
- * (worker, reviewer, tester, scout).
+ * Register research roles from config/research.json as tmux-subagent
+ * profiles. The profile names match the research role names (scout,
+ * fetcher, judge, citation_agent, source_auditor, contradiction_resolver)
+ * and must not collide with generic profiles (worker, reviewer, tester,
+ * scout) — a colliding role name is rejected rather than silently
+ * overriding the generic profile.
  *
- * @param config - The resolved research-agent configuration
+ * @param config - The resolved research-role configuration
  * @param models - Model alias registry (from tmux-subagent config)
  * @param toolAccess - Tool access registry (from tmux-subagent config)
- * @returns AgentProfile entries for each research agent
+ * @returns AgentProfile entries for each research role
  */
 export function loadResearchProfiles(
 	config: ResearchProfilesConfig,
@@ -577,7 +583,7 @@ export function loadResearchProfiles(
 	]);
 
 	const profiles: AgentProfile[] = [];
-	for (const [name, agent] of Object.entries(config.agents)) {
+	for (const [name, agent] of Object.entries(config.roles)) {
 		if (GENERIC_PROFILE_NAMES.has(name)) {
 			throw new Error(
 				`Research agent '${name}' collides with a generic profile name and cannot be registered.`,

@@ -23,6 +23,30 @@ import { parseScoreTable } from "../research/checkpoint.ts";
 import { LoopEngine, LoopEngineOptions } from "./engine.ts";
 import { registerLoopCommand } from "./command.ts";
 import {
+	prepareAndActivateResearch,
+	TransitionsFile,
+} from "../research/startup.ts";
+import type {
+	ModelRegistryView,
+	ProviderRegistryView,
+	ResearchStartRequest,
+	StartupDependencies,
+} from "../research/startup.ts";
+import {
+	acquireWorkspaceClaim,
+	prepareStaging,
+	commitStaging,
+	reconcileTransition,
+	ensureGitExclude,
+} from "../research/workspace.ts";
+import { newRunState, acquireLease } from "../research/state.ts";
+import { createRunManifest } from "../research/manifest.ts";
+import { ResearchPolicy } from "../research/policy.ts";
+import { evaluateCheckpoint } from "../research/checkpoint.ts";
+import { runVerification } from "../research/verification.ts";
+import type { ProviderDescriptor } from "../subagent-dispatch/contract.ts";
+import type { ResolvedResearchConfig } from "../research/config.ts";
+import {
 	LoopState,
 	LoopStatus,
 	LoopUsage,
@@ -71,6 +95,7 @@ interface ResearchConfigShape {
 	>;
 }
 let researchConfig: ResearchConfigShape | null = null;
+let resolvedResearchConfig: ResolvedResearchConfig | null = null;
 
 // --- Research-specific completion policy -----------------------------------
 
@@ -431,6 +456,7 @@ export default function piLoop(pi: ExtensionAPI) {
 	// Load research configuration once at init time.
 	try {
 		const loaded = loadPackagedConfig();
+		resolvedResearchConfig = loaded;
 		researchConfig = {
 			defaults: {
 				maxSearchesPerAgent: loaded.defaults.maxSearches ?? 0,
@@ -475,11 +501,22 @@ export default function piLoop(pi: ExtensionAPI) {
 	registerLoopCommand(pi, {
 		command: "research",
 		description:
-			"Deep research: run the bundled research program (program.v2.md) as an autonomous loop — searches, fetches sources, and compiles report.org (claim-level citations) into a per-run scratch directory under /tmp.",
+			"Deep research: run the bundled research program (program.v2.md) as an autonomous loop — searches, fetches sources, and compiles report.org (claim-level citations) into a retained per-run workspace under the project root.",
 		defaultProgram: RESEARCH_PROGRAM_PATH,
 		defaultMaxRounds: researchConfig?.profiles.standard?.maxRounds ?? 8,
 		isResearch: true,
 		config: researchConfig ?? undefined,
+		onResearchStart: async (request: ResearchStartRequest, ctx) => {
+			if (!resolvedResearchConfig) {
+				throw new Error(
+					"Research configuration not loaded — cannot start research.",
+				);
+			}
+			return prepareAndActivateResearch(
+				request,
+				buildResearchDeps(ctx, resolvedResearchConfig),
+			);
+		},
 	}, engine);
 
 	// --- Register complete_loop tool -------------------------------------
@@ -595,3 +632,157 @@ function syncLoopTools(pi: ExtensionAPI, engine: LoopEngine): void {
 
 // Re-exported for test compatibility
 export { programBlockFor };
+
+// --- Research startup engine wiring (Task 10) ------------------------------
+//
+// buildResearchDeps injects the runtime StartupDependencies into
+// prepareAndActivateResearch. Model/provider views wrap Pi's live registries;
+// the workspace/state/manifest/transitions/policy/checkpoint/verification
+// deps are the real research modules. No research config code imports Pi —
+// deps are injected at the wiring layer.
+
+function buildResearchDeps(
+	ctx: ExtensionContext,
+	config: ResolvedResearchConfig,
+): StartupDependencies {
+	// Transitions file lives at the project root so retained research
+	// workspaces are created alongside it (discoverable by /research list).
+	const transitionsPath = path.join(ctx.cwd, "transitions.json");
+	const transitions = new TransitionsFile(transitionsPath);
+	const tools = researchRequiredTools(config);
+	return {
+		config,
+		getModels: () => buildModelView(ctx),
+		getProviders: () => buildProviderView(ctx, config, tools),
+		workspace: {
+			acquireWorkspaceClaim,
+			prepareStaging,
+			commitStaging,
+			reconcileTransition,
+			ensureGitExclude,
+		},
+		state: {
+			newRunState,
+			acquireLease,
+		},
+		manifest: {
+			createRunManifest,
+		},
+		transitions,
+		policy: {
+			createPolicy: (ws, frozenConfig, hardTimeoutSeconds) =>
+				new ResearchPolicy(ws, frozenConfig, hardTimeoutSeconds),
+		},
+		checkpoint: {
+			evaluateCheckpoint,
+		},
+		verification: {
+			runVerification,
+		},
+		logger: {
+			log: (message) => ctx.ui.notify(message, "info"),
+		},
+	};
+}
+
+/** Union of every tool the research config requires (roles + capabilities). */
+function researchRequiredTools(config: ResolvedResearchConfig): string[] {
+	const tools = new Set<string>();
+	for (const role of Object.values(config.roles)) {
+		for (const tool of role.tools) tools.add(tool);
+	}
+	for (const capability of Object.values(config.capabilities)) {
+		for (const tool of capability.requiredTools) tools.add(tool);
+	}
+	return Array.from(tools);
+}
+
+/**
+ * Research role aliases (strong/eval/light) → concrete model names, from the
+ * packaged tmux-subagent models map. Best-effort: falls back to matching the
+ * alias directly against Pi's model names/ids.
+ */
+function researchModelAliases(): Record<string, string> {
+	try {
+		const configPath = path.resolve(
+			path.dirname(fileURLToPath(import.meta.url)),
+			"../../config/tmux-subagent.json",
+		);
+		const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+			models?: Record<string, string>;
+		};
+		return raw.models ?? {};
+	} catch {
+		return {};
+	}
+}
+
+/**
+ * Model registry view over Pi's live model registry. Roles reference model
+ * aliases (strong/eval/light); the view resolves them against model name or
+ * id (and against the packaged tmux-subagent alias map when available).
+ */
+function buildModelView(ctx: ExtensionContext): ModelRegistryView {
+	const all = ctx.modelRegistry.getAll();
+	const aliases = researchModelAliases();
+	const match = (m: (typeof all)[number], name: string): boolean =>
+		m.name === name || m.id === name || m.id.endsWith(`/${name}`);
+	const find = (name: string) => {
+		const direct = all.find((m) => match(m, name));
+		if (direct) return direct;
+		const concrete = aliases[name];
+		return concrete ? all.find((m) => match(m, concrete)) : undefined;
+	};
+	return {
+		get(name) {
+			const model = find(name);
+			return model
+				? {
+						id: model.id,
+						name: model.name,
+						provider: model.provider,
+						capabilities: [
+							...(model.input.includes("image") ? ["image"] : []),
+							...(model.reasoning ? ["reasoning"] : []),
+						],
+					}
+				: undefined;
+		},
+		has(name) {
+			return find(name) !== undefined;
+		},
+	};
+}
+
+/**
+ * Provider registry view over Pi's registered providers plus the research
+ * child extensions (which supply the research tool capabilities).
+ */
+function buildProviderView(
+	ctx: ExtensionContext,
+	config: ResolvedResearchConfig,
+	tools: string[],
+): ProviderRegistryView {
+	const providers = new Map<string, ProviderDescriptor>();
+	// Child extensions (web-search, tmux-subagent) supply the research tools.
+	for (const child of config.childExtensions) {
+		providers.set(child, {
+			id: child,
+			adapterVersion: "1.0",
+			capabilities: tools,
+		});
+	}
+	// Pi's registered model providers.
+	for (const id of ctx.modelRegistry.getRegisteredProviderIds()) {
+		providers.set(id, {
+			id,
+			adapterVersion: "1.0",
+			capabilities: tools,
+		});
+	}
+	return {
+		get: (id) => providers.get(id),
+		has: (id) => providers.has(id),
+		getAll: () => Array.from(providers.values()),
+	};
+}

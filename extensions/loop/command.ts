@@ -6,10 +6,27 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { LoopEngine } from "./engine.ts";
-import type { LoopState, LoopStatus } from "./state.ts";
+import type { LoopStatus } from "./state.ts";
 import { truncate } from "./program.ts";
+import type {
+	ActiveResearchPointer,
+	ResearchStartRequest,
+} from "../research/startup.ts";
+
+/**
+ * /research start handler — injected by the wiring layer (loop/index.ts).
+ * Calls prepareAndActivateResearch with the runtime StartupDependencies.
+ */
+export type ResearchStartHandler = (
+	request: ResearchStartRequest,
+	ctx: ExtensionCommandContext,
+) => Promise<ActiveResearchPointer>;
 
 export interface LoopCommandOptions {
 	command: "loop" | "research";
@@ -18,6 +35,8 @@ export interface LoopCommandOptions {
 	defaultMaxRounds: number;
 	isResearch?: boolean;
 	config?: unknown; // ResearchConfigShape — kept as unknown to keep this file generic
+	/** Research-only: startup engine handler (prepareAndActivateResearch wiring). */
+	onResearchStart?: ResearchStartHandler;
 }
 
 /**
@@ -222,13 +241,32 @@ export function registerLoopCommand(
 				if (!ok) return;
 			}
 
-			// Research: create working dir
-			const workingDir = opts.isResearch
-				? createResearchWorkingDir(ctx.cwd, mission)
-				: undefined;
+			if (opts.isResearch) {
+				// /research start routes through the research startup engine
+				// (prepareAndActivateResearch, wired via opts.onResearchStart in
+				// loop/index.ts). The returned ActiveResearchPointer drives the
+				// loop engine as iteration 1 (workingDir = workspace, profile =
+				// contract, loop id = research runId).
+				const started = await startResearchRun(engine, ctx, {
+					mission,
+					programPath,
+					maxRounds,
+					tokenBudget,
+					noProgressTurns,
+					profile,
+					maxSearchesPerAgent,
+					maxFetchesPerAgent,
+					yes: flags["yes"] !== undefined || flags["no-confirm"] !== undefined,
+					onResearchStart: opts.onResearchStart,
+				});
+				if (!started) return;
+				engine.persist(pi, ctx);
+				engine.emit(pi, "active", ctx.isIdle() ? "steer" : undefined);
+				return;
+			}
 
-			// Create new state via engine
-			const newLoop = engine.startState({
+			// Create new state via engine (generic /loop path — unchanged)
+			engine.startState({
 				commandName: cmd,
 				programPath,
 				mission,
@@ -236,47 +274,6 @@ export function registerLoopCommand(
 				tokenBudget,
 				noProgressTurns,
 			});
-			// Research-specific fields
-			if (opts.isResearch) {
-				engine.state = {
-					...newLoop,
-					profile,
-					workingDir,
-					maxSearchesPerAgent,
-					maxFetchesPerAgent,
-				};
-			}
-
-			// Research: plan approval gate
-			if (opts.isResearch && (opts.config as { profiles?: Record<string, unknown> })?.profiles) {
-				const yesFlag =
-					flags["yes"] !== undefined || flags["no-confirm"] !== undefined;
-				if (!yesFlag && ctx.ui?.confirm) {
-					const p = (engine.state as LoopState).profile ?? "standard";
-					const profileCfg = (opts.config as {
-						profiles?: Record<string, { minRounds: number; maxRounds: number; minSources: number; maxScouts: number; maxFetchers: number; verification: string[] }>;
-					}).profiles?.[p];
-					const planSummary = `🔬 Deep research: "${truncate(mission)}"\nProfile: ${p}\nRounds: ${profileCfg?.minRounds ?? 3}–${profileCfg?.maxRounds ?? 10} · Min sources: ${profileCfg?.minSources ?? 15}\nScouts: ${profileCfg?.maxScouts ?? 3} · Fetchers: ${profileCfg?.maxFetchers ?? 1}\nSearches/agent: ${maxSearchesPerAgent} · Fetches/agent: ${maxFetchesPerAgent}\nVerification: ${(profileCfg?.verification ?? ["judge"]).join(", ")}\nTokens: ${engine.state!.tokenBudget ?? "none"}\nOutput: ${engine.state!.workingDir ?? "n/a"}\n\nSub-questions and search strategy will be defined in Round 0. Do you want to proceed?`;
-					const approved = await ctx.ui.confirm(
-						"Start deep research?",
-						planSummary,
-					);
-					if (!approved) {
-						// Cancel: restore prior run
-						engine.state = previous;
-						engine.persist(pi, ctx);
-						if (
-							previous &&
-							previous.status === "active" &&
-							ctx.isIdle()
-						) {
-							// Continuation will be queued by agent_end handler
-						}
-						return;
-					}
-				}
-
-			}
 
 			engine.persist(pi, ctx);
 			engine.emit(pi, "active", ctx.isIdle() ? "steer" : undefined);
@@ -330,31 +327,94 @@ function parseArgs(args: string): {
 }
 
 /**
- * /research scratch workspace: /tmp/<project>/research/<id>-<slug>/
+ * /research start path — routes through the research startup engine.
+ *
+ * Calls prepareAndActivateResearch (via the injected onResearchStart
+ * handler) and drives the returned ActiveResearchPointer into the loop
+ * engine as iteration 1. When the startup engine asks for confirmation
+ * (CONTRACT_REQUIRES_CONFIRMATION), presents the contract to the user
+ * and re-invokes with --yes semantics on approval.
+ *
+ * Returns false when the run was declined or startup failed (nothing
+ * started — the previous run, if any, is left untouched).
  */
-function slugify(text: string, max = 60): string {
-	const slug = text
-		.toLowerCase()
-		.normalize("NFKD")
-		.replace(/[\u0300-\u036f]/g, "")
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "")
-		.slice(0, max)
-		.replace(/-+$/g, "");
-	return slug || "research";
-}
+async function startResearchRun(
+	engine: LoopEngine,
+	ctx: ExtensionCommandContext,
+	opts: {
+		mission: string;
+		programPath: string;
+		maxRounds: number;
+		tokenBudget: number | null;
+		noProgressTurns: number;
+		profile?: string;
+		maxSearchesPerAgent: number;
+		maxFetchesPerAgent: number;
+		yes: boolean;
+		onResearchStart?: ResearchStartHandler;
+	},
+): Promise<boolean> {
+	if (!opts.onResearchStart) {
+		ctx.ui.notify(
+			"Research startup engine not wired (missing onResearchStart).",
+			"error",
+		);
+		return false;
+	}
 
-function createResearchWorkingDir(cwd: string, mission: string): string {
-	const project = path.basename(cwd) || "project";
-	const now = new Date();
-	const p = (n: number) => String(n).padStart(2, "0");
-	const id = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
-	const dir = path.join(
-		"/tmp",
-		project,
-		"research",
-		`${id}-${slugify(mission)}`,
-	);
-	fs.mkdirSync(dir, { recursive: true });
-	return dir;
+	const request: ResearchStartRequest = {
+		mission: opts.mission,
+		profile: "standard",
+		programPath: opts.programPath,
+		profileOverride: opts.profile ?? null,
+		yes: opts.yes,
+	};
+
+	const activate = async (yes: boolean): Promise<ActiveResearchPointer> =>
+		opts.onResearchStart!({ ...request, yes }, ctx);
+
+	let pointer: ActiveResearchPointer;
+	try {
+		pointer = await activate(opts.yes);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		if (!message.startsWith("CONTRACT_REQUIRES_CONFIRMATION")) {
+			ctx.ui.notify(`Research startup failed: ${message}`, "error");
+			return false;
+		}
+		const display = message
+			.slice("CONTRACT_REQUIRES_CONFIRMATION:".length)
+			.trim();
+		const approved = await ctx.ui.confirm("Start deep research?", display);
+		if (!approved) return false;
+		try {
+			pointer = await activate(true);
+		} catch (err2) {
+			ctx.ui.notify(
+				`Research startup failed: ${err2 instanceof Error ? err2.message : String(err2)}`,
+				"error",
+			);
+			return false;
+		}
+	}
+
+	// Drive the activated research pointer into the loop engine as iteration 1.
+	const newLoop = engine.startState({
+		commandName: "research",
+		programPath: opts.programPath,
+		mission: opts.mission,
+		maxRounds: opts.maxRounds,
+		tokenBudget: opts.tokenBudget,
+		noProgressTurns: opts.noProgressTurns,
+	});
+	engine.state = {
+		...newLoop,
+		id: pointer.contract.runId,
+		guardId: pointer.contract.runId,
+		profile: pointer.contract.profile,
+		workingDir: pointer.workspace.path,
+		maxSearchesPerAgent: opts.maxSearchesPerAgent,
+		maxFetchesPerAgent: opts.maxFetchesPerAgent,
+	};
+	return true;
 }

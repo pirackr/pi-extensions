@@ -62,7 +62,42 @@ function mockCtx(cwd: string) {
 			setStatus: () => {},
 		},
 		isIdle: () => false,
+		// Model registry view backing buildResearchDeps (loop/index.ts).
+		modelRegistry: fakeModelRegistry(),
 	};
+}
+
+/**
+ * Fake Pi model registry with the research role aliases (strong/eval/light)
+ * plus one registered provider id. Backs the ModelRegistryView/ProviderRegistryView
+ * injected into prepareAndActivateResearch by loop/index.ts.
+ */
+function fakeModelRegistry() {
+	const models = [
+		{ id: "local/strong", name: "strong", provider: "local", reasoning: true, input: ["text"] },
+		{ id: "local/eval", name: "eval", provider: "local", reasoning: true, input: ["text"] },
+		{ id: "local/light", name: "light", provider: "local", reasoning: false, input: ["text"] },
+	];
+	return {
+		getAll: () => models,
+		getRegisteredProviderIds: () => ["local"],
+		getProvider: () => undefined,
+	};
+}
+
+/**
+ * Read the workingDir (retained research workspace) from the latest persisted
+ * pi-loop entry — the startup engine wiring sets it from the activated pointer.
+ */
+function latestLoopWorkingDir(mock: {
+	entries: Array<{ type: string; data: unknown }>;
+}): string {
+	const entries = mock.entries.filter((e) => e.type === "pi-loop");
+	const last = entries.length > 0 ? entries[entries.length - 1].data : null;
+	const workingDir = (last as { loop?: { workingDir?: string } } | null)?.loop
+		?.workingDir;
+	if (!workingDir) throw new Error("No workingDir in loop state");
+	return workingDir;
 }
 
 describe("research_checkpoint counts real sources from notes.md (integration)", () => {
@@ -81,18 +116,14 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 	});
 
 	// Starts a /research --yes --profile quick run and returns the run's
-	// working dir (the newest dir under <cwd>/research/).
+	// working dir (the retained workspace created by the startup engine).
 	async function startResearch(mission: string): Promise<string> {
 		await mock.commands.research.handler(
 			`--yes --profile quick "${mission}"`,
 			mockCtx(cwd),
 		);
-		const researchRoot = path.join(cwd, "research");
-		const dirs = fs
-			.readdirSync(researchRoot)
-			.map((d) => path.join(researchRoot, d))
-			.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-		researchDir = dirs[0];
+		const workingDir = latestLoopWorkingDir(mock);
+		researchDir = workingDir;
 		return researchDir;
 	}
 
@@ -104,12 +135,8 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 			`--yes --profile quick --max-rounds ${maxRounds} "${mission}"`,
 			mockCtx(cwd),
 		);
-		const researchRoot = path.join(cwd, "research");
-		const dirs = fs
-			.readdirSync(researchRoot)
-			.map((d) => path.join(researchRoot, d))
-			.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-		researchDir = dirs[0];
+		const workingDir = latestLoopWorkingDir(mock);
+		researchDir = workingDir;
 		return researchDir;
 	}
 
@@ -502,12 +529,7 @@ describe("complete_loop enforces research verification gates", () => {
 			`--yes ${flags} "${mission}"`,
 			mockCtx(cwd),
 		);
-		const researchRoot = path.join(cwd, "research");
-		const dirs = fs
-			.readdirSync(researchRoot)
-			.map((d) => path.join(researchRoot, d))
-			.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-		return dirs[0];
+		return latestLoopWorkingDir(mock);
 	}
 
 	function writeScoreTable(

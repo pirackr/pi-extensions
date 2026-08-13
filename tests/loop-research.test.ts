@@ -61,6 +61,26 @@ function mockCtx(cwd: string, confirmResponse = true) {
 		},
 		isIdle: () => false,
 		getConfirmCalls: () => confirmCalls,
+		// Model registry view backing buildResearchDeps (loop/index.ts).
+		modelRegistry: fakeModelRegistry(),
+	};
+}
+
+/**
+ * Fake Pi model registry with the research role aliases (strong/eval/light)
+ * plus one registered provider id. Backs the ModelRegistryView/ProviderRegistryView
+ * injected into prepareAndActivateResearch by loop/index.ts.
+ */
+function fakeModelRegistry() {
+	const models = [
+		{ id: "local/strong", name: "strong", provider: "local", reasoning: true, input: ["text"] },
+		{ id: "local/eval", name: "eval", provider: "local", reasoning: true, input: ["text"] },
+		{ id: "local/light", name: "light", provider: "local", reasoning: false, input: ["text"] },
+	];
+	return {
+		getAll: () => models,
+		getRegisteredProviderIds: () => ["local"],
+		getProvider: () => undefined,
 	};
 }
 
@@ -147,43 +167,49 @@ describe("/research CLI flags and resolved config display", () => {
 
 	it("defaults come from config/deep-research.json when flags are absent", async () => {
 		const ctx = mockCtx(cwd);
-		// Note: no --yes flag so the plan-summary confirm is shown.
+		// Note: no --yes flag so the startup contract confirm is shown.
 		await mock.commands.research.handler("test mission", ctx);
 		expect(mock.pi.appendEntry).toHaveBeenCalled();
-		// The config defaults are maxSearchesPerAgent: 20, maxFetchesPerAgent: 20
-		// We verify this indirectly through the confirm message
+		// The startup engine shows the resolved contract (default profile = standard)
 		const calls = ctx.getConfirmCalls();
 		expect(calls).toHaveLength(1);
-		expect(calls[0].message).toContain("Searches/agent: 20");
-		expect(calls[0].message).toContain("Fetches/agent: 20");
+		const flat = calls[0].message
+			.replace(/[^\w\s:.]/g, " ")
+			.replace(/\s+/g, " ");
+		expect(flat).toContain("Profile: standard");
+		expect(flat).toContain("Max Rounds: 5");
+		expect(flat).toContain("Min Sources: 30");
 	});
 
 	it("CLI flag overrides JSON default", async () => {
 		const ctx = mockCtx(cwd);
-		// Note: no --yes flag so the plan-summary confirm is shown.
+		// Note: no --yes flag so the startup contract confirm is shown (then approved).
 		await mock.commands.research.handler(
 			"--max-searches-per-agent 5 --max-fetches-per-agent 3 test mission",
 			ctx,
 		);
 		const calls = ctx.getConfirmCalls();
 		expect(calls).toHaveLength(1);
-		expect(calls[0].message).toContain("Searches/agent: 5");
-		expect(calls[0].message).toContain("Fetches/agent: 3");
+		// The CLI flags override the JSON defaults in the persisted loop state.
+		const appendCalls = (mock.pi.appendEntry as ReturnType<typeof vi.fn>).mock
+			.calls;
+		const loopData = appendCalls[appendCalls.length - 1][1] as {
+			loop?: Record<string, unknown>;
+		};
+		expect(loopData.loop?.maxSearchesPerAgent).toBe(5);
+		expect(loopData.loop?.maxFetchesPerAgent).toBe(3);
 	});
 
-	it("resolved-value confirmation text contains profile thresholds from config", async () => {
+	it("resolved-value confirmation text contains the requested profile", async () => {
 		const ctx = mockCtx(cwd);
-		// Note: no --yes flag so the plan-summary confirm is shown.
+		// Note: no --yes flag so the startup contract confirm is shown.
 		await mock.commands.research.handler("--profile quick test mission", ctx);
 		const calls = ctx.getConfirmCalls();
 		expect(calls).toHaveLength(1);
 		const msg = calls[0].message;
-		expect(msg).toContain("Profile: quick");
-		expect(msg).toContain("Rounds: 3–3"); // quick: minRounds=3, maxRounds=3
-		expect(msg).toContain("Min sources: 15"); // quick: minSources=15
-		expect(msg).toContain("Scouts: 3"); // quick: maxScouts=3
-		expect(msg).toContain("Fetchers: 1"); // quick: maxFetchers=1
-		expect(msg).toContain("Verification: judge");
+		const flat = msg.replace(/[^\w\s:.]/g, " ").replace(/\s+/g, " ");
+		expect(flat).toContain("Mission: test mission");
+		expect(flat).toContain("Profile: quick");
 	});
 
 	it("persistence captures loop with budgets via appendEntry", async () => {
@@ -337,12 +363,12 @@ describe("full mocked /research run with quick profile", () => {
 			`--yes ${flags} "${mission}"`,
 			mockCtx(cwd),
 		);
-		const researchRoot = path.join(cwd, "research");
-		const dirs = fs
-			.readdirSync(researchRoot)
-			.map((d) => path.join(researchRoot, d))
-			.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-		return dirs[0];
+		// The research workspace (workingDir) is set on the loop state by the
+		// startup engine wiring (prepareAndActivateResearch).
+		const ls = latestLoopState(entries);
+		const workingDir = ls?.loop?.workingDir;
+		expect(workingDir).toBeTruthy();
+		return workingDir!;
 	}
 
 	async function checkpoint(

@@ -2,7 +2,30 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { loadDeepResearchConfiguration } from "../deep-research/config.ts";
+
+/**
+ * Minimal research-agent shape (inlined from the deep-research config so
+ * tmux-subagent has no production dependency on deep-research/ — Task 14
+ * deletes that directory). Only the fields loadResearchProfiles needs.
+ */
+export interface ResearchAgentConfig {
+	description: string;
+	model: string;
+	thinking: string;
+	tools: string[];
+	access: AgentAccess;
+	timeoutSeconds: number;
+	promptPath: string;
+	resultFormat: string;
+}
+
+/**
+ * Minimal deep-research config shape used by loadResearchProfiles.
+ * Structurally compatible with the full ResolvedDeepResearchConfig.
+ */
+export interface ResearchProfilesConfig {
+	agents: Record<string, ResearchAgentConfig>;
+}
 
 export type AgentAccess = "read" | "shell" | "write";
 
@@ -432,11 +455,11 @@ export function loadSubagentConfiguration(extensionDir: string): {
 		}
 	}
 
-	// Register research agents from the deep-research config
+	// Register research agents from the packaged deep-research config
 	try {
 		const packageRoot = path.resolve(extensionDir, "../..");
 		const agentDir = getAgentDir();
-		const deepConfig = loadDeepResearchConfiguration(packageRoot, agentDir);
+		const deepConfig = loadResearchAgentConfig(packageRoot, agentDir);
 		const researchProfiles = loadResearchProfiles(
 			deepConfig,
 			config.models,
@@ -456,19 +479,84 @@ export function loadSubagentConfiguration(extensionDir: string): {
 }
 
 /**
+ * Load the research agents portion of the deep-research config (packaged
+ * defaults merged with the optional user override at
+ * `$PI_AGENT_DIR/deep-research/config.json`), resolving relative prompt
+ * paths against the config directory that supplied each agent.
+ *
+ * Inlined here so tmux-subagent does not import deep-research/ (which is
+ * slated for deletion). Validation of agents happens in loadResearchProfiles.
+ */
+export function loadResearchAgentConfig(
+	packageRoot: string,
+	agentDir: string,
+): ResearchProfilesConfig {
+	const packageConfigPath = path.join(
+		packageRoot,
+		"config",
+		"deep-research.json",
+	);
+	const userConfigPath = path.join(agentDir, "deep-research", "config.json");
+
+	const readJson = (
+		p: string,
+	): { agents?: Record<string, ResearchAgentConfig> } => {
+		const raw = JSON.parse(fs.readFileSync(p, "utf8")) as {
+			agents?: Record<string, ResearchAgentConfig>;
+		};
+		return raw ?? {};
+	};
+
+	const packaged = readJson(packageConfigPath);
+	let user: { agents?: Record<string, ResearchAgentConfig> } | null = null;
+	try {
+		user = readJson(userConfigPath);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+			throw error;
+		}
+		// User override is optional
+	}
+
+	const mergedAgents: Record<string, ResearchAgentConfig> = {
+		...(packaged.agents ?? {}),
+		...(user?.agents ?? {}),
+	};
+
+	// Resolve prompt paths:
+	// - Packaged agents resolve relative to the packaged config directory
+	// - Override agents resolve relative to the override file directory
+	const packageConfigDir = path.dirname(packageConfigPath);
+	const userConfigDir = user ? path.dirname(userConfigPath) : null;
+	for (const [agentName, agent] of Object.entries(mergedAgents)) {
+		let resolvedPath = agent.promptPath;
+		if (!path.isAbsolute(resolvedPath)) {
+			const isFromOverride =
+				user !== null && Object.hasOwn(user.agents ?? {}, agentName);
+			const baseDir =
+				isFromOverride && userConfigDir ? userConfigDir : packageConfigDir;
+			resolvedPath = path.resolve(baseDir, resolvedPath);
+		}
+		mergedAgents[agentName] = { ...agent, promptPath: resolvedPath };
+	}
+
+	return { agents: mergedAgents };
+}
+
+/**
  * Register research agents from the deep-research config as tmux-subagent
  * profiles. The profile names match the research registry names
  * (scout_research, fetcher, consolidator, fragment_writer, judge, citation_agent,
  * source_auditor, contradiction_resolver, planner) and do NOT collide with generic profiles
  * (worker, reviewer, tester, scout).
  *
- * @param config - The resolved deep-research configuration
+ * @param config - The resolved research-agent configuration
  * @param models - Model alias registry (from tmux-subagent config)
  * @param toolAccess - Tool access registry (from tmux-subagent config)
  * @returns AgentProfile entries for each research agent
  */
 export function loadResearchProfiles(
-	config: import("../deep-research/config.ts").ResolvedDeepResearchConfig,
+	config: ResearchProfilesConfig,
 	models: Record<string, string>,
 	toolAccess: Record<string, AgentAccess>,
 ): AgentProfile[] {

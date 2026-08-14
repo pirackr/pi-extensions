@@ -23,7 +23,7 @@ and a `complete_loop` tool gated by a pluggable `CompletionPolicy`.
 
 - a bundled methodology program (`skills/research/program.md`, snapshot at
   run start),
-- a retained per-run workspace in the project root (never `/tmp`),
+- a retained per-run workspace under `.research/` in the project root (never `/tmp`),
 - a frozen run contract (models, provider, profile thresholds, hard caps),
 - code-enforced checkpoints over `score.md` + `notes.md` evidence,
 - a verification matrix over strict JSON artifacts,
@@ -74,13 +74,14 @@ config loader.
 
 ## 3. Workspace and run identity
 
-A run's workspace is `<project-root>/<mission-slug>[-N]/` (slugified
-mission, suffix allocated on collision via an exclusive hidden
-`.claim-<slug>-<transitionId>` directory and a same-parent staging rename).
-Old workspaces are never reused or deleted.
+A run's workspace is `<project-root>/.research/<YYYYMMDD-HHmm>-<mission-slug>/`
+(timestamp prefix + slugified mission; a `-N` suffix is allocated on
+same-minute collision via an exclusive hidden
+`.claim-<finalDir>-<transitionId>` directory and a same-filesystem staging
+rename). Old workspaces are never reused or deleted.
 
 ```
-<project-root>/<slug>/
+<project-root>/.research/<YYYYMMDD-HHmm>-<slug>/
 ├── score.md                 # 5–8 row table: ID | Question | Score | Notes
 ├── notes.md                 # source ledger: URL | Title | Tier | Retrieved | Claims
 ├── report.org               # final report (assembler)

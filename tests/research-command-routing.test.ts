@@ -100,7 +100,7 @@ function buildRetainedWorkspace(
 	mission: string,
 	lifecycleState: LifecycleState = "active",
 ): string {
-	const wsPath = path.join(projectRoot, dirName);
+	const wsPath = path.join(projectRoot, ".research", dirName);
 	fs.mkdirSync(path.join(wsPath, ".research"), { recursive: true });
 	const ws: Workspace = {
 		path: wsPath,
@@ -169,7 +169,7 @@ describe("/research workspace subcommand routing", () => {
 
 	it("/research list reports malformed workspaces without aborting", async () => {
 		buildRetainedWorkspace(cwd, "good-run", "Good run", "active");
-		const badDir = path.join(cwd, "bad-run");
+		const badDir = path.join(cwd, ".research", "bad-run");
 		fs.mkdirSync(path.join(badDir, ".research"), { recursive: true });
 		fs.writeFileSync(
 			path.join(badDir, ".research", "lifecycle.json"),
@@ -238,7 +238,11 @@ describe("/research workspace subcommand routing", () => {
 
 	it("/research pause (no slug) pauses the active workspace without touching the engine loop", async () => {
 		await mock.commands.research.handler("--yes pause-mission", mockCtx(cwd));
-		const wsPath = path.join(cwd, "pause-mission");
+		const researchDir = path.join(cwd, ".research");
+		// The real startup timestamps the final dir: <YYYYMMDD-HHmm>-pause-mission
+		const runDir = fs.readdirSync(researchDir).find((d) => d.includes("pause-mission"));
+		expect(runDir).toBeDefined();
+		const wsPath = path.join(researchDir, runDir!);
 		expect(fs.existsSync(path.join(wsPath, ".research"))).toBe(true);
 		const appendsBefore = (
 			mock.pi.appendEntry as ReturnType<typeof vi.fn>
@@ -252,7 +256,8 @@ describe("/research workspace subcommand routing", () => {
 			mock.pi.appendEntry as ReturnType<typeof vi.fn>
 		).mock.calls.length;
 		expect(appendsAfter).toBe(appendsBefore);
-		expect(ctx.getNotifications()[0].message).toContain("Paused pause-mission");
+		expect(ctx.getNotifications()[0].message).toContain("Paused");
+		expect(ctx.getNotifications()[0].message).toContain("pause-mission");
 	});
 
 	it("/research pause on a completed workspace reports the invalid transition", async () => {

@@ -39,8 +39,10 @@ architecture spec: `docs/006-deep-research-spec.md`.
 
 ## Research Artifacts
 
-`/research` creates a per-run workspace under the project root, named after
-the mission. All artifacts are written there, never in the repo:
+`/research` creates a per-run workspace under `.research/` at the project
+root, named `<YYYYMMDD-HHmm>-<mission-slug>` — the timestamp prefix keeps
+duplicate missions in distinct, chronologically sortable directories. All
+artifacts are written there, never in the repo:
 
 | File | Purpose |
 | ------ | --------- |

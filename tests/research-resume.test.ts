@@ -66,7 +66,7 @@ function buildWorkspace(
   lifecycleState: LifecycleState = "paused",
   withLease: boolean = false,
 ): TestWorkspace {
-  const wsPath = path.join(tmpDir, name);
+  const wsPath = path.join(tmpDir, ".research", name);
   fs.mkdirSync(wsPath, { recursive: true });
   const researchPath = path.join(wsPath, ".research");
   fs.mkdirSync(researchPath, { recursive: true });

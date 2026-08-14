@@ -34,8 +34,8 @@ import type {
 import type {
 	VerificationResult,
 } from "./verification.ts";
-import { ResearchPolicy, type FrozenConfig } from "./policy.ts";
-import { formatRunId, slugify } from "./workspace.ts";
+import type { ResearchPolicy, FrozenConfig } from "./policy.ts";
+import { formatRunId, slugify, formatTimestamp } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -136,6 +136,7 @@ export interface StartupDependencies {
 			projectRoot: string,
 			mission: string,
 			transitionId: string,
+			finalDirBase?: string,
 		) => WorkspaceClaim;
 		prepareStaging: (
 			claim: WorkspaceClaim,
@@ -517,11 +518,10 @@ export async function prepareAndActivateResearch(
 
 	// --- Step 4: Reconcile any interrupted transition ---
 
-	const finalDir = mission
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-|-$/g, "")
-		.slice(0, 30) || "research";
+	// Timestamped final workspace dir name (single source for claim, staging,
+	// commit, and runId): `<YYYYMMDD-HHmm>-<mission-slug>`. The timestamp prefix
+	// keeps duplicate missions in distinct, chronologically sortable dirs.
+	const finalDir = `${formatTimestamp(new Date())}-${slugify(mission)}`;
 
 	const reconciliation = deps.workspace.reconcileTransition(
 		projectRoot,
@@ -554,6 +554,7 @@ export async function prepareAndActivateResearch(
 			projectRoot,
 			mission,
 			transitionId,
+			finalDir,
 		);
 		staged = deps.workspace.prepareStaging(claim);
 	} catch (err) {

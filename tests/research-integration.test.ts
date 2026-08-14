@@ -39,7 +39,7 @@ import {
 	reconcileTransition,
 	ensureGitExclude,
 } from "../extensions/research/workspace.ts";
-import type { RunState, StateConflict } from "../extensions/research/state.ts";
+import type { StateConflict } from "../extensions/research/state.ts";
 import {
 	newRunState,
 	readRunState,
@@ -56,11 +56,11 @@ import {
 	TransitionsFile,
 	type ModelRegistryView,
 	type ProviderRegistryView,
-	type ResolvedResearchConfig,
 	type StartupDependencies,
 	type ResearchStartRequest,
 	type ActiveResearchPointer,
 } from "../extensions/research/startup.ts";
+	import type { ResolvedResearchConfig } from "../extensions/research/config.ts";
 import {
 	createLifecycleSnapshot,
 	persistLifecycle,
@@ -72,11 +72,10 @@ import {
 import {
 	listWorkspaces,
 	lookupWorkspace,
-	getActiveWorkspace,
 } from "../extensions/research/history.ts";
 import { resumeWorkspace } from "../extensions/research/resume.ts";
 import { LoopEngine } from "../extensions/loop/engine.ts";
-import type { LoopState, LoopUsage } from "../extensions/loop/state.ts";
+import type { LoopState } from "../extensions/loop/state.ts";
 import { addCoordinatorUsage, addNestedUsage } from "../extensions/loop/state.ts";
 import type { CompletionPolicy, CompletionFailure } from "../extensions/loop/completion.ts";
 import { makeGenericPolicy } from "../extensions/loop/completion.ts";
@@ -175,7 +174,8 @@ function fakeModelRegistry(
 	const models = { ...overrides };
 	return {
 		get(name: string) {
-			return models[name] ? { ...models[name] } : undefined;
+			const m = models[name];
+			return m ? { ...m, capabilities: m.capabilities ?? [] } : undefined;
 		},
 		has(name: string) {
 			return name in models;
@@ -1099,7 +1099,7 @@ describe("integration — loop budget and dispatch limits", () => {
 		writeJudge(ws, ws.runId);
 
 		// Build an engine whose completion policy audits the real disk gates.
-		const { pi, entries } = makeMockPi();
+		const { pi } = makeMockPi();
 		const ctx = makeMockCtx();
 		const engine = new LoopEngine({
 			completionPolicy: researchGatePolicy(ws),
@@ -1154,7 +1154,7 @@ describe("integration — reload, resume, interruption, provider mismatch", () =
 		fs.writeFileSync(programPath, "# program\n", "utf-8");
 
 		// Session 1: start the loop, run a turn with usage, persist.
-		const { pi, entries, activeTools } = makeMockPi();
+		const { pi, entries } = makeMockPi();
 		const ctx = makeMockCtx();
 		const engineA = new LoopEngine({
 			completionPolicy: makeGenericPolicy(),
@@ -1208,7 +1208,6 @@ describe("integration — reload, resume, interruption, provider mismatch", () =
 
 	it("resume reacquires the lease and keeps consumed counts; interruption releases slots transactionally", async () => {
 		const ws = buildWorkspace(tmpDir, "resume flow");
-		const statePath = path.join(ws.path, ".research", "run-state.json");
 		// Simulate an interrupted run: in-flight reservations + consumed usage.
 		await updateRunState(ws, 1, (c) => ({
 			...c,
@@ -1334,17 +1333,17 @@ describe("integration — replacement, abandonment, history", () => {
 
 	it("discovery excludes .research/cache/web and reports malformed workspaces", async () => {
 		buildWorkspace(tmpDir, "good run", "tr-good");
-		const cache = path.join(tmpDir, "cached-run", ".research", "cache", "web");
+		const cache = path.join(tmpDir, ".research", "cache", "web");
 		fs.mkdirSync(cache, { recursive: true });
 		fs.writeFileSync(path.join(cache, "index.html"), "<html/>", "utf-8");
 		// A partial workspace: directory with no metadata at all.
-		fs.mkdirSync(path.join(tmpDir, "partial-ws"), { recursive: true });
+		fs.mkdirSync(path.join(tmpDir, ".research", "partial-ws"), { recursive: true });
 
 		const listed = listWorkspaces(tmpDir);
 		expect(listed.entries.map((e) => e.path)).not.toContain(
-			path.join(tmpDir, "cached-run", ".research", "cache", "web"),
+			path.join(tmpDir, ".research", "cache", "web"),
 		);
-		expect(listed.malformed.some((m) => m.path === path.join(tmpDir, "partial-ws"))).toBe(true);
+		expect(listed.malformed.some((m) => m.path === path.join(tmpDir, ".research", "partial-ws"))).toBe(true);
 	});
 
 	it("pauses an active run and syncs run-state status", async () => {

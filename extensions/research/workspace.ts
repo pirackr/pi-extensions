@@ -53,6 +53,16 @@ export function slugify(mission: string): string {
 	);
 }
 
+/**
+ * Format a Date as a workspace-name timestamp prefix: `YYYYMMDD-HHmm`.
+ *
+ * Local time. Prefix placement makes workspaces sort/group by run date.
+ */
+export function formatTimestamp(date: Date): string {
+	const pad = (n: number) => String(n).padStart(2, "0");
+	return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}`;
+}
+
 /** Generate a unique run ID. */
 export function generateRunId(): string {
 	return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -77,22 +87,25 @@ export function formatRunId(transitionId: string, finalDir: string): string {
 /**
  * Acquire an exclusive workspace claim.
  *
- * Selects `<slug>`, then `-2`, `-3` by exclusively creating a hidden
- * same-parent claim directory like `.claim-<slug>-<transitionId>` using
- * non-recursive `mkdir`.  The claim reserves a final path without creating
- * that path.  A collision retries the next suffix; all suffixes exhausted
- * throws.
+ * Selects `<finalDirBase ?? <timestamp>-<slug>>`, then `-2`, `-3` by
+ * exclusively creating a hidden same-parent claim directory like
+ * `.claim-<finalDir>-<transitionId>` using non-recursive `mkdir`.  The claim
+ * reserves a final path without creating that path.  A collision retries the
+ * next suffix; all suffixes exhausted throws.
  */
 export function acquireWorkspaceClaim(
 	projectRoot: string,
 	mission: string,
 	transitionId: string,
+	finalDirBase?: string,
 ): WorkspaceClaim {
 	if (!fs.existsSync(projectRoot)) {
 		throw new Error(`Project root does not exist: ${projectRoot}`);
 	}
 
-	const s = slugify(mission);
+	// Timestamped base dir name (e.g. "20260813-1432-my-mission"); defaults to
+	// the bare slug for callers that do not pass a timestamp.
+	const s = finalDirBase ?? slugify(mission);
 	const suffixes: Array<string | undefined> = [undefined, "-2", "-3"];
 
 	// Scan existing claims to find used finalDirs (across all transition IDs)
@@ -126,7 +139,7 @@ export function acquireWorkspaceClaim(
 		}
 		// Skip if the final path already exists on disk (e.g. a prior completed
 		// run whose claim was cleaned up, leaving the visible directory behind).
-		if (fs.existsSync(path.join(projectRoot, finalDir))) {
+		if (fs.existsSync(path.join(projectRoot, ".research", finalDir))) {
 			continue;
 		}
 
@@ -201,7 +214,10 @@ export function commitStaging(
 	staged: StagedRun,
 	claim: WorkspaceClaim,
 ): Workspace {
-	const finalPath = path.join(staged.projectRoot, staged.finalDir);
+	// Workspaces live under <projectRoot>/.research/<finalDir>
+	const researchRoot = path.join(staged.projectRoot, ".research");
+	fs.mkdirSync(researchRoot, { recursive: true });
+	const finalPath = path.join(researchRoot, staged.finalDir);
 
 	// Verify target is still absent (race-condition guard)
 	if (fs.existsSync(finalPath)) {
@@ -213,17 +229,21 @@ export function commitStaging(
 		throw new Error(`Workspace target appeared before commit: ${finalPath}`);
 	}
 
-	// Atomic rename: staging → final (same-parent, same filesystem)
+	// Atomic rename: staging → final (same filesystem)
 	fs.renameSync(staged.stagingPath, finalPath);
 
 	// Read mission from claim metadata for the returned Workspace
 	const metaPath = path.join(claim.claimPath, ".meta.json");
 	let mission = "";
 	if (fs.existsSync(metaPath)) {
-		const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8")) as {
-			mission: string;
-		};
-		mission = meta.mission ?? "";
+		try {
+			const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8")) as {
+				mission: string;
+			};
+			mission = meta.mission ?? "";
+		} catch {
+			// Broken metadata — mission stays empty
+		}
 	}
 
 	// Clean up claim directory
@@ -283,7 +303,33 @@ export function reconcileTransition(
 		`.claim-${finalDir}-${transitionId}`,
 	);
 	const stagingPath = path.join(projectRoot, `.staging-${finalDir}`);
-	const finalPath = path.join(projectRoot, finalDir);
+	const finalPath = path.join(projectRoot, ".research", finalDir);
+
+	// Sweep stale claim/staging dirs from crashed runs. All dot-prefixed
+	// claim/staging dirs at the project root are unfinished by definition (no
+	// concurrent runs exist — the transitions pointer tracks one active run),
+	// so anything not owned by this transition is garbage.
+	try {
+		for (const entry of fs.readdirSync(projectRoot, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const isClaim = entry.name.startsWith(".claim-");
+			const isStaging = entry.name.startsWith(".staging-");
+			if (!isClaim && !isStaging) continue;
+			if (
+				entry.name === path.basename(claimPath) ||
+				entry.name === path.basename(stagingPath)
+)
+{
+				continue;
+			}
+			fs.rmSync(path.join(projectRoot, entry.name), {
+				recursive: true,
+				force: true,
+			});
+		}
+	} catch {
+		// Directory unreadable — fall through
+	}
 
 	if (fs.existsSync(finalPath)) {
 		// Already complete — clean up leftover claim/staging

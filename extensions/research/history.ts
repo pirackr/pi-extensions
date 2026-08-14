@@ -107,6 +107,46 @@ function readWorkspaceLifecycle(
   }
 }
 
+
+/**
+ * Strip the `<YYYYMMDD-HHmm>-` timestamp prefix from a workspace dir name,
+ * if present, so slug matching works regardless of when the run happened.
+ */
+function stripTimestampPrefix(name: string): string {
+  return name.replace(/^\d{8}-\d{4}-/, "");
+}
+
+/**
+ * Find a workspace directory under `<projectRoot>/.research/` by name.
+ *
+ * Matching order: exact name → exact name with timestamp prefix stripped →
+ * prefix of the timestamp-stripped name. The stripped forms let
+ * `lookupWorkspace(projectRoot, "my-mission")` find
+ * `.research/20260813-1432-my-mission/`, and let runIds written before the
+ * timestamp convention resolve migrated workspaces.
+ */
+function findWorkspaceDir(projectRoot: string, name: string): string | null {
+  const researchDir = path.join(projectRoot, ".research");
+  if (!fs.existsSync(researchDir)) return null;
+  const dirs = fs.readdirSync(researchDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && !d.name.startsWith("."));
+
+  for (const dir of dirs) {
+    if (dir.name === name) return path.join(researchDir, dir.name);
+  }
+  for (const dir of dirs) {
+    if (stripTimestampPrefix(dir.name) === name) {
+      return path.join(researchDir, dir.name);
+    }
+  }
+  for (const dir of dirs) {
+    if (stripTimestampPrefix(dir.name).startsWith(name + "-")) {
+      return path.join(researchDir, dir.name);
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Workspace discovery
 // ---------------------------------------------------------------------------
@@ -114,9 +154,8 @@ function readWorkspaceLifecycle(
 /**
  * Discover retained workspace directories in a project root.
  *
- * - Scans top-level directory entries
- * - Excludes hidden entries (.claim-, .staging-, .research/, etc.)
- * - Excludes directories inside .research/cache/web/
+ * - Scans workspace directories under `<projectRoot>/.research/`
+ * - Excludes hidden entries and the `.research/cache/` dir
  * - For each candidate, tries to read its lifecycle/state
  * - Reports malformed workspaces without aborting
  */
@@ -124,15 +163,16 @@ export function discoverWorkspaces(projectRoot: string): WorkspaceList {
   const entries: WorkspaceEntry[] = [];
   const malformed: Array<{ path: string; reason: string }> = [];
 
-  if (!fs.existsSync(projectRoot)) {
+  const researchDir = path.join(projectRoot, ".research");
+  if (!fs.existsSync(researchDir)) {
     return { entries: [], malformed };
   }
 
-  const dirs = fs.readdirSync(projectRoot, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && !d.name.startsWith("."));
+  const dirs = fs.readdirSync(researchDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && !d.name.startsWith(".") && d.name !== "cache");
 
   for (const dir of dirs) {
-    const dirPath = path.join(projectRoot, dir.name);
+    const dirPath = path.join(researchDir, dir.name);
 
     // Skip directories inside .research/cache/web/
     if (isInResearchCache(dirPath)) {
@@ -335,7 +375,8 @@ export function listWorkspaces(projectRoot: string): WorkspaceList {
 /**
  * Lookup a single workspace by directory name or absolute path.
  * If the argument is an absolute path, use it directly.
- * Otherwise, search projectRoot for a directory matching the slug.
+ * Otherwise, search .research/ for a directory matching the slug
+ * (timestamp prefix stripped).
  * Returns null if not found.
  */
 export function lookupWorkspace(
@@ -350,27 +391,10 @@ export function lookupWorkspace(
     return null;
   }
 
-  // Search for exact name match first, then prefix match
+  // Search .research/ — exact name, timestamp-stripped exact, then prefix
   if (!fs.existsSync(projectRoot)) return null;
-
-  const dirs = fs.readdirSync(projectRoot, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && !d.name.startsWith("."));
-
-  // Try exact match
-  for (const dir of dirs) {
-    if (dir.name === slugOrPath) {
-      return buildWorkspaceEntry(path.join(projectRoot, dir.name));
-    }
-  }
-
-  // Try prefix match
-  for (const dir of dirs) {
-    if (dir.name.startsWith(slugOrPath + "-")) {
-      return buildWorkspaceEntry(path.join(projectRoot, dir.name));
-    }
-  }
-
-  return null;
+  const found = findWorkspaceDir(projectRoot, slugOrPath);
+  return found ? buildWorkspaceEntry(found) : null;
 }
 
 /**
@@ -398,18 +422,14 @@ export function getActiveWorkspace(
     const transitionId = runIdParts[0] || "";
     const slug = runIdParts.slice(1).join("-") || "";
 
-    // Find workspace by transitionId/slug
-    if (!fs.existsSync(projectRoot)) return null;
-    const dirs = fs.readdirSync(projectRoot, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && !d.name.startsWith("."));
-
-    for (const dir of dirs) {
-      if (dir.name === slug || dir.name === slug) {
-        const entry = buildWorkspaceEntry(path.join(projectRoot, dir.name));
-        if (entry) {
-          entry.transitionId = transitionId;
-          return entry;
-        }
+    // Find workspace by runId-derived name (timestamped for new runs, bare
+    // slug for migrated ones)
+    const found = findWorkspaceDir(projectRoot, slug);
+    if (found) {
+      const entry = buildWorkspaceEntry(found);
+      if (entry) {
+        entry.transitionId = transitionId;
+        return entry;
       }
     }
   } catch {

@@ -13,7 +13,6 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "os";
-import { createHash } from "node:crypto";
 import type { Workspace } from "../extensions/research/workspace.ts";
 import {
   newRunState,
@@ -29,7 +28,6 @@ import {
   loadLifecycleSnapshot,
   persistLifecycle,
   syncRunStateStatus,
-  VALID_LIFECYCLE_TRANSITIONS,
   markResumed,
   type LifecycleState,
 } from "../extensions/research/lifecycle.ts";
@@ -37,8 +35,6 @@ import {
   listWorkspaces,
   lookupWorkspace,
   getActiveWorkspace,
-  discoverWorkspaces,
-  type WorkspaceEntry,
 } from "../extensions/research/history.ts";
 import { TransitionsFile } from "../extensions/research/startup.ts";
 
@@ -65,7 +61,7 @@ function buildWorkspace(
   profile = "standard",
   lifecycleState?: LifecycleState,
 ): Workspace {
-  const wsPath = path.join(projectRoot, dirName);
+  const wsPath = path.join(projectRoot, ".research", dirName);
   fs.mkdirSync(wsPath, { recursive: true });
   const researchPath = path.join(wsPath, ".research");
   fs.mkdirSync(researchPath, { recursive: true });
@@ -325,13 +321,13 @@ describe("/research list — workspace discovery", () => {
   it("excludes hidden directories", () => {
     buildWorkspace(tmpDir, "visible-workspace", "visible", "run-1", "tr-1");
     // Create hidden dirs
-    fs.mkdirSync(path.join(tmpDir, ".claim-visible-tr-1"));
-    fs.mkdirSync(path.join(tmpDir, ".staging-visible"));
-    fs.mkdirSync(path.join(tmpDir, ".hidden-research"));
+    fs.mkdirSync(path.join(tmpDir, ".research/.claim-visible-tr-1"));
+    fs.mkdirSync(path.join(tmpDir, ".research/.staging-visible"));
+    fs.mkdirSync(path.join(tmpDir, ".research/.hidden-research"));
 
     const { entries } = listWorkspaces(tmpDir);
     expect(entries.length).toBe(1);
-    expect(entries[0].path).toBe(path.join(tmpDir, "visible-workspace"));
+    expect(entries[0].path).toBe(path.join(tmpDir, ".research", "visible-workspace"));
   });
 
   it("excludes .research/cache/web/ directories", () => {
@@ -342,25 +338,25 @@ describe("/research list — workspace discovery", () => {
 
     const { entries } = listWorkspaces(tmpDir);
     expect(entries.length).toBe(1);
-    expect(entries[0].path).toBe(path.join(tmpDir, "normal-workspace"));
+    expect(entries[0].path).toBe(path.join(tmpDir, ".research", "normal-workspace"));
   });
 
   it("reports malformed workspace (no state, no manifest)", () => {
     buildWorkspace(tmpDir, "complete-workspace", "complete", "run-1", "tr-1");
     // Create a partial workspace (empty dir)
-    fs.mkdirSync(path.join(tmpDir, "partial-workspace"));
+    fs.mkdirSync(path.join(tmpDir, ".research", "partial-workspace"));
 
     const { entries, malformed } = listWorkspaces(tmpDir);
     expect(entries.length).toBe(1);
     expect(malformed.length).toBe(1);
-    expect(malformed[0].path).toBe(path.join(tmpDir, "partial-workspace"));
+    expect(malformed[0].path).toBe(path.join(tmpDir, ".research", "partial-workspace"));
     expect(malformed[0].reason).toBe("incomplete workspace metadata");
   });
 
   it("reports malformed workspace with parse errors", () => {
     buildWorkspace(tmpDir, "good-workspace", "good", "run-1", "tr-1");
     // Create a workspace with bad JSON
-    const badDir = path.join(tmpDir, "bad-workspace");
+    const badDir = path.join(tmpDir, ".research", "bad-workspace");
     fs.mkdirSync(badDir, { recursive: true });
     fs.mkdirSync(path.join(badDir, ".research"), { recursive: true });
     fs.writeFileSync(path.join(badDir, ".research", "run.json"), "not json{{}", "utf-8");
@@ -368,7 +364,7 @@ describe("/research list — workspace discovery", () => {
     const { entries, malformed } = listWorkspaces(tmpDir);
     expect(entries.length).toBe(1);
     expect(malformed.length).toBe(1);
-    expect(malformed[0].path).toBe(path.join(tmpDir, "bad-workspace"));
+    expect(malformed[0].path).toBe(path.join(tmpDir, ".research", "bad-workspace"));
   });
 
   it("does not abort listing when encountering malformed workspaces", () => {
@@ -376,8 +372,8 @@ describe("/research list — workspace discovery", () => {
     buildWorkspace(tmpDir, "valid-2", "valid 2", "run-2", "tr-2");
     buildWorkspace(tmpDir, "valid-3", "valid 3", "run-3", "tr-3");
     // Multiple malformed
-    fs.mkdirSync(path.join(tmpDir, "bad-1"));
-    fs.mkdirSync(path.join(tmpDir, "bad-2"));
+    fs.mkdirSync(path.join(tmpDir, ".research", "bad-1"));
+    fs.mkdirSync(path.join(tmpDir, ".research", "bad-2"));
 
     const { entries, malformed } = listWorkspaces(tmpDir);
     expect(entries.length).toBe(3); // All valid ones found
@@ -387,7 +383,7 @@ describe("/research list — workspace discovery", () => {
   it("includes lifecycle status in entries", () => {
     buildWorkspace(tmpDir, "paused-ws", "paused ws", "run-1", "tr-1", "standard", "paused");
     buildWorkspace(tmpDir, "abandoned-ws", "abandoned ws", "run-2", "tr-2");
-    markAbandoned({ path: path.join(tmpDir, "abandoned-ws"), projectRoot: tmpDir, mission: "abandoned", runId: "run-2", transitionId: "tr-2" } as Workspace, "user cancel");
+    markAbandoned({ path: path.join(tmpDir, ".research", "abandoned-ws"), projectRoot: tmpDir, mission: "abandoned", runId: "run-2", transitionId: "tr-2" } as Workspace, "user cancel");
 
     const { entries } = listWorkspaces(tmpDir);
     expect(entries.length).toBe(2);
@@ -401,7 +397,7 @@ describe("/research list — workspace discovery", () => {
     buildWorkspace(tmpDir, "typed-ws", "typed", "run-123", "tr-abc", "quick");
     const { entries } = listWorkspaces(tmpDir);
     const entry = entries[0];
-    expect(entry.path).toBe(path.join(tmpDir, "typed-ws"));
+    expect(entry.path).toBe(path.join(tmpDir, ".research", "typed-ws"));
     expect(entry.runId).toBe("run-123");
     expect(entry.mission).toBe("typed");
     expect(entry.status).toBe("active");
@@ -442,7 +438,7 @@ describe("/research status — workspace lookup", () => {
     buildWorkspace(tmpDir, "exact-name", "exact", "run-1", "tr-1");
     const entry = lookupWorkspace(tmpDir, "exact-name");
     expect(entry).not.toBeNull();
-    expect(entry!.path).toBe(path.join(tmpDir, "exact-name"));
+    expect(entry!.path).toBe(path.join(tmpDir, ".research", "exact-name"));
     expect(entry!.mission).toBe("exact");
   });
 
@@ -452,9 +448,19 @@ describe("/research status — workspace lookup", () => {
 
   it("looks up workspace by absolute path", () => {
     buildWorkspace(tmpDir, "abs-test", "absolute", "run-1", "tr-1");
-    const entry = lookupWorkspace(tmpDir, path.join(tmpDir, "abs-test"));
+    const entry = lookupWorkspace(tmpDir, path.join(tmpDir, ".research", "abs-test"));
     expect(entry).not.toBeNull();
     expect(entry!.mission).toBe("absolute");
+  });
+  it("finds a timestamped workspace by bare slug (timestamp prefix stripped)", () => {
+    buildWorkspace(tmpDir, "20260813-1432-ts-ws", "ts mission", "run-1", "tr-1");
+    const bySlug = lookupWorkspace(tmpDir, "ts-ws");
+    expect(bySlug).not.toBeNull();
+    expect(bySlug!.mission).toBe("ts mission");
+    const byFull = lookupWorkspace(tmpDir, "20260813-1432-ts-ws");
+    expect(byFull).not.toBeNull();
+    const byPrefix = lookupWorkspace(tmpDir, "ts");
+    expect(byPrefix).not.toBeNull();
   });
 });
 
@@ -590,7 +596,7 @@ describe("getActiveWorkspace", () => {
 
     const active = getActiveWorkspace(tmpDir, transitionsPath);
     expect(active).not.toBeNull();
-    expect(active!.path).toBe(path.join(tmpDir, "active-ws"));
+    expect(active!.path).toBe(path.join(tmpDir, ".research", "active-ws"));
   });
 
   it("returns null when no transitions pointer", () => {
@@ -610,6 +616,6 @@ describe("getActiveWorkspace", () => {
     const active = getActiveWorkspace(tmpDir, transitionsPath);
     // Should fall back to the first active workspace
     expect(active).not.toBeNull();
-    expect(active!.path).toBe(path.join(tmpDir, "fallback-ws"));
+    expect(active!.path).toBe(path.join(tmpDir, ".research", "fallback-ws"));
   });
 });

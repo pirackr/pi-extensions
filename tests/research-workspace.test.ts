@@ -167,7 +167,9 @@ describe("suffix allocation", () => {
 	});
 	it("allocates -2 when the base slug's final directory already exists", () => {
 		// A prior completed run left a visible final dir; its claim was cleaned up.
-		fs.mkdirSync(path.join(tmpDir, ".research", "same-mission"), { recursive: true });
+		fs.mkdirSync(path.join(tmpDir, ".research", "same-mission"), {
+			recursive: true,
+		});
 		const claim = acquireWorkspaceClaim(tmpDir, "same mission", "t1");
 		expect(claim.finalDir).toBe("same-mission-2");
 	});
@@ -585,45 +587,62 @@ describe("full staging → commit → manifest flow", () => {
 		expect(fs.existsSync(path.join(ws.path, ".research"))).toBe(true);
 	});
 
-// ===========================================================================
-// Timestamped workspace naming
-// ===========================================================================
+	// ===========================================================================
+	// Timestamped workspace naming
+	// ===========================================================================
 
-describe("timestamped workspace naming", () => {
-	let tmpDir: string;
+	describe("timestamped workspace naming", () => {
+		let tmpDir: string;
 
-	beforeEach(() => {
-		tmpDir = createTempDir();
+		beforeEach(() => {
+			tmpDir = createTempDir();
+		});
+
+		afterEach(() => {
+			cleanup(tmpDir);
+		});
+
+		it("formatTimestamp formats as YYYYMMDD-HHmm local time", () => {
+			const d = new Date(2026, 7, 13, 14, 32); // 2026-08-13 14:32 local
+			expect(formatTimestamp(d)).toBe("20260813-1432");
+		});
+
+		it("acquireWorkspaceClaim uses finalDirBase verbatim when provided", () => {
+			const claim = acquireWorkspaceClaim(
+				tmpDir,
+				"my mission",
+				"t1",
+				"20260813-1432-my-mission",
+			);
+			expect(claim.finalDir).toBe("20260813-1432-my-mission");
+			expect(claim.claimPath).toMatch(/\.claim-20260813-1432-my-mission-t1$/);
+		});
+
+		it("commitStaging places the workspace under .research/<finalDir>", () => {
+			const claim = acquireWorkspaceClaim(
+				tmpDir,
+				"ts commit",
+				"t1",
+				"20260813-1432-ts-commit",
+			);
+			const staged = prepareStaging(claim);
+			writeManifestInStaging(staged.stagingPath, "ts commit", "t1");
+			const ws = commitStaging(staged, claim);
+			expect(ws.path).toBe(
+				path.join(tmpDir, ".research", "20260813-1432-ts-commit"),
+			);
+			expect(fs.statSync(ws.path).isDirectory()).toBe(true);
+		});
+
+		it("collision suffix applies to the timestamped base within the same minute", () => {
+			acquireWorkspaceClaim(tmpDir, "dup", "t1", "20260813-1432-dup");
+			const second = acquireWorkspaceClaim(
+				tmpDir,
+				"dup",
+				"t2",
+				"20260813-1432-dup",
+			);
+			expect(second.finalDir).toBe("20260813-1432-dup-2");
+		});
 	});
-
-	afterEach(() => {
-		cleanup(tmpDir);
-	});
-
-	it("formatTimestamp formats as YYYYMMDD-HHmm local time", () => {
-		const d = new Date(2026, 7, 13, 14, 32); // 2026-08-13 14:32 local
-		expect(formatTimestamp(d)).toBe("20260813-1432");
-	});
-
-	it("acquireWorkspaceClaim uses finalDirBase verbatim when provided", () => {
-		const claim = acquireWorkspaceClaim(tmpDir, "my mission", "t1", "20260813-1432-my-mission");
-		expect(claim.finalDir).toBe("20260813-1432-my-mission");
-		expect(claim.claimPath).toMatch(/\.claim-20260813-1432-my-mission-t1$/);
-	});
-
-	it("commitStaging places the workspace under .research/<finalDir>", () => {
-		const claim = acquireWorkspaceClaim(tmpDir, "ts commit", "t1", "20260813-1432-ts-commit");
-		const staged = prepareStaging(claim);
-		writeManifestInStaging(staged.stagingPath, "ts commit", "t1");
-		const ws = commitStaging(staged, claim);
-		expect(ws.path).toBe(path.join(tmpDir, ".research", "20260813-1432-ts-commit"));
-		expect(fs.statSync(ws.path).isDirectory()).toBe(true);
-	});
-
-	it("collision suffix applies to the timestamped base within the same minute", () => {
-		acquireWorkspaceClaim(tmpDir, "dup", "t1", "20260813-1432-dup");
-		const second = acquireWorkspaceClaim(tmpDir, "dup", "t2", "20260813-1432-dup");
-		expect(second.finalDir).toBe("20260813-1432-dup-2");
-	});
-});
 });

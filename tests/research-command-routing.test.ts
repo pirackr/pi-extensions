@@ -28,9 +28,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 
 interface MockCommandDef {
 	handler: (args: string, ctx: unknown) => Promise<void>;
-	getArgumentCompletions?: (
-		prefix: string,
-	) => Array<{ value: string }> | null;
+	getArgumentCompletions?: (prefix: string) => Array<{ value: string }> | null;
 }
 
 function makeMockPi() {
@@ -61,9 +59,27 @@ interface NotifyCall {
  */
 function fakeModelRegistry() {
 	const models = [
-		{ id: "local/strong", name: "strong", provider: "local", reasoning: true, input: ["text"] },
-		{ id: "local/eval", name: "eval", provider: "local", reasoning: true, input: ["text"] },
-		{ id: "local/light", name: "light", provider: "local", reasoning: false, input: ["text"] },
+		{
+			id: "local/strong",
+			name: "strong",
+			provider: "local",
+			reasoning: true,
+			input: ["text"],
+		},
+		{
+			id: "local/eval",
+			name: "eval",
+			provider: "local",
+			reasoning: true,
+			input: ["text"],
+		},
+		{
+			id: "local/light",
+			name: "light",
+			provider: "local",
+			reasoning: false,
+			input: ["text"],
+		},
 	];
 	return {
 		getAll: () => models,
@@ -122,9 +138,8 @@ function buildRetainedWorkspace(
 function lifecycleCurrent(wsPath: string): string | null {
 	const p = path.join(wsPath, ".research", "lifecycle.json");
 	if (!fs.existsSync(p)) return null;
-	return (
-		JSON.parse(fs.readFileSync(p, "utf-8")) as { current: string }
-	).current;
+	return (JSON.parse(fs.readFileSync(p, "utf-8")) as { current: string })
+		.current;
 }
 
 describe("/research workspace subcommand routing", () => {
@@ -229,7 +244,12 @@ describe("/research workspace subcommand routing", () => {
 	});
 
 	it("/research pause <slug> transitions the workspace lifecycle to paused", async () => {
-		const wsPath = buildRetainedWorkspace(cwd, "pausable-run", "Pause me", "active");
+		const wsPath = buildRetainedWorkspace(
+			cwd,
+			"pausable-run",
+			"Pause me",
+			"active",
+		);
 		const ctx = mockCtx(cwd);
 		await mock.commands.research.handler("pause pausable-run", ctx);
 		expect(lifecycleCurrent(wsPath)).toBe("paused");
@@ -240,41 +260,55 @@ describe("/research workspace subcommand routing", () => {
 		await mock.commands.research.handler("--yes pause-mission", mockCtx(cwd));
 		const researchDir = path.join(cwd, ".research");
 		// The real startup timestamps the final dir: <YYYYMMDD-HHmm>-pause-mission
-		const runDir = fs.readdirSync(researchDir).find((d) => d.includes("pause-mission"));
+		const runDir = fs
+			.readdirSync(researchDir)
+			.find((d) => d.includes("pause-mission"));
 		expect(runDir).toBeDefined();
 		const wsPath = path.join(researchDir, runDir!);
 		expect(fs.existsSync(path.join(wsPath, ".research"))).toBe(true);
-		const appendsBefore = (
-			mock.pi.appendEntry as ReturnType<typeof vi.fn>
-		).mock.calls.length;
+		const appendsBefore = (mock.pi.appendEntry as ReturnType<typeof vi.fn>).mock
+			.calls.length;
 		const ctx = mockCtx(cwd);
 		await mock.commands.research.handler("pause", ctx);
 		// Workspace lifecycle was paused...
 		expect(lifecycleCurrent(wsPath)).toBe("paused");
 		// ...but the engine loop state was NOT touched (no new persistence entry).
-		const appendsAfter = (
-			mock.pi.appendEntry as ReturnType<typeof vi.fn>
-		).mock.calls.length;
+		const appendsAfter = (mock.pi.appendEntry as ReturnType<typeof vi.fn>).mock
+			.calls.length;
 		expect(appendsAfter).toBe(appendsBefore);
 		expect(ctx.getNotifications()[0].message).toContain("Paused");
 		expect(ctx.getNotifications()[0].message).toContain("pause-mission");
 	});
 
 	it("/research pause on a completed workspace reports the invalid transition", async () => {
-		const wsPath = buildRetainedWorkspace(cwd, "done-pause", "Done", "complete");
+		const wsPath = buildRetainedWorkspace(
+			cwd,
+			"done-pause",
+			"Done",
+			"complete",
+		);
 		const ctx = mockCtx(cwd);
 		await mock.commands.research.handler("pause done-pause", ctx);
 		expect(lifecycleCurrent(wsPath)).toBe("complete"); // untouched
 		expect(ctx.getNotifications()[0].level).toBe("warning");
-		expect(ctx.getNotifications()[0].message).toContain("Cannot pause done-pause");
+		expect(ctx.getNotifications()[0].message).toContain(
+			"Cannot pause done-pause",
+		);
 	});
 
 	it("/research clear <slug> abandons the workspace", async () => {
-		const wsPath = buildRetainedWorkspace(cwd, "clearable-run", "Clear me", "paused");
+		const wsPath = buildRetainedWorkspace(
+			cwd,
+			"clearable-run",
+			"Clear me",
+			"paused",
+		);
 		const ctx = mockCtx(cwd);
 		await mock.commands.research.handler("clear clearable-run", ctx);
 		expect(lifecycleCurrent(wsPath)).toBe("abandoned");
-		expect(ctx.getNotifications()[0].message).toContain("Cleared clearable-run");
+		expect(ctx.getNotifications()[0].message).toContain(
+			"Cleared clearable-run",
+		);
 	});
 
 	it("/research clear with no active workspace shows a notice", async () => {
@@ -286,14 +320,21 @@ describe("/research workspace subcommand routing", () => {
 	});
 
 	it("/research resume <slug> validates, acquires the lease, and marks active", async () => {
-		const wsPath = buildRetainedWorkspace(cwd, "resumable-run", "Resume me", "paused");
+		const wsPath = buildRetainedWorkspace(
+			cwd,
+			"resumable-run",
+			"Resume me",
+			"paused",
+		);
 		const ctx = mockCtx(cwd);
 		await mock.commands.research.handler("resume resumable-run", ctx);
 		expect(lifecycleCurrent(wsPath)).toBe("active");
 		expect(
 			fs.existsSync(path.join(wsPath, ".research", "run-lease.json")),
 		).toBe(true);
-		expect(ctx.getNotifications()[0].message).toContain("Resumed resumable-run");
+		expect(ctx.getNotifications()[0].message).toContain(
+			"Resumed resumable-run",
+		);
 	});
 
 	it("/research resume <slug> on a non-resumable workspace reports the error kind", async () => {

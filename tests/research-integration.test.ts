@@ -46,10 +46,22 @@ import {
 	updateRunState,
 	acquireLease,
 } from "../extensions/research/state.ts";
-import { createRunManifest, readManifest } from "../extensions/research/manifest.ts";
-import { evaluateCheckpoint, computeEvidenceDigest } from "../extensions/research/checkpoint.ts";
-import { researchCompletionGate, finalizeSuccess } from "../extensions/research/completion.ts";
-import { ResearchPolicy, type FrozenConfig } from "../extensions/research/policy.ts";
+import {
+	createRunManifest,
+	readManifest,
+} from "../extensions/research/manifest.ts";
+import {
+	evaluateCheckpoint,
+	computeEvidenceDigest,
+} from "../extensions/research/checkpoint.ts";
+import {
+	researchCompletionGate,
+	finalizeSuccess,
+} from "../extensions/research/completion.ts";
+import {
+	ResearchPolicy,
+	type FrozenConfig,
+} from "../extensions/research/policy.ts";
 import {
 	prepareAndActivateResearch,
 	validateStartupContract,
@@ -60,7 +72,7 @@ import {
 	type ResearchStartRequest,
 	type ActiveResearchPointer,
 } from "../extensions/research/startup.ts";
-	import type { ResolvedResearchConfig } from "../extensions/research/config.ts";
+import type { ResolvedResearchConfig } from "../extensions/research/config.ts";
 import {
 	createLifecycleSnapshot,
 	persistLifecycle,
@@ -76,8 +88,14 @@ import {
 import { resumeWorkspace } from "../extensions/research/resume.ts";
 import { LoopEngine } from "../extensions/loop/engine.ts";
 import type { LoopState } from "../extensions/loop/state.ts";
-import { addCoordinatorUsage, addNestedUsage } from "../extensions/loop/state.ts";
-import type { CompletionPolicy, CompletionFailure } from "../extensions/loop/completion.ts";
+import {
+	addCoordinatorUsage,
+	addNestedUsage,
+} from "../extensions/loop/state.ts";
+import type {
+	CompletionPolicy,
+	CompletionFailure,
+} from "../extensions/loop/completion.ts";
 import { makeGenericPolicy } from "../extensions/loop/completion.ts";
 import type {
 	AttemptResult,
@@ -169,7 +187,10 @@ function baseConfig(): ResolvedResearchConfig {
 }
 
 function fakeModelRegistry(
-	overrides: Record<string, { id: string; name: string; provider: string; capabilities?: string[] }> = {},
+	overrides: Record<
+		string,
+		{ id: string; name: string; provider: string; capabilities?: string[] }
+	> = {},
 ): ModelRegistryView {
 	const models = { ...overrides };
 	return {
@@ -205,8 +226,18 @@ function fakeProviderRegistry(
 
 function standardModels() {
 	return fakeModelRegistry({
-		strong: { id: "strong-1", name: "strong", provider: "anthropic", capabilities: ["web_lookup", "fetch_web"] },
-		eval: { id: "eval-1", name: "eval", provider: "anthropic", capabilities: ["read"] },
+		strong: {
+			id: "strong-1",
+			name: "strong",
+			provider: "anthropic",
+			capabilities: ["web_lookup", "fetch_web"],
+		},
+		eval: {
+			id: "eval-1",
+			name: "eval",
+			provider: "anthropic",
+			capabilities: ["read"],
+		},
 	});
 }
 
@@ -235,7 +266,11 @@ function buildWorkspace(
 	const ws = commitStaging(staged, claim);
 	createRunManifest(
 		ws,
-		JSON.stringify({ mission: ws.mission, profile: "standard", createdAt: Date.now() }),
+		JSON.stringify({
+			mission: ws.mission,
+			profile: "standard",
+			createdAt: Date.now(),
+		}),
 	);
 	const init = newRunState(ws);
 	fs.writeFileSync(
@@ -258,7 +293,8 @@ const SCORE_MD =
 
 /** 16 unique source URLs — above the packaged quick profile floor of 15. */
 function notesMd(count = 16): string {
-	let out = "| URL | Title | Tier | Retrieved | Claims |\n" +
+	let out =
+		"| URL | Title | Tier | Retrieved | Claims |\n" +
 		"| --- | --- | --- | --- | --- |\n";
 	for (let i = 0; i < count; i++) {
 		out += `| https://example.com/source-${i} | Source ${i} | primary | 2026-08-01 | 2 |\n`;
@@ -281,7 +317,11 @@ function writeReport(ws: Workspace): void {
 	);
 }
 
-function writeJudge(ws: Workspace, runId: string, opts?: { pass?: boolean; verdict?: string }): void {
+function writeJudge(
+	ws: Workspace,
+	runId: string,
+	opts?: { pass?: boolean; verdict?: string },
+): void {
 	const artifact = {
 		version: 1,
 		runId,
@@ -313,7 +353,11 @@ function flushMicrotasks(): Promise<void> {
 function makeMockPi() {
 	const entries: Array<{ type: string; data: unknown }> = [];
 	const activeTools: string[] = [];
-	const messages: Array<{ customType: string; content: string; details: unknown }> = [];
+	const messages: Array<{
+		customType: string;
+		content: string;
+		details: unknown;
+	}> = [];
 	const pi = {
 		appendEntry: vi.fn((type: string, data: unknown) => {
 			entries.push({ type, data });
@@ -324,7 +368,9 @@ function makeMockPi() {
 			activeTools.push(...tools);
 		}),
 		sendMessage: vi.fn((msg: unknown) => {
-			messages.push(msg as { customType: string; content: string; details: unknown });
+			messages.push(
+				msg as { customType: string; content: string; details: unknown },
+			);
 		}),
 	};
 	return { pi, entries, activeTools, messages };
@@ -333,11 +379,14 @@ function makeMockPi() {
 function makeMockCtx(pending = false) {
 	const statusLines: string[] = [];
 	return {
-		ui: { setStatus: vi.fn((_: string, line: string) => statusLines.push(line)) },
+		ui: {
+			setStatus: vi.fn((_: string, line: string) => statusLines.push(line)),
+		},
 		hasPendingMessages: () => pending,
 		isIdle: () => !pending,
 		sessionManager: {
-			getEntries: () => [] as Array<{ type: string; customType: string; data: unknown }>,
+			getEntries: () =>
+				[] as Array<{ type: string; customType: string; data: unknown }>,
 		},
 		getStatusLines: () => [...statusLines],
 	};
@@ -430,16 +479,28 @@ async function dispatchAttempts(
 	provider: RecordingProvider,
 	attempts: ResolvedAttempt[],
 ): Promise<{ aggregated: number; outcomes: AttemptOutcome[] }> {
-	const ledgerPath = path.join(policy.workspace.path, ".research", "attempt-ledger.json");
-	const ledger: Array<{ reservationId: string; attemptId: string; planId: string }> = [];
+	const ledgerPath = path.join(
+		policy.workspace.path,
+		".research",
+		"attempt-ledger.json",
+	);
+	const ledger: Array<{
+		reservationId: string;
+		attemptId: string;
+		planId: string;
+	}> = [];
 	let aggregated = 0;
 	const outcomes: AttemptOutcome[] = [];
 
 	for (const attempt of attempts) {
-		const reservation: AttemptReservation | undefined = await policy.reserveAttempt(attempt);
+		const reservation: AttemptReservation | undefined =
+			await policy.reserveAttempt(attempt);
 		if (!reservation) {
 			// Reservation rejected — no physical launch.
-			outcomes.push({ status: "failed", error: { message: "reservation rejected" } });
+			outcomes.push({
+				status: "failed",
+				error: { message: "reservation rejected" },
+			});
 			continue;
 		}
 		// Persist the reservation BEFORE launching (crash-safe ledger).
@@ -452,7 +513,10 @@ async function dispatchAttempts(
 
 		let outcome: AttemptOutcome;
 		try {
-			const result = await provider.executeAttempt(attempt, new AbortController().signal);
+			const result = await provider.executeAttempt(
+				attempt,
+				new AbortController().signal,
+			);
 			outcome = { status: "completed", result };
 		} catch (err) {
 			outcome = {
@@ -471,14 +535,19 @@ async function dispatchAttempts(
 }
 
 /** Read the persisted reserved-attempt ledger from a workspace. */
-function readLedger(ws: Workspace): Array<{ reservationId: string; attemptId: string; planId: string }> {
+function readLedger(
+	ws: Workspace,
+): Array<{ reservationId: string; attemptId: string; planId: string }> {
 	const ledgerPath = path.join(ws.path, ".research", "attempt-ledger.json");
 	if (!fs.existsSync(ledgerPath)) return [];
 	return JSON.parse(fs.readFileSync(ledgerPath, "utf-8"));
 }
 
 /** Build a real ResearchPolicy over the real frozen role config. */
-function makePolicyFor(ws: Workspace, overrides?: { totalDispatch?: number; concurrentDispatch?: number }): ResearchPolicy {
+function makePolicyFor(
+	ws: Workspace,
+	overrides?: { totalDispatch?: number; concurrentDispatch?: number },
+): ResearchPolicy {
 	const frozen: FrozenConfig = {
 		roles: Object.fromEntries(
 			Object.entries(baseConfig().roles).map(([name, role]) => [
@@ -487,7 +556,8 @@ function makePolicyFor(ws: Workspace, overrides?: { totalDispatch?: number; conc
 					...role,
 					name,
 					totalDispatch: overrides?.totalDispatch ?? role.totalDispatch,
-					concurrentDispatch: overrides?.concurrentDispatch ?? role.concurrentDispatch,
+					concurrentDispatch:
+						overrides?.concurrentDispatch ?? role.concurrentDispatch,
 				},
 			]),
 		),
@@ -496,7 +566,12 @@ function makePolicyFor(ws: Workspace, overrides?: { totalDispatch?: number; conc
 	return new ResearchPolicy(ws, frozen, 1800);
 }
 
-function makeAttempt(attemptId: string, planId = "plan-1", index = 0, role = "scout"): ResolvedAttempt {
+function makeAttempt(
+	attemptId: string,
+	planId = "plan-1",
+	index = 0,
+	role = "scout",
+): ResolvedAttempt {
 	return { attemptId, planId, index, taskInfo: { role } };
 }
 
@@ -546,7 +621,13 @@ describe("integration — startup and frozen snapshots", () => {
 	}
 
 	function request(mission: string, yes = true): ResearchStartRequest {
-		return { mission, profile: "standard", programPath: null, profileOverride: null, yes };
+		return {
+			mission,
+			profile: "standard",
+			programPath: null,
+			profileOverride: null,
+			yes,
+		};
 	}
 
 	it("activates a run with frozen manifest, run-state, lease, and pointer", async () => {
@@ -558,10 +639,22 @@ describe("integration — startup and frozen snapshots", () => {
 
 		// Workspace + retained files
 		expect(fs.existsSync(pointer.workspace.path)).toBe(true);
-		const manifestPath = path.join(pointer.workspace.path, ".research", "run.json");
+		const manifestPath = path.join(
+			pointer.workspace.path,
+			".research",
+			"run.json",
+		);
 		expect(fs.existsSync(manifestPath)).toBe(true);
-		expect(fs.existsSync(path.join(pointer.workspace.path, ".research", "run-state.json"))).toBe(true);
-		expect(fs.existsSync(path.join(pointer.workspace.path, ".research", "run-lease.json"))).toBe(true);
+		expect(
+			fs.existsSync(
+				path.join(pointer.workspace.path, ".research", "run-state.json"),
+			),
+		).toBe(true);
+		expect(
+			fs.existsSync(
+				path.join(pointer.workspace.path, ".research", "run-lease.json"),
+			),
+		).toBe(true);
 
 		// Frozen manifest: workspace path = final path, snapshot bound
 		const manifest = readManifest(pointer.workspace);
@@ -569,7 +662,9 @@ describe("integration — startup and frozen snapshots", () => {
 		expect(manifest.runId).toBe(pointer.workspace.runId);
 		expect(manifest.snapshotSha256).toBeTruthy();
 		// Immutable: a second manifest creation must throw
-		expect(() => createRunManifest(pointer.workspace)).toThrow(/already exists/);
+		expect(() => createRunManifest(pointer.workspace)).toThrow(
+			/already exists/,
+		);
 
 		// Run-state: revision 1, active, zero counters. Run identity is
 		// consistent end-to-end: contract runId == workspace runId == state
@@ -585,7 +680,9 @@ describe("integration — startup and frozen snapshots", () => {
 
 		// Frozen contract
 		expect(pointer.contract.profileConfig.maxRounds).toBe(5);
-		expect(pointer.contract.providerSelection.resolvedProvider.id).toBe("local");
+		expect(pointer.contract.providerSelection.resolvedProvider.id).toBe(
+			"local",
+		);
 		expect(pointer.contract.runId).toBe(pointer.workspace.runId);
 		expect(pointer.policy.workspace.runId).toBe(pointer.workspace.runId);
 
@@ -594,20 +691,32 @@ describe("integration — startup and frozen snapshots", () => {
 		expect(transitions).toHaveLength(1);
 		expect(transitions[0].runId).toBe(pointer.contract.runId);
 		expect(transitions[0].status).toBe("active");
-		expect(deps.transitions.getCurrentPointer()!.runId).toBe(pointer.contract.runId);
+		expect(deps.transitions.getCurrentPointer()!.runId).toBe(
+			pointer.contract.runId,
+		);
 
 		// History sees the retained workspace (manifest runId = workspace runId).
 		// Workspaces live beside the transitions file, i.e. under tmpDir/.research.
 		const listed = listWorkspaces(path.join(tmpDir, ".research"));
-		expect(listed.entries.some((e) => e.runId === pointer.workspace.runId)).toBe(true);
+		expect(
+			listed.entries.some((e) => e.runId === pointer.workspace.runId),
+		).toBe(true);
 		expect(listed.malformed).toHaveLength(0);
 	});
 
 	it("leaves a frozen contract untouched after a second validation", async () => {
 		const config = baseConfig();
-		const contract = await validateStartupContract(config, standardModels(), standardProviders());
+		const contract = await validateStartupContract(
+			config,
+			standardModels(),
+			standardProviders(),
+		);
 		const frozen = JSON.stringify(contract);
-		await validateStartupContract(config, standardModels(), standardProviders());
+		await validateStartupContract(
+			config,
+			standardModels(),
+			standardProviders(),
+		);
 		expect(JSON.stringify(contract)).toBe(frozen);
 	});
 
@@ -712,11 +821,19 @@ describe("integration — evidence collection and checkpoint idempotence", () =>
 		writeJudge(ws, ws.runId);
 
 		expect(await researchCompletionGate(ws)).toEqual([]);
-		const finalized = await finalizeSuccess(ws, readRunState(ws).revision, "PROCEED");
+		const finalized = await finalizeSuccess(
+			ws,
+			readRunState(ws).revision,
+			"PROCEED",
+		);
 		expect(finalized.status).toBe("complete");
 		expect(finalized.finalOutcome).toBe("PROCEED");
 		expect(finalized.finalDigests!.manifest).toBe(
-			createHash("sha256").update(fs.readFileSync(path.join(ws.path, ".research", "run.json"), "utf-8")).digest("hex"),
+			createHash("sha256")
+				.update(
+					fs.readFileSync(path.join(ws.path, ".research", "run.json"), "utf-8"),
+				)
+				.digest("hex"),
 		);
 		// run.json stays immutable.
 		expect(readManifest(ws).runId).toBe(ws.runId);
@@ -736,7 +853,10 @@ describe("integration — evidence collection and checkpoint idempotence", () =>
 		expect(await researchCompletionGate(ws)).toEqual([]);
 
 		// Editing evidence after the checkpoint invalidates the digest.
-		fs.appendFileSync(path.join(ws.path, "notes.md"), "\n- Claim → https://example.com/extra\n");
+		fs.appendFileSync(
+			path.join(ws.path, "notes.md"),
+			"\n- Claim → https://example.com/extra\n",
+		);
 		const failures = await researchCompletionGate(ws);
 		expect(codes(failures)).toContain("checkpoint");
 		expect(messages(failures)).toContain("stale");
@@ -835,7 +955,10 @@ describe("integration — every completion gate", () => {
 
 	it("rejects when the checkpoint verdict is CONTINUE", async () => {
 		const { ws, revision } = await passableWs();
-		await updateRunState(ws, revision, (c) => ({ ...c, checkpointVerdict: "CONTINUE" as const }));
+		await updateRunState(ws, revision, (c) => ({
+			...c,
+			checkpointVerdict: "CONTINUE" as const,
+		}));
 		const failures = await researchCompletionGate(ws);
 		expect(codes(failures)).toContain("checkpoint");
 		expect(messages(failures)).toContain("verdict is 'CONTINUE'");
@@ -886,7 +1009,10 @@ describe("integration — every completion gate", () => {
 
 	it("rejects an unknown checkpoint profile (cannot derive requirements)", async () => {
 		const { ws, revision } = await passableWs();
-		await updateRunState(ws, revision, (c) => ({ ...c, checkpointProfile: "bogus-profile" }));
+		await updateRunState(ws, revision, (c) => ({
+			...c,
+			checkpointProfile: "bogus-profile",
+		}));
 		const failures = await researchCompletionGate(ws);
 		expect(codes(failures)).toContain("verification");
 		expect(messages(failures)).toContain("unknown profile");
@@ -921,7 +1047,10 @@ describe("integration — every completion gate", () => {
 	it("finalizeSuccess: StateConflict on stale revision → re-audit with fresh revision succeeds", async () => {
 		const { ws, revision } = await passableWs();
 		// A concurrent writer bumps the revision.
-		await updateRunState(ws, revision, (c) => ({ ...c, tokensUsed: c.tokensUsed + 100 }));
+		await updateRunState(ws, revision, (c) => ({
+			...c,
+			tokensUsed: c.tokensUsed + 100,
+		}));
 		const fresh = readRunState(ws);
 
 		let conflict: StateConflict | null = null;
@@ -1061,7 +1190,10 @@ describe("integration — loop budget and dispatch limits", () => {
 
 	it("dispatch counters: ResearchPolicy enforces total/concurrent caps with zero launches after rejection", async () => {
 		const ws = buildWorkspace(tmpDir, "dispatch caps");
-		const policy = makePolicyFor(ws, { totalDispatch: 2, concurrentDispatch: 2 });
+		const policy = makePolicyFor(ws, {
+			totalDispatch: 2,
+			concurrentDispatch: 2,
+		});
 		const provider = new RecordingProvider();
 
 		const results = await dispatchAttempts(policy, provider, [
@@ -1072,12 +1204,20 @@ describe("integration — loop budget and dispatch limits", () => {
 
 		// Only two reservations succeeded → exactly two physical launches.
 		expect(provider.launches).toHaveLength(2);
-		expect(provider.launches.map((l) => l.attemptId)).toEqual(["att-1", "att-2"]);
-		expect(results.outcomes[2]).toEqual({ status: "failed", error: { message: "reservation rejected" } });
+		expect(provider.launches.map((l) => l.attemptId)).toEqual([
+			"att-1",
+			"att-2",
+		]);
+		expect(results.outcomes[2]).toEqual({
+			status: "failed",
+			error: { message: "reservation rejected" },
+		});
 
 		// The persisted reserved-attempt ledger matches the launch log exactly.
 		const ledger = readLedger(ws);
-		expect(ledger.map((l) => l.attemptId)).toEqual(provider.launches.map((l) => l.attemptId));
+		expect(ledger.map((l) => l.attemptId)).toEqual(
+			provider.launches.map((l) => l.attemptId),
+		);
 		// State tracks concurrency back to zero after release.
 		expect(readRunState(ws).concurrentReservations).toBe(0);
 	});
@@ -1220,17 +1360,23 @@ describe("integration — reload, resume, interruption, provider mismatch", () =
 		const snapshot = createLifecycleSnapshot("paused", "test-setup");
 		persistLifecycle(ws, snapshot);
 
-		const result = await resumeWorkspace(ws.path, {
-			config: baseConfig(),
-			getModels: () => standardModels(),
-			getProviders: () => standardProviders(),
-		}, "resume-session");
+		const result = await resumeWorkspace(
+			ws.path,
+			{
+				config: baseConfig(),
+				getModels: () => standardModels(),
+				getProviders: () => standardProviders(),
+			},
+			"resume-session",
+		);
 
 		expect(result.success).toBe(true);
 		if (result.success) {
 			// Lease reacquired by this session.
 			const leasePath = path.join(ws.path, ".research", "run-lease.json");
-			const lease = JSON.parse(fs.readFileSync(leasePath, "utf-8")) as { sessionId: string };
+			const lease = JSON.parse(fs.readFileSync(leasePath, "utf-8")) as {
+				sessionId: string;
+			};
 			expect(lease.sessionId).toBe("resume-session");
 			// Consumed counts kept.
 			const after = readRunState(ws);
@@ -1254,7 +1400,9 @@ describe("integration — reload, resume, interruption, provider mismatch", () =
 		});
 		expect(result.success).toBe(false);
 		if (!result.success) {
-			expect(["provider_incompatible", "models_changed"]).toContain(result.reason);
+			expect(["provider_incompatible", "models_changed"]).toContain(
+				result.reason,
+			);
 		}
 	});
 
@@ -1266,9 +1414,10 @@ describe("integration — reload, resume, interruption, provider mismatch", () =
 		const result = await resumeWorkspace(ws.path, {
 			config: baseConfig(),
 			getModels: () => standardModels(),
-			getProviders: () => fakeProviderRegistry([
-				{ id: "weak", adapterVersion: "1.0", capabilities: ["local"] },
-			]),
+			getProviders: () =>
+				fakeProviderRegistry([
+					{ id: "weak", adapterVersion: "1.0", capabilities: ["local"] },
+				]),
 		});
 		expect(result.success).toBe(false);
 		if (!result.success) {
@@ -1337,13 +1486,19 @@ describe("integration — replacement, abandonment, history", () => {
 		fs.mkdirSync(cache, { recursive: true });
 		fs.writeFileSync(path.join(cache, "index.html"), "<html/>", "utf-8");
 		// A partial workspace: directory with no metadata at all.
-		fs.mkdirSync(path.join(tmpDir, ".research", "partial-ws"), { recursive: true });
+		fs.mkdirSync(path.join(tmpDir, ".research", "partial-ws"), {
+			recursive: true,
+		});
 
 		const listed = listWorkspaces(tmpDir);
 		expect(listed.entries.map((e) => e.path)).not.toContain(
 			path.join(tmpDir, ".research", "cache", "web"),
 		);
-		expect(listed.malformed.some((m) => m.path === path.join(tmpDir, ".research", "partial-ws"))).toBe(true);
+		expect(
+			listed.malformed.some(
+				(m) => m.path === path.join(tmpDir, ".research", "partial-ws"),
+			),
+		).toBe(true);
 	});
 
 	it("pauses an active run and syncs run-state status", async () => {
@@ -1374,7 +1529,10 @@ describe("integration — concurrent state updates", () => {
 		const ws = buildWorkspace(tmpDir, "concurrent writes");
 
 		const [a, b] = await Promise.allSettled([
-			updateRunState(ws, 1, (c) => ({ ...c, coordinatorUsage: c.coordinatorUsage + 10 })),
+			updateRunState(ws, 1, (c) => ({
+				...c,
+				coordinatorUsage: c.coordinatorUsage + 10,
+			})),
 			updateRunState(ws, 1, (c) => ({ ...c, nestedUsage: c.nestedUsage + 20 })),
 		]);
 
@@ -1422,7 +1580,10 @@ describe("integration — usage totals and replay safety", () => {
 
 	it("aggregates coordinator + nested usage across parallel calls and retries", async () => {
 		const ws = buildWorkspace(tmpDir, "usage totals");
-		const policy = makePolicyFor(ws, { totalDispatch: 30, concurrentDispatch: 8 });
+		const policy = makePolicyFor(ws, {
+			totalDispatch: 30,
+			concurrentDispatch: 8,
+		});
 		const provider = new RecordingProvider();
 
 		// 6 attempts in parallel + 1 retry (att-4 fails once, retried as att-4r).
@@ -1442,7 +1603,9 @@ describe("integration — usage totals and replay safety", () => {
 		// 7 reserved attempts → 7 physical launches (including the failed retry).
 		expect(provider.launches).toHaveLength(7);
 		const ledger = readLedger(ws);
-		expect(ledger.map((l) => l.attemptId)).toEqual(provider.launches.map((l) => l.attemptId));
+		expect(ledger.map((l) => l.attemptId)).toEqual(
+			provider.launches.map((l) => l.attemptId),
+		);
 
 		// Aggregated nested usage counts completed attempts only (6 × 25).
 		expect(aggregated).toBe(150);
@@ -1467,21 +1630,36 @@ describe("integration — usage totals and replay safety", () => {
 			nestedUsage: 0,
 			processedToolCallIds: [],
 		};
-		const withNested = addNestedUsage(loop, { totalTokens: aggregated }, "toolcall-dispatch-1");
+		const withNested = addNestedUsage(
+			loop,
+			{ totalTokens: aggregated },
+			"toolcall-dispatch-1",
+		);
 		expect(withNested.nestedUsage).toBe(150);
 		expect(withNested.tokensUsed).toBe(150);
 
 		// Replay of the same tool result must NOT double-count.
-		const replayed = addNestedUsage(withNested, { totalTokens: aggregated }, "toolcall-dispatch-1");
+		const replayed = addNestedUsage(
+			withNested,
+			{ totalTokens: aggregated },
+			"toolcall-dispatch-1",
+		);
 		expect(replayed.nestedUsage).toBe(150);
 		expect(replayed.tokensUsed).toBe(150);
 
 		// Coordinator turn usage adds on top.
-		const afterCoordinator = addCoordinatorUsage(replayed, { totalTokens: 40 }, "toolcall-coord-1");
+		const afterCoordinator = addCoordinatorUsage(
+			replayed,
+			{ totalTokens: 40 },
+			"toolcall-coord-1",
+		);
 		expect(afterCoordinator.coordinatorUsage).toBe(40);
 		expect(afterCoordinator.nestedUsage).toBe(150);
 		expect(afterCoordinator.tokensUsed).toBe(190);
-		expect(afterCoordinator.processedToolCallIds).toEqual(["toolcall-dispatch-1", "toolcall-coord-1"]);
+		expect(afterCoordinator.processedToolCallIds).toEqual([
+			"toolcall-dispatch-1",
+			"toolcall-coord-1",
+		]);
 	});
 
 	it("persists totals across a simulated reload with no double-count after replay", async () => {
@@ -1506,7 +1684,11 @@ describe("integration — usage totals and replay safety", () => {
 		});
 		engineA.startTurn();
 		await engineA.endTurn(pi, ctx, { message: { usage: { totalTokens: 40 } } });
-		engineA.state = addNestedUsage(engineA.state!, { totalTokens: 150 }, "toolcall-dispatch-1");
+		engineA.state = addNestedUsage(
+			engineA.state!,
+			{ totalTokens: 150 },
+			"toolcall-dispatch-1",
+		);
 		engineA.persist(pi, ctx);
 		expect(engineA.usage.total).toBe(190);
 
@@ -1528,7 +1710,11 @@ describe("integration — usage totals and replay safety", () => {
 		expect(engineB.usage.nested).toBe(150);
 
 		// A replay of the same nested tool result after reload is deduplicated.
-		const withReplay = addNestedUsage(engineB.state!, { totalTokens: 150 }, "toolcall-dispatch-1");
+		const withReplay = addNestedUsage(
+			engineB.state!,
+			{ totalTokens: 150 },
+			"toolcall-dispatch-1",
+		);
 		expect(withReplay.nestedUsage).toBe(150);
 		expect(withReplay.tokensUsed).toBe(190);
 
@@ -1539,7 +1725,10 @@ describe("integration — usage totals and replay safety", () => {
 
 	it("fake provider launch log equals persisted reserved-attempt ledger after a full dispatch", async () => {
 		const ws = buildWorkspace(tmpDir, "ledger equality");
-		const policy = makePolicyFor(ws, { totalDispatch: 30, concurrentDispatch: 8 });
+		const policy = makePolicyFor(ws, {
+			totalDispatch: 30,
+			concurrentDispatch: 8,
+		});
 		const provider = new RecordingProvider();
 
 		// Mixed success/failure batch with retries.
@@ -1573,7 +1762,10 @@ describe("integration — usage totals and replay safety", () => {
 
 	it("rejects launches when the total dispatch budget is exhausted (end-to-end)", async () => {
 		const ws = buildWorkspace(tmpDir, "budget exhausted");
-		const policy = makePolicyFor(ws, { totalDispatch: 1, concurrentDispatch: 1 });
+		const policy = makePolicyFor(ws, {
+			totalDispatch: 1,
+			concurrentDispatch: 1,
+		});
 		const provider = new RecordingProvider();
 
 		const { aggregated } = await dispatchAttempts(policy, provider, [

@@ -13,27 +13,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ResolvedResearchConfig } from "./config.ts";
-import type {
-	Workspace,
-	WorkspaceClaim,
-	StagedRun,
-} from "./workspace.ts";
-import type {
-	RunState,
-	RunLease,
-} from "./state.ts";
+import type { Workspace, WorkspaceClaim, StagedRun } from "./workspace.ts";
+import type { RunState, RunLease } from "./state.ts";
 import type { RunManifest } from "./manifest.ts";
-import type {
-	ProviderDescriptor,
-} from "../subagent-dispatch/contract.ts";
+import type { ProviderDescriptor } from "../subagent-dispatch/contract.ts";
 import { negotiateProvider } from "../subagent-dispatch/contract.ts";
-import type {
-	Verdict,
-	CheckpointResult,
-} from "./checkpoint.ts";
-import type {
-	VerificationResult,
-} from "./verification.ts";
+import type { Verdict, CheckpointResult } from "./checkpoint.ts";
+import type { VerificationResult } from "./verification.ts";
 import type { ResearchPolicy, FrozenConfig } from "./policy.ts";
 import { formatRunId, slugify, formatTimestamp } from "./workspace.ts";
 
@@ -138,13 +124,8 @@ export interface StartupDependencies {
 			transitionId: string,
 			finalDirBase?: string,
 		) => WorkspaceClaim;
-		prepareStaging: (
-			claim: WorkspaceClaim,
-		) => StagedRun;
-		commitStaging: (
-			staged: StagedRun,
-			claim: WorkspaceClaim,
-		) => Workspace;
+		prepareStaging: (claim: WorkspaceClaim) => StagedRun;
+		commitStaging: (staged: StagedRun, claim: WorkspaceClaim) => Workspace;
 		reconcileTransition: (
 			projectRoot: string,
 			transitionId: string,
@@ -158,29 +139,18 @@ export interface StartupDependencies {
 	};
 	state: {
 		newRunState: (ws: Workspace) => RunState;
-		acquireLease: (
-			ws: Workspace,
-			sessionId: string,
-		) => Promise<RunLease>;
+		acquireLease: (ws: Workspace, sessionId: string) => Promise<RunLease>;
 	};
 	manifest: {
-		createRunManifest: (
-			ws: Workspace,
-			snapshotContent?: string,
-		) => RunManifest;
+		createRunManifest: (ws: Workspace, snapshotContent?: string) => RunManifest;
 	};
 	transitions: {
 		getPath: () => string;
-		appendTransition: (
-			record: TransitionRecord,
-		) => void;
+		appendTransition: (record: TransitionRecord) => void;
 		getTransitions: () => ReadonlyArray<TransitionRecord>;
 		markTransitionAsReplaced: (runId: string) => void;
 		getCurrentPointer: () => { runId: string; transitionId: string } | null;
-		setPointer: (
-			runId: string,
-			transitionId: string,
-		) => void;
+		setPointer: (runId: string, transitionId: string) => void;
 	};
 	policy: {
 		createPolicy: (
@@ -319,9 +289,7 @@ export async function validateStartupContract(
 	const profileName = config.defaultProfile;
 	const profileConfig = config.profiles[profileName];
 	if (!profileConfig) {
-		throw new Error(
-			`Unknown profile '${profileName}' in configuration.`,
-		);
+		throw new Error(`Unknown profile '${profileName}' in configuration.`);
 	}
 
 	// Validate profile thresholds
@@ -490,7 +458,9 @@ export async function prepareAndActivateResearch(
 		lines.push("├───────────────────────────────────────────────");
 		lines.push(`│  Mission:     ${mission}`);
 		lines.push(`│  Profile:     ${profile}`);
-		lines.push(`│  Provider:    ${contract.providerSelection.resolvedProvider.id}`);
+		lines.push(
+			`│  Provider:    ${contract.providerSelection.resolvedProvider.id}`,
+		);
 		lines.push(`│  Max Rounds:  ${contract.profileConfig.maxRounds ?? "∞"}`);
 		lines.push(`│  Min Sources: ${contract.profileConfig.minSources}`);
 		lines.push(`│  Timeout:     ${contract.hardCeilings.hardTimeoutSeconds}s`);
@@ -505,9 +475,7 @@ export async function prepareAndActivateResearch(
 		// module. The handler should catch CONTRACT_REQUIRES_CONFIRMATION,
 		// present the contract to the user, and re-invoke with `yes: true`
 		// when confirmed (or clean up staging on rejection).
-		throw new Error(
-			`CONTRACT_REQUIRES_CONFIRMATION: ${display}`,
-		);
+		throw new Error(`CONTRACT_REQUIRES_CONFIRMATION: ${display}`);
 	}
 
 	// --- Step 3: Resolve project root and transition ---
@@ -531,7 +499,10 @@ export async function prepareAndActivateResearch(
 
 	if (reconciliation.status === "rollback") {
 		// Clean up stale claim/staging from a previous interrupted transition
-		if (reconciliation.stagingPath && fs.existsSync(reconciliation.stagingPath)) {
+		if (
+			reconciliation.stagingPath &&
+			fs.existsSync(reconciliation.stagingPath)
+		) {
 			fs.rmSync(reconciliation.stagingPath, { recursive: true, force: true });
 		}
 	} else if (reconciliation.status === "resume") {

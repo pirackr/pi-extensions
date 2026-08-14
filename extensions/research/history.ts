@@ -15,16 +15,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Workspace } from "./workspace.ts";
-import {
-  newRunState,
-  readRunState,
-  type RunState,
-} from "./state.ts";
+import { newRunState, readRunState, type RunState } from "./state.ts";
 import type { LifecycleState } from "./lifecycle.ts";
 import {
-  loadLifecycleSnapshot,
-  createLifecycleSnapshot,
-  persistLifecycle,
+	loadLifecycleSnapshot,
+	createLifecycleSnapshot,
+	persistLifecycle,
 } from "./lifecycle.ts";
 import { TransitionsFile } from "./startup.ts";
 
@@ -33,33 +29,33 @@ import { TransitionsFile } from "./startup.ts";
 // ---------------------------------------------------------------------------
 
 export interface WorkspaceEntry {
-  /** Absolute path to the workspace directory. */
-  path: string;
-  /** Unique run identifier. */
-  runId: string;
-  /** Human-readable mission statement. */
-  mission: string;
-  /** Profile used for this workspace. */
-  profile: string;
-  /** Current lifecycle state. */
-  status: LifecycleState;
-  /** Reason for the current state, or null. */
-  reason: string | null;
-  /** Epoch milliseconds at creation. */
-  createdAt: number;
-  /** Epoch milliseconds at last update. */
-  updatedAt: number;
-  /** Transition identifier. */
-  transitionId: string;
-  /** Whether the workspace could be fully parsed. */
-  isMalformed: boolean;
-  /** If malformed, the error message. */
-  malformedReason: string | null;
+	/** Absolute path to the workspace directory. */
+	path: string;
+	/** Unique run identifier. */
+	runId: string;
+	/** Human-readable mission statement. */
+	mission: string;
+	/** Profile used for this workspace. */
+	profile: string;
+	/** Current lifecycle state. */
+	status: LifecycleState;
+	/** Reason for the current state, or null. */
+	reason: string | null;
+	/** Epoch milliseconds at creation. */
+	createdAt: number;
+	/** Epoch milliseconds at last update. */
+	updatedAt: number;
+	/** Transition identifier. */
+	transitionId: string;
+	/** Whether the workspace could be fully parsed. */
+	isMalformed: boolean;
+	/** If malformed, the error message. */
+	malformedReason: string | null;
 }
 
 export interface WorkspaceList {
-  entries: WorkspaceEntry[];
-  malformed: Array<{ path: string; reason: string }>;
+	entries: WorkspaceEntry[];
+	malformed: Array<{ path: string; reason: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,40 +76,51 @@ const TRANSITION_FILE = "transitions.json";
  * Check if a path is inside the research cache (excluded from listings).
  */
 function isInResearchCache(dir: string): boolean {
-  return dir.includes("/" + RESEARCH_CACHE_DIR + "/")
-    || dir.includes("/" + RESEARCH_CACHE_DIR);
+	return (
+		dir.includes("/" + RESEARCH_CACHE_DIR + "/") ||
+		dir.includes("/" + RESEARCH_CACHE_DIR)
+	);
 }
 
 /**
  * Read a workspace's lifecycle snapshot, creating a default if missing.
  */
-function readWorkspaceLifecycle(
-  workspacePath: string,
-): LifecycleState {
-  const snapshot = loadLifecycleSnapshot({ path: workspacePath, projectRoot: path.dirname(workspacePath), mission: "", runId: "", transitionId: "" } as Workspace);
-  if (snapshot) return snapshot.current;
-  // Check run-state.json for status
-  try {
-    const state = readRunState({ path: workspacePath, projectRoot: path.dirname(workspacePath), mission: "", runId: "", transitionId: "" } as Workspace);
-    const lifecycleMap: Record<RunState["status"], LifecycleState> = {
-      active: "active",
-      paused: "paused",
-      complete: "complete",
-      error: "failed",
-    };
-    return lifecycleMap[state.status] ?? "active";
-  } catch {
-    return "active";
-  }
+function readWorkspaceLifecycle(workspacePath: string): LifecycleState {
+	const snapshot = loadLifecycleSnapshot({
+		path: workspacePath,
+		projectRoot: path.dirname(workspacePath),
+		mission: "",
+		runId: "",
+		transitionId: "",
+	} as Workspace);
+	if (snapshot) return snapshot.current;
+	// Check run-state.json for status
+	try {
+		const state = readRunState({
+			path: workspacePath,
+			projectRoot: path.dirname(workspacePath),
+			mission: "",
+			runId: "",
+			transitionId: "",
+		} as Workspace);
+		const lifecycleMap: Record<RunState["status"], LifecycleState> = {
+			active: "active",
+			paused: "paused",
+			complete: "complete",
+			error: "failed",
+		};
+		return lifecycleMap[state.status] ?? "active";
+	} catch {
+		return "active";
+	}
 }
-
 
 /**
  * Strip the `<YYYYMMDD-HHmm>-` timestamp prefix from a workspace dir name,
  * if present, so slug matching works regardless of when the run happened.
  */
 function stripTimestampPrefix(name: string): string {
-  return name.replace(/^\d{8}-\d{4}-/, "");
+	return name.replace(/^\d{8}-\d{4}-/, "");
 }
 
 /**
@@ -126,25 +133,26 @@ function stripTimestampPrefix(name: string): string {
  * timestamp convention resolve migrated workspaces.
  */
 function findWorkspaceDir(projectRoot: string, name: string): string | null {
-  const researchDir = path.join(projectRoot, ".research");
-  if (!fs.existsSync(researchDir)) return null;
-  const dirs = fs.readdirSync(researchDir, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && !d.name.startsWith("."));
+	const researchDir = path.join(projectRoot, ".research");
+	if (!fs.existsSync(researchDir)) return null;
+	const dirs = fs
+		.readdirSync(researchDir, { withFileTypes: true })
+		.filter((d) => d.isDirectory() && !d.name.startsWith("."));
 
-  for (const dir of dirs) {
-    if (dir.name === name) return path.join(researchDir, dir.name);
-  }
-  for (const dir of dirs) {
-    if (stripTimestampPrefix(dir.name) === name) {
-      return path.join(researchDir, dir.name);
-    }
-  }
-  for (const dir of dirs) {
-    if (stripTimestampPrefix(dir.name).startsWith(name + "-")) {
-      return path.join(researchDir, dir.name);
-    }
-  }
-  return null;
+	for (const dir of dirs) {
+		if (dir.name === name) return path.join(researchDir, dir.name);
+	}
+	for (const dir of dirs) {
+		if (stripTimestampPrefix(dir.name) === name) {
+			return path.join(researchDir, dir.name);
+		}
+	}
+	for (const dir of dirs) {
+		if (stripTimestampPrefix(dir.name).startsWith(name + "-")) {
+			return path.join(researchDir, dir.name);
+		}
+	}
+	return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,46 +168,52 @@ function findWorkspaceDir(projectRoot: string, name: string): string | null {
  * - Reports malformed workspaces without aborting
  */
 export function discoverWorkspaces(projectRoot: string): WorkspaceList {
-  const entries: WorkspaceEntry[] = [];
-  const malformed: Array<{ path: string; reason: string }> = [];
+	const entries: WorkspaceEntry[] = [];
+	const malformed: Array<{ path: string; reason: string }> = [];
 
-  const researchDir = path.join(projectRoot, ".research");
-  if (!fs.existsSync(researchDir)) {
-    return { entries: [], malformed };
-  }
+	const researchDir = path.join(projectRoot, ".research");
+	if (!fs.existsSync(researchDir)) {
+		return { entries: [], malformed };
+	}
 
-  const dirs = fs.readdirSync(researchDir, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && !d.name.startsWith(".") && d.name !== "cache");
+	const dirs = fs
+		.readdirSync(researchDir, { withFileTypes: true })
+		.filter(
+			(d) => d.isDirectory() && !d.name.startsWith(".") && d.name !== "cache",
+		);
 
-  for (const dir of dirs) {
-    const dirPath = path.join(researchDir, dir.name);
+	for (const dir of dirs) {
+		const dirPath = path.join(researchDir, dir.name);
 
-    // Skip directories inside .research/cache/web/
-    if (isInResearchCache(dirPath)) {
-      continue;
-    }
+		// Skip directories inside .research/cache/web/
+		if (isInResearchCache(dirPath)) {
+			continue;
+		}
 
-    try {
-      const entry = buildWorkspaceEntry(dirPath);
-      if (entry) {
-        if (entry.isMalformed) {
-          malformed.push({ path: dirPath, reason: entry.malformedReason ?? "incomplete workspace metadata" });
-        } else {
-          entries.push(entry);
-        }
-      } else {
-        malformed.push({
-          path: dirPath,
-          reason: "incomplete workspace metadata",
-        });
-      }
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      malformed.push({ path: dirPath, reason });
-    }
-  }
+		try {
+			const entry = buildWorkspaceEntry(dirPath);
+			if (entry) {
+				if (entry.isMalformed) {
+					malformed.push({
+						path: dirPath,
+						reason: entry.malformedReason ?? "incomplete workspace metadata",
+					});
+				} else {
+					entries.push(entry);
+				}
+			} else {
+				malformed.push({
+					path: dirPath,
+					reason: "incomplete workspace metadata",
+				});
+			}
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			malformed.push({ path: dirPath, reason });
+		}
+	}
 
-  return { entries, malformed };
+	return { entries, malformed };
 }
 
 /**
@@ -207,156 +221,181 @@ export function discoverWorkspaces(projectRoot: string): WorkspaceList {
  * Returns null if the directory is incomplete (no state or manifest).
  */
 function buildWorkspaceEntry(workspacePath: string): WorkspaceEntry | null {
-  const lifecyclePath = path.join(workspacePath, ".research", LIFECYCLE_FILE);
-  const statePath = path.join(workspacePath, ".research", RUN_STATE_FILE);
-  const manifestPath = path.join(workspacePath, ".research", RUN_MANIFEST_FILE);
+	const lifecyclePath = path.join(workspacePath, ".research", LIFECYCLE_FILE);
+	const statePath = path.join(workspacePath, ".research", RUN_STATE_FILE);
+	const manifestPath = path.join(workspacePath, ".research", RUN_MANIFEST_FILE);
 
-  let lifecycle: LifecycleState = "active";
-  let reason: string | null = null;
-  let createdAt = Date.now();
-  let updatedAt = Date.now();
-  let isMalformed = false;
-  let malformedReason: string | null = null;
+	let lifecycle: LifecycleState = "active";
+	let reason: string | null = null;
+	let createdAt = Date.now();
+	let updatedAt = Date.now();
+	let isMalformed = false;
+	let malformedReason: string | null = null;
 
-  // Try to read lifecycle.json first
-  if (fs.existsSync(lifecyclePath)) {
-    try {
-      const snapshot = JSON.parse(
-        fs.readFileSync(lifecyclePath, "utf-8"),
-      ) as { current: string; reason?: string | null; timestamp: number; history: Array<{ from: string | null; to: string; reason: string; timestamp: number }> };
-      lifecycle = snapshot.current as LifecycleState;
-      reason = snapshot.reason ?? null;
-      createdAt = snapshot.history[0]?.timestamp ?? createdAt;
-      updatedAt = snapshot.timestamp;
-      // Derive transitionId from the initial transition (from === null)
-      const firstTransition = snapshot.history.find((h) => h.from === null);
-      if (firstTransition) {
-        // Extract transition ID from the reason field if it contains one
-        // (e.g., "created tr-abc: initial") or just use a placeholder
-      }
-    } catch {
-      isMalformed = true;
-      malformedReason = "lifecycle.json parse error";
-    }
-  }
+	// Try to read lifecycle.json first
+	if (fs.existsSync(lifecyclePath)) {
+		try {
+			const snapshot = JSON.parse(fs.readFileSync(lifecyclePath, "utf-8")) as {
+				current: string;
+				reason?: string | null;
+				timestamp: number;
+				history: Array<{
+					from: string | null;
+					to: string;
+					reason: string;
+					timestamp: number;
+				}>;
+			};
+			lifecycle = snapshot.current as LifecycleState;
+			reason = snapshot.reason ?? null;
+			createdAt = snapshot.history[0]?.timestamp ?? createdAt;
+			updatedAt = snapshot.timestamp;
+			// Derive transitionId from the initial transition (from === null)
+			const firstTransition = snapshot.history.find((h) => h.from === null);
+			if (firstTransition) {
+				// Extract transition ID from the reason field if it contains one
+				// (e.g., "created tr-abc: initial") or just use a placeholder
+			}
+		} catch {
+			isMalformed = true;
+			malformedReason = "lifecycle.json parse error";
+		}
+	}
 
-  // Fall back to run-state.json if no lifecycle
-  if (!isMalformed && !fs.existsSync(lifecyclePath)) {
-    if (fs.existsSync(statePath)) {
-      try {
-        const state = JSON.parse(
-          fs.readFileSync(statePath, "utf-8"),
-        ) as { status: string; runId: string; mission: string; createdAt: number; updatedAt: number; checkpointProfile?: string };
-        const lifecycleMap: Record<string, LifecycleState> = {
-          active: "active",
-          paused: "paused",
-          complete: "complete",
-          error: "failed",
-        };
-        lifecycle = lifecycleMap[state.status] ?? "active";
-        createdAt = state.createdAt ?? createdAt;
-        updatedAt = state.updatedAt ?? updatedAt;
+	// Fall back to run-state.json if no lifecycle
+	if (!isMalformed && !fs.existsSync(lifecyclePath)) {
+		if (fs.existsSync(statePath)) {
+			try {
+				const state = JSON.parse(fs.readFileSync(statePath, "utf-8")) as {
+					status: string;
+					runId: string;
+					mission: string;
+					createdAt: number;
+					updatedAt: number;
+					checkpointProfile?: string;
+				};
+				const lifecycleMap: Record<string, LifecycleState> = {
+					active: "active",
+					paused: "paused",
+					complete: "complete",
+					error: "failed",
+				};
+				lifecycle = lifecycleMap[state.status] ?? "active";
+				createdAt = state.createdAt ?? createdAt;
+				updatedAt = state.updatedAt ?? updatedAt;
 
-        // Build a default lifecycle snapshot for persistence
-        const ws = { path: workspacePath, projectRoot: path.dirname(workspacePath) } as unknown as Workspace;
-        const defaultSnapshot = createLifecycleSnapshot(lifecycle, "restored from run-state");
-        persistLifecycle(ws, defaultSnapshot);
-      } catch {
-        isMalformed = true;
-        malformedReason = "run-state.json parse error";
-      }
-    } else {
-      // No lifecycle or state — check manifest
-      if (fs.existsSync(manifestPath)) {
-        try {
-          const manifest = JSON.parse(
-            fs.readFileSync(manifestPath, "utf-8"),
-          ) as { runId: string; mission: string; createdAt: number; workspace: string; checkpointProfile?: string };
-          createdAt = manifest.createdAt ?? createdAt;
-        } catch {
-          isMalformed = true;
-          malformedReason = "run.json parse error";
-        }
-      } else {
-        return null; // incomplete workspace — no metadata at all
-      }
-    }
-  }
+				// Build a default lifecycle snapshot for persistence
+				const ws = {
+					path: workspacePath,
+					projectRoot: path.dirname(workspacePath),
+				} as unknown as Workspace;
+				const defaultSnapshot = createLifecycleSnapshot(
+					lifecycle,
+					"restored from run-state",
+				);
+				persistLifecycle(ws, defaultSnapshot);
+			} catch {
+				isMalformed = true;
+				malformedReason = "run-state.json parse error";
+			}
+		} else {
+			// No lifecycle or state — check manifest
+			if (fs.existsSync(manifestPath)) {
+				try {
+					const manifest = JSON.parse(
+						fs.readFileSync(manifestPath, "utf-8"),
+					) as {
+						runId: string;
+						mission: string;
+						createdAt: number;
+						workspace: string;
+						checkpointProfile?: string;
+					};
+					createdAt = manifest.createdAt ?? createdAt;
+				} catch {
+					isMalformed = true;
+					malformedReason = "run.json parse error";
+				}
+			} else {
+				return null; // incomplete workspace — no metadata at all
+			}
+		}
+	}
 
-  // Try to read manifest for runId, mission, profile
-  let runId = "";
-  let mission = path.basename(workspacePath);
-  let profile = "standard";
-  let transitionId = "";
+	// Try to read manifest for runId, mission, profile
+	let runId = "";
+	let mission = path.basename(workspacePath);
+	let profile = "standard";
+	let transitionId = "";
 
-  if (fs.existsSync(manifestPath)) {
-    try {
-      const manifest = JSON.parse(
-        fs.readFileSync(manifestPath, "utf-8"),
-      ) as {
-        runId?: string;
-        mission?: string;
-        workspace?: string;
-        profile?: string;
-      };
-      runId = manifest.runId ?? "";
-      mission = manifest.mission ?? mission;
-      if (manifest.profile) {
-        profile = manifest.profile;
-      }
-    } catch {
-      if (!isMalformed) {
-        isMalformed = true;
-        malformedReason = "run.json malformed";
-      }
-    }
-  }
+	if (fs.existsSync(manifestPath)) {
+		try {
+			const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
+				runId?: string;
+				mission?: string;
+				workspace?: string;
+				profile?: string;
+			};
+			runId = manifest.runId ?? "";
+			mission = manifest.mission ?? mission;
+			if (manifest.profile) {
+				profile = manifest.profile;
+			}
+		} catch {
+			if (!isMalformed) {
+				isMalformed = true;
+				malformedReason = "run.json malformed";
+			}
+		}
+	}
 
-  // Fall back to run-state for runId and profile if manifest didn't provide them
-  if (!runId || profile === "standard") {
-    if (fs.existsSync(statePath)) {
-      try {
-        const state = JSON.parse(
-          fs.readFileSync(statePath, "utf-8"),
-        ) as { runId?: string; mission?: string; checkpointProfile?: string };
-        if (state.runId) runId = state.runId;
-        if (state.mission) mission = state.mission;
-        if (state.checkpointProfile && state.checkpointProfile !== "standard") {
-          profile = state.checkpointProfile;
-        }
-      } catch {
-        if (!isMalformed) {
-          isMalformed = true;
-          malformedReason = "run-state.json malformed";
-        }
-      }
-    }
-  }
+	// Fall back to run-state for runId and profile if manifest didn't provide them
+	if (!runId || profile === "standard") {
+		if (fs.existsSync(statePath)) {
+			try {
+				const state = JSON.parse(fs.readFileSync(statePath, "utf-8")) as {
+					runId?: string;
+					mission?: string;
+					checkpointProfile?: string;
+				};
+				if (state.runId) runId = state.runId;
+				if (state.mission) mission = state.mission;
+				if (state.checkpointProfile && state.checkpointProfile !== "standard") {
+					profile = state.checkpointProfile;
+				}
+			} catch {
+				if (!isMalformed) {
+					isMalformed = true;
+					malformedReason = "run-state.json malformed";
+				}
+			}
+		}
+	}
 
-  // Try to derive transitionId from runId or from the lifecycle history
-  if (!transitionId && runId) {
-    transitionId = runId.split("-")[0] || "";
-  }
-  // Also check if lifecycle has a transitionId embedded in the reason
-  if (!transitionId || transitionId === "run") {
-    if (reason && /^tr-[a-z0-9]+/.test(reason)) {
-      transitionId = reason.match(/^tr-[a-z0-9]+/)![0];
-    }
-  }
+	// Try to derive transitionId from runId or from the lifecycle history
+	if (!transitionId && runId) {
+		transitionId = runId.split("-")[0] || "";
+	}
+	// Also check if lifecycle has a transitionId embedded in the reason
+	if (!transitionId || transitionId === "run") {
+		if (reason && /^tr-[a-z0-9]+/.test(reason)) {
+			transitionId = reason.match(/^tr-[a-z0-9]+/)![0];
+		}
+	}
 
-  return {
-    path: workspacePath,
-    runId,
-    mission,
-    profile,
-    status: lifecycle,
-    reason,
-    createdAt,
-    updatedAt,
-    transitionId,
-    isMalformed,
-    malformedReason,
-  };
+	return {
+		path: workspacePath,
+		runId,
+		mission,
+		profile,
+		status: lifecycle,
+		reason,
+		createdAt,
+		updatedAt,
+		transitionId,
+		isMalformed,
+		malformedReason,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -369,7 +408,7 @@ function buildWorkspaceEntry(workspacePath: string): WorkspaceEntry | null {
  * Reports malformed workspaces without aborting.
  */
 export function listWorkspaces(projectRoot: string): WorkspaceList {
-  return discoverWorkspaces(projectRoot);
+	return discoverWorkspaces(projectRoot);
 }
 
 /**
@@ -380,29 +419,29 @@ export function listWorkspaces(projectRoot: string): WorkspaceList {
  * Returns null if not found.
  */
 export function lookupWorkspace(
-  projectRoot: string,
-  slugOrPath: string,
+	projectRoot: string,
+	slugOrPath: string,
 ): WorkspaceEntry | null {
-  // Try as absolute path first
-  if (path.isAbsolute(slugOrPath)) {
-    if (fs.existsSync(slugOrPath)) {
-      return buildWorkspaceEntry(slugOrPath);
-    }
-    return null;
-  }
+	// Try as absolute path first
+	if (path.isAbsolute(slugOrPath)) {
+		if (fs.existsSync(slugOrPath)) {
+			return buildWorkspaceEntry(slugOrPath);
+		}
+		return null;
+	}
 
-  // Search .research/ — exact name, timestamp-stripped exact, then prefix
-  if (!fs.existsSync(projectRoot)) return null;
-  const found = findWorkspaceDir(projectRoot, slugOrPath);
-  return found ? buildWorkspaceEntry(found) : null;
+	// Search .research/ — exact name, timestamp-stripped exact, then prefix
+	if (!fs.existsSync(projectRoot)) return null;
+	const found = findWorkspaceDir(projectRoot, slugOrPath);
+	return found ? buildWorkspaceEntry(found) : null;
 }
 
 /**
  * Get the lifecycle snapshot for a workspace.
  */
 export function getLifecycle(workspacePath: string): LifecycleState | null {
-  if (!fs.existsSync(workspacePath)) return null;
-  return readWorkspaceLifecycle(workspacePath);
+	if (!fs.existsSync(workspacePath)) return null;
+	return readWorkspaceLifecycle(workspacePath);
 }
 
 /**
@@ -410,34 +449,34 @@ export function getLifecycle(workspacePath: string): LifecycleState | null {
  * Uses the transitions file pointer if available.
  */
 export function getActiveWorkspace(
-  projectRoot: string,
-  transitionsPath: string,
+	projectRoot: string,
+	transitionsPath: string,
 ): WorkspaceEntry | null {
-  try {
-    const tf = new TransitionsFile(transitionsPath);
-    const pointer = tf.getCurrentPointer();
-    if (!pointer) return null;
+	try {
+		const tf = new TransitionsFile(transitionsPath);
+		const pointer = tf.getCurrentPointer();
+		if (!pointer) return null;
 
-    const runIdParts = pointer.runId.split("-");
-    const transitionId = runIdParts[0] || "";
-    const slug = runIdParts.slice(1).join("-") || "";
+		const runIdParts = pointer.runId.split("-");
+		const transitionId = runIdParts[0] || "";
+		const slug = runIdParts.slice(1).join("-") || "";
 
-    // Find workspace by runId-derived name (timestamped for new runs, bare
-    // slug for migrated ones)
-    const found = findWorkspaceDir(projectRoot, slug);
-    if (found) {
-      const entry = buildWorkspaceEntry(found);
-      if (entry) {
-        entry.transitionId = transitionId;
-        return entry;
-      }
-    }
-  } catch {
-    // Transitions file missing — fall through
-  }
+		// Find workspace by runId-derived name (timestamped for new runs, bare
+		// slug for migrated ones)
+		const found = findWorkspaceDir(projectRoot, slug);
+		if (found) {
+			const entry = buildWorkspaceEntry(found);
+			if (entry) {
+				entry.transitionId = transitionId;
+				return entry;
+			}
+		}
+	} catch {
+		// Transitions file missing — fall through
+	}
 
-  // Fallback: search for any active workspace
-  const { entries } = listWorkspaces(projectRoot);
-  const active = entries.find((e) => e.status === "active");
-  return active ?? null;
+	// Fallback: search for any active workspace
+	const { entries } = listWorkspaces(projectRoot);
+	const active = entries.find((e) => e.status === "active");
+	return active ?? null;
 }

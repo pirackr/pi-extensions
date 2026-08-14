@@ -318,8 +318,7 @@ export function reconcileTransition(
 			if (
 				entry.name === path.basename(claimPath) ||
 				entry.name === path.basename(stagingPath)
-)
-{
+			) {
 				continue;
 			}
 			fs.rmSync(path.join(projectRoot, entry.name), {

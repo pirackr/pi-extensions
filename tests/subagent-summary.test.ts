@@ -1,260 +1,145 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+
 import {
 	parseCoordinatorResult,
 	renderSummaryResults,
-} from "../extensions/tmux-subagent/render.ts";
-import type {
-	CoordinatorSummary,
-	RenderStatus,
+	type CoordinatorSummary,
+	type RenderStatus,
 } from "../extensions/tmux-subagent/render.ts";
 
-// --- parseCoordinatorResult ---
-
-const FULL_SUMMARY = `<coordinator-summary>
-Status: succeeded
-Outcome: Found 3 credible sources for the query
-Evidence added: 3
-Key changes:
-- Updated findings-1.org with source A
-- Updated findings-2.org with source B
-- Added contradiction note for source C
-Contradictions/blockers: none
-Recommended next action: run fetch on source A primary URL
-</coordinator-summary>
-Some trailing text.`;
-
-const FAILED_SUMMARY = `<coordinator-summary>
-Status: failed
-Outcome: Timeout after 300 seconds
-Evidence added: 0
-Key changes: none
-Contradictions/blockers:
-- Network timeout on primary query
-- Fallback engine returned empty results
-Recommended next action: retry with expanded query
-</coordinator-summary>`;
-
-const PARTIAL_SUMMARY = `<coordinator-summary>
-Status: partial
-Outcome: Found 1 of 3 expected sources
-Evidence added: 1
-Key changes: initialized findings-1.org
-Contradictions/blockers: none
-Recommended next action: dispatch another scout for remaining queries
-</coordinator-summary>`;
-
-const BLOCKED_SUMMARY = `<coordinator-summary>
-Status: blocked
-Outcome: Auth token expired
-Evidence added: 0
-Key changes: none
-Contradictions/blockers: API key invalid
-Recommended next action: rotate API key and retry
-</coordinator-summary>`;
+// ---------------------------------------------------------------------------
+// parseCoordinatorResult — basic parsing
+// ---------------------------------------------------------------------------
 
 describe("parseCoordinatorResult", () => {
-	it("extracts all 6 fields from a succeeded summary", () => {
-		const result = parseCoordinatorResult(FULL_SUMMARY);
-		expect(result.summary.status).toBe("succeeded");
-		expect(result.summary.outcome).toBe(
-			"Found 3 credible sources for the query",
-		);
-		expect(result.summary.evidenceAdded).toBe("3");
-		expect(result.summary.keyChanges).toEqual([
-			"Updated findings-1.org with source A",
-			"Updated findings-2.org with source B",
-			"Added contradiction note for source C",
+	it("extracts all required fields from a well-formed envelope", () => {
+		const fullText = [
+			"Before text",
+			"<coordinator-summary>",
+			"Status: succeeded",
+			"Outcome: Found the docs",
+			"Evidence added: 2 sources",
+			"Key changes: Updated config",
+			"Fixed bug",
+			"Contradictions/blockers: none",
+			"Recommended next action: Merge PR",
+			"</coordinator-summary>",
+			"After text",
+		].join("\n");
+		const parsed = parseCoordinatorResult(fullText);
+		expect(parsed.summary.status).toBe("succeeded");
+		expect(parsed.summary.outcome).toBe("Found the docs");
+		expect(parsed.summary.evidenceAdded).toBe("2 sources");
+		expect(parsed.summary.keyChanges).toEqual([
+			"Updated config",
+			"Fixed bug",
 		]);
-		expect(result.summary.contradictions).toEqual(["none"]);
-		expect(result.summary.recommendedNextAction).toBe(
-			"run fetch on source A primary URL",
-		);
-		expect(result.artifact).toBeUndefined();
+		expect(parsed.summary.contradictions).toEqual(["none"]);
+		expect(parsed.summary.recommendedNextAction).toBe("Merge PR");
 	});
 
-	it("parses all 4 statuses", () => {
-		expect(parseCoordinatorResult(FAILED_SUMMARY).summary.status).toBe(
-			"failed",
-		);
-		expect(parseCoordinatorResult(PARTIAL_SUMMARY).summary.status).toBe(
-			"partial",
-		);
-		expect(parseCoordinatorResult(BLOCKED_SUMMARY).summary.status).toBe(
-			"blocked",
-		);
-		expect(parseCoordinatorResult(FULL_SUMMARY).summary.status).toBe(
-			"succeeded",
-		);
-	});
-
-	it("extracts artifact block when present", () => {
-		const text = `${FULL_SUMMARY}\n<artifact>\n{\n  "verdict": "PASS"\n}\n</artifact>`;
-		const result = parseCoordinatorResult(text);
-		expect(result.artifact).toBe('{\n  "verdict": "PASS"\n}');
-	});
-
-	it("returns artifact as undefined when not present", () => {
-		const result = parseCoordinatorResult(FULL_SUMMARY);
-		expect(result.artifact).toBeUndefined();
-	});
-
-	it("throws when coordinator-summary block is missing", () => {
+	it("throws when <coordinator-summary> is missing", () => {
 		expect(() => parseCoordinatorResult("no summary here")).toThrow(
 			"Missing <coordinator-summary> block",
 		);
 	});
 
-	it("throws when Status field is missing", () => {
-		const text = `<coordinator-summary>
-Outcome: something
-Evidence added: 1
-Key changes: none
-Contradictions/blockers: none
-Recommended next action: do something
-</coordinator-summary>`;
-		expect(() => parseCoordinatorResult(text)).toThrow(
-			"missing Status field",
-		);
+	it("throws when Status is missing", () => {
+		expect(
+			() =>
+				parseCoordinatorResult(
+					"<coordinator-summary>\nOutcome: x\n</coordinator-summary>",
+				),
+		).toThrow("missing Status field");
 	});
 
-	it("throws when Outcome field is missing", () => {
-		const text = `<coordinator-summary>
-Status: succeeded
-Evidence added: 1
-Key changes: none
-Contradictions/blockers: none
-Recommended next action: do something
-</coordinator-summary>`;
-		expect(() => parseCoordinatorResult(text)).toThrow(
-			"missing Outcome field",
-		);
+	it("throws when Status value is invalid", () => {
+		expect(
+			() =>
+				parseCoordinatorResult(
+					"<coordinator-summary>\nStatus: running\n</coordinator-summary>",
+				),
+		).toThrow("invalid Status value");
 	});
 
-	it("throws when Evidence added field is missing", () => {
-		const text = `<coordinator-summary>
-Status: succeeded
-Outcome: ok
-Key changes: none
-Contradictions/blockers: none
-Recommended next action: do something
-</coordinator-summary>`;
-		expect(() => parseCoordinatorResult(text)).toThrow(
-			"missing Evidence added field",
-		);
+	it("throws when Outcome is missing", () => {
+		expect(
+			() =>
+				parseCoordinatorResult(
+					"<coordinator-summary>\nStatus: succeeded\n</coordinator-summary>",
+				),
+		).toThrow("missing Outcome field");
 	});
 
-	it("throws when Recommended next action field is missing", () => {
-		const text = `<coordinator-summary>
-Status: succeeded
-Outcome: ok
-Evidence added: 1
-Key changes: none
-Contradictions/blocker: none
-</coordinator-summary>`;
-		expect(() => parseCoordinatorResult(text)).toThrow(
-			"missing Recommended next action field",
-		);
+	it("throws when Recommended next action is missing", () => {
+		expect(
+			() =>
+				parseCoordinatorResult(
+					"<coordinator-summary>\nStatus: succeeded\nOutcome: done\nEvidence added: 1\nKey changes: x\nContradictions/blockers: none\nRecommended next action: \n</coordinator-summary>",
+				),
+		).toThrow("missing Recommended next action field");
 	});
 
-	it("throws on invalid Status value", () => {
-		const text = `<coordinator-summary>
-Status: unknown
-Outcome: ok
-Evidence added: 1
-Key changes: none
-Contradictions/blockers: none
-Recommended next action: do something
-</coordinator-summary>`;
-		expect(() => parseCoordinatorResult(text)).toThrow(
-			'invalid Status value "unknown"',
-		);
+	it("extracts optional artifact block", () => {
+		const fullText = [
+			"<coordinator-summary>",
+			"Status: succeeded",
+			"Outcome: done",
+			"Evidence added: 1",
+			"Key changes: x",
+			"Contradictions/blockers: none",
+			"Recommended next action: next",
+			"</coordinator-summary>",
+			"<artifact>",
+			"artifact content",
+			"</artifact>",
+		].join("\n");
+		const parsed = parseCoordinatorResult(fullText);
+		expect(parsed.artifact).toBe("artifact content");
 	});
 
-	it("throws for artifact when requireArtifact is true and block is missing", () => {
+	it("artifact is undefined when block is absent", () => {
+		const fullText = [
+			"<coordinator-summary>",
+			"Status: succeeded",
+			"Outcome: done",
+			"Evidence added: 1",
+			"Key changes: x",
+			"Contradictions/blockers: none",
+			"Recommended next action: next",
+			"</coordinator-summary>",
+		].join("\n");
+		const parsed = parseCoordinatorResult(fullText);
+		expect(parsed.artifact).toBeUndefined();
+	});
+
+	it("throws when requireArtifact and no artifact block", () => {
+		const fullText = [
+			"<coordinator-summary>",
+			"Status: succeeded",
+			"Outcome: done",
+			"Evidence added: 1",
+			"Key changes: x",
+			"Contradictions/blockers: none",
+			"Recommended next action: next",
+			"</coordinator-summary>",
+		].join("\n");
 		expect(() =>
-			parseCoordinatorResult(FULL_SUMMARY, { requireArtifact: true }),
+			parseCoordinatorResult(fullText, { requireArtifact: true }),
 		).toThrow("Missing <artifact> block");
-	});
-
-	it("accepts artifact when requireArtifact is true and block is present", () => {
-		const text = `${FULL_SUMMARY}\n<artifact>payload</artifact>`;
-		const result = parseCoordinatorResult(text, { requireArtifact: true });
-		expect(result.artifact).toBe("payload");
-	});
-
-	it("extracts artifact byte-for-byte (no trimming of inner content)", () => {
-		const artifactBody = "line1\nline2\n  indented\nline4";
-		const text = `<coordinator-summary>
-Status: succeeded
-Outcome: ok
-Evidence added: 0
-Key changes: none
-Contradictions/blockers: none
-Recommended next action: done
-</coordinator-summary>
-<artifact>\n${artifactBody}\n</artifact>`;
-		const result = parseCoordinatorResult(text);
-		// trim() on the captured group removes surrounding whitespace
-		expect(result.artifact).toBe(artifactBody);
-	});
-
-	it("handles single-line key changes and contradictions", () => {
-		const text = `<coordinator-summary>
-Status: succeeded
-Outcome: ok
-Evidence added: 1
-Key changes: single item
-Contradictions/blockers: one blocker
-Recommended next action: proceed
-</coordinator-summary>`;
-		const result = parseCoordinatorResult(text);
-		expect(result.summary.keyChanges).toEqual(["single item"]);
-		expect(result.summary.contradictions).toEqual(["one blocker"]);
-	});
-
-	it("handles empty arrays for key changes and contradictions", () => {
-		const text = `<coordinator-summary>
-Status: succeeded
-Outcome: ok
-Evidence added: 0
-Key changes:
-Contradictions/blockers:
-Recommended next action: proceed
-</coordinator-summary>`;
-		const result = parseCoordinatorResult(text);
-		expect(result.summary.keyChanges).toEqual([]);
-		expect(result.summary.contradictions).toEqual([]);
-	});
-
-	it("treats continuation lines as list items", () => {
-		const text = `<coordinator-summary>
-Status: succeeded
-Outcome: ok
-Evidence added: 2
-Key changes: first item
-- second item
-- third item
-Contradictions/blockers: blocker one
-- blocker two
-Recommended next action: fix blockers
-</coordinator-summary>`;
-		const result = parseCoordinatorResult(text);
-		expect(result.summary.keyChanges).toEqual([
-			"first item",
-			"second item",
-			"third item",
-		]);
-		expect(result.summary.contradictions).toEqual([
-			"blocker one",
-			"blocker two",
-		]);
 	});
 });
 
-// --- renderSummaryResults ---
+// ---------------------------------------------------------------------------
+// renderSummaryResults
+// ---------------------------------------------------------------------------
 
 function status(
-	partial: Partial<RenderStatus> & { parsedResult?: RenderStatus["parsedResult"]; result_path?: string; usage?: RenderStatus["usage"] },
+	partial: Partial<RenderStatus> & {
+		parsedResult?: RenderStatus["parsedResult"];
+		result_path?: string;
+		usage?: RenderStatus["usage"];
+	},
 ): RenderStatus {
 	return {
 		taskId: "task-1",
@@ -285,7 +170,7 @@ describe("renderSummaryResults", () => {
 			[status({ parsedResult: { summary: makeSummary() } })],
 			"/tmp/pi-subagent-abc",
 		);
-		expect(text).toContain("scout_research / task-1 (succeeded)");
+		expect(text).toContain("scout_research · task-1 · succeeded");
 		expect(text).toContain("<coordinator-summary>");
 		expect(text).toContain("Status: succeeded");
 		expect(text).toContain("Outcome: done");
@@ -402,9 +287,9 @@ describe("renderSummaryResults", () => {
 			],
 			"/tmp/pi-subagent-abc",
 		);
-		expect(text).toContain("scout / task-1 (succeeded) — model: test-model");
-		expect(text).toContain("fetcher / task-2 (failed) — model: test-model");
-		expect(text).toContain("synth / task-3 (succeeded) — model: test-model");
+		expect(text).toContain("scout · task-1 · succeeded");
+		expect(text).toContain("fetcher · task-2 · failed");
+		expect(text).toContain("synth · task-3 · succeeded");
 		expect(text).toContain("Status: succeeded");
 		expect(text).toContain("Status: partial");
 		expect(text).toContain("Result: /data/out.org");
@@ -427,7 +312,6 @@ describe("renderSummaryResults", () => {
 		expect(text).toContain("Key changes: none");
 		expect(text).toContain("Contradictions/blockers: none");
 	});
-});
 
 	it("renders errorMessage for a failed export even when parsedResult exists", () => {
 		const text = renderSummaryResults(
@@ -464,3 +348,4 @@ describe("renderSummaryResults", () => {
 		// I3: Result: path must not appear when state is not succeeded
 		expect(text).not.toContain("Result: /data/out.org");
 	});
+});

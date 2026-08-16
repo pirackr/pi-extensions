@@ -386,11 +386,19 @@ export function aggregateUsage(statuses: TaskStatus[]) {
 		usage.cacheRead += status.usage.cacheRead;
 		usage.cacheWrite += status.usage.cacheWrite;
 		usage.totalTokens += status.usage.totalTokens;
-		usage.cost.input += status.usage.cost.input;
-		usage.cost.output += status.usage.cost.output;
-		usage.cost.cacheRead += status.usage.cost.cacheRead;
-		usage.cost.cacheWrite += status.usage.cost.cacheWrite;
-		usage.cost.total += status.usage.cost.total;
+		// get_session_stats may surface cost as a scalar number — normalize.
+		const statusCost =
+			typeof status.usage.cost === "number"
+				? status.usage.cost
+				: (status.usage.cost?.total ?? 0);
+		usage.cost.total += statusCost;
+		const cost = status.usage.cost;
+		if (typeof cost === "object" && cost !== null) {
+			usage.cost.input += cost.input ?? 0;
+			usage.cost.output += cost.output ?? 0;
+			usage.cost.cacheRead += cost.cacheRead ?? 0;
+			usage.cost.cacheWrite += cost.cacheWrite ?? 0;
+		}
 	}
 	return usage;
 }
@@ -1014,6 +1022,19 @@ export default function (pi: ExtensionAPI) {
 				windowId = launchResult.window.id;
 				layoutWarning = launchResult.layoutWarning;
 				launchedPaneIds = launchResult.paneIds;
+				// launchedPaneIds are real tmux pane ids ("%9") in creation order,
+				// matching prepared — map each pane to its task for title pushes.
+				const paneTaskIds = new Map(
+					launchedPaneIds.map((paneId, index) => [
+						paneId,
+						prepared[index]?.taskId,
+					]),
+				);
+				const paneTitleState = new Map<
+					string,
+					{ lastTitle: string; lastPushAt: number }
+				>();
+				let lastRenameAt = 0;
 				emitUpdate();
 
 				// Register widget in TUI mode (Task 6)
@@ -1102,9 +1123,13 @@ export default function (pi: ExtensionAPI) {
 								}
 							}
 						}
+					}
 
-						// Best-effort window title rename on state change (Task 7)
-						if (windowId) {
+					// Best-effort window title rename on state change or ≥5s (Task 7)
+					if (windowId) {
+						const now = Date.now();
+						if (progress !== lastProgress || now - lastRenameAt >= 5_000) {
+							lastRenameAt = now;
 							bestEffort(() =>
 								tmuxExec([
 									"rename-window",
@@ -1113,28 +1138,42 @@ export default function (pi: ExtensionAPI) {
 									renderWindowTitle([...widgetRuns.values()], { frame }),
 								]),
 							);
+						}
 
-							// Best-effort pane title pushes (Task 7)
-							for (const paneId of launchedPaneIds) {
-								const paneStatus = statuses.find(
-									(s) => s.taskId === paneId.replace("pane-", ""),
+						// Best-effort pane title pushes (Task 7): on every poll,
+						// render each launched pane's candidate title and push it
+						// only when it changed and that pane's 1s throttle elapsed.
+						for (const paneId of launchedPaneIds) {
+							const taskId = paneTaskIds.get(paneId);
+							const paneStatus = taskId
+								? statuses.find((s) => s.taskId === taskId)
+								: undefined;
+							if (!paneStatus) continue;
+							const paneTitle = renderPaneTitle(
+								toWidgetTask(paneStatus as TaskStatusLike),
+								{ frame },
+							);
+							const state = paneTitleState.get(paneId) ?? {
+								lastTitle: "",
+								lastPushAt: 0,
+							};
+							if (
+								paneTitle !== state.lastTitle &&
+								Date.now() - state.lastPushAt >= 1_000
+							) {
+								paneTitleState.set(paneId, {
+									lastTitle: paneTitle,
+									lastPushAt: Date.now(),
+								});
+								bestEffort(() =>
+									tmuxExec([
+										"select-pane",
+										"-T",
+										paneTitle,
+										"-t",
+										paneId,
+									]),
 								);
-								if (paneStatus) {
-									const paneTitle = renderPaneTitle(
-										toWidgetTask(paneStatus as TaskStatusLike),
-										{ frame },
-									);
-									bestEffort(() =>
-										tmuxExec([
-											"set-option",
-											"-p",
-											"-t",
-											paneId,
-											"pane-title",
-											paneTitle,
-										]),
-									);
-								}
 							}
 						}
 					}

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const mockWriteFn = vi.fn(() => true);
+const mockWriteFn = vi.fn((data: string) => true);
 
 // Mock modules before importing runner
 vi.mock("node:child_process", () => ({
@@ -25,7 +25,7 @@ vi.mock("node:fs", async () => {
   };
 });
 
-function createMockWriteStream() {
+function createMockWriteStream(): any {
   return {
     write: vi.fn(),
     end: vi.fn(),
@@ -172,7 +172,7 @@ describe("runTaskMode", () => {
     for (const cb of cbs) cb(Buffer.from(data));
   }
 
-  function emitClose(code) {
+  function emitClose(code: number) {
     for (const cb of closeCallbacks) cb(code);
   }
 
@@ -267,7 +267,9 @@ describe("runTaskMode", () => {
 
   it("emits pane header with agent, taskId, and model", () => {
     runTaskMode("/tmp/request.json");
-    const stdoutWrites = process.stdout.write.mock.calls.map((c) => c[0]);
+    const stdoutWrites = vi.mocked(process.stdout.write).mock.calls.map(
+      (c) => c[0],
+    );
     expect(stdoutWrites).toContain(
       `━━━ worker · task-1 · gpt-4o ━━━\n`,
     );
@@ -292,7 +294,7 @@ describe("runTaskMode", () => {
       }
     });
     expect(runningCall).toBeDefined();
-    const status = JSON.parse(runningCall[1] as string);
+    const status = JSON.parse(runningCall![1] as string);
     expect(status.pid).toBe(12345);
   });
 
@@ -324,7 +326,9 @@ describe("runTaskMode", () => {
       }
     });
     expect(statusCalls.length).toBeGreaterThan(0);
-    const lastRunning = JSON.parse(statusCalls[statusCalls.length - 1][1]);
+    const lastRunning = JSON.parse(
+      statusCalls[statusCalls.length - 1][1] as string,
+    );
     expect(lastRunning.tools).toContain("read");
     expect(lastRunning.activity).toContain("read(");
     expect(lastRunning.contextUsage).toBeDefined();
@@ -436,38 +440,33 @@ describe("runTaskMode", () => {
         return false;
       }
     });
-    const lastRunning = JSON.parse(statusCalls[statusCalls.length - 1][1]);
+    const lastRunning = JSON.parse(
+      statusCalls[statusCalls.length - 1][1] as string,
+    );
     expect(lastRunning.compactionCount).toBe(1);
   });
 
-  it("captures contextWindow from prompt response st2", () => {
+  it("captures contextWindow from get_state and live percent from message_end", () => {
     runTaskMode("/tmp/request.json");
-    // get_state response (id=1)
+    // get_state response (real protocol: data.model.contextWindow)
     emitStdoutRpc(
       JSON.stringify({
         type: "response",
         id: 1,
-        response: { state: { tokens: 50, contextWindow: 128000 } },
+        success: true,
+        data: { model: { contextWindow: 128000 } },
       }),
     );
-    // prompt response (id=2) with st2 contextWindow
+    // assistant message_end → live percent = totalTokens / contextWindow
     emitStdoutRpc(
       JSON.stringify({
-        type: "response",
-        id: 2,
-        response: {
-          st2: {
-            contextWindow: 128000,
-            tokensUsed: { total: 200 },
-          },
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Result" }],
+          usage: { totalTokens: 10240 },
+          stopReason: "end_turn",
         },
-      }),
-    );
-    // tool start to capture contextUsage
-    emitStdoutRpc(
-      JSON.stringify({
-        type: "tool_execution_start",
-        toolName: "read",
       }),
     );
     const statusCalls = mockWriteFileSync.mock.calls.filter((call) => {
@@ -477,9 +476,79 @@ describe("runTaskMode", () => {
         return false;
       }
     });
-    const lastRunning = JSON.parse(statusCalls[statusCalls.length - 1][1]);
+    const lastRunning = JSON.parse(
+      statusCalls[statusCalls.length - 1][1] as string,
+    );
     expect(lastRunning.contextUsage.window).toBe(128000);
-    expect(lastRunning.contextUsage.tokens).toBe(200);
+    expect(lastRunning.contextUsage.tokens).toBe(10240);
+    expect(lastRunning.contextUsage.percent).toBe(8);
+  });
+
+  it("writes percent null until an assistant message arrives", () => {
+    runTaskMode("/tmp/request.json");
+    emitStdoutRpc(
+      JSON.stringify({
+        type: "response",
+        id: 1,
+        success: true,
+        data: { model: { contextWindow: 128000 } },
+      }),
+    );
+    emitStdoutRpc(
+      JSON.stringify({ type: "tool_execution_start", toolName: "read" }),
+    );
+    const statusCalls = mockWriteFileSync.mock.calls.filter((call) => {
+      try {
+        return JSON.parse(call[1] as string).state === "running";
+      } catch {
+        return false;
+      }
+    });
+    const lastRunning = JSON.parse(
+      statusCalls[statusCalls.length - 1][1] as string,
+    );
+    expect(lastRunning.contextUsage.window).toBe(128000);
+    expect(lastRunning.contextUsage.tokens).toBeNull();
+    expect(lastRunning.contextUsage.percent).toBeNull();
+  });
+
+  it("uses get_session_stats response for authoritative contextUsage and ends stdin", () => {
+    runTaskMode("/tmp/request.json");
+    // get_state response
+    emitStdoutRpc(
+      JSON.stringify({
+        type: "response",
+        id: 1,
+        success: true,
+        data: { model: { contextWindow: 128000 } },
+      }),
+    );
+    // agent_settled triggers get_session_stats
+    emitStdoutRpc(JSON.stringify({ type: "agent_settled" }));
+    // get_session_stats response (real protocol: data.contextUsage)
+    emitStdoutRpc(
+      JSON.stringify({
+        type: "response",
+        id: 3,
+        success: true,
+        data: {
+          contextUsage: { tokens: 51200, contextWindow: 128000, percent: 40 },
+        },
+      }),
+    );
+    const statusCalls = mockWriteFileSync.mock.calls.filter((call) => {
+      try {
+        return JSON.parse(call[1] as string).state === "running";
+      } catch {
+        return false;
+      }
+    });
+    const lastRunning = JSON.parse(
+      statusCalls[statusCalls.length - 1][1] as string,
+    );
+    expect(lastRunning.contextUsage.tokens).toBe(51200);
+    expect(lastRunning.contextUsage.percent).toBe(40);
+    expect(stdinMocks.end).toHaveBeenCalled();
   });
 
   // ----------------------------------------------------------------------
@@ -487,7 +556,7 @@ describe("runTaskMode", () => {
   // ----------------------------------------------------------------------
   function runWithTranscript(transcriptPath = "/tmp/transcript.log") {
     const mockCreateWriteStream = vi.mocked(fs.createWriteStream);
-    let transcriptStream;
+    let transcriptStream: any;
     mockCreateWriteStream.mockImplementation((path, opts) => {
       const stream = createMockWriteStream();
       stream.path = String(path);
@@ -532,7 +601,7 @@ describe("runTaskMode", () => {
     const transcriptCall = calls.find((call) =>
       String(call[0]).includes("transcript"),
     );
-    expect(transcriptCall[1]).toMatchObject({ flags: "a", mode: 0o600 });
+    expect(transcriptCall![1]).toMatchObject({ flags: "a", mode: 0o600 });
   });
 
   it("mirrors assistant text, tool markers, stderr, and the completion summary", () => {
@@ -566,7 +635,9 @@ describe("runTaskMode", () => {
       }),
     );
     emitClose(0);
-    const writes = stream.write.mock.calls.map((call) => String(call[0]));
+    const writes = stream.write.mock.calls.map((call: any[]) =>
+      String(call[0]),
+    );
     const joined = writes.join("");
     expect(joined).toContain("Hello world");
     expect(joined).toContain("[read]");
@@ -665,7 +736,7 @@ describe("main", () => {
       stderr: { on: vi.fn() },
       on: vi.fn(),
       kill: vi.fn(),
-    };
+    } as any;
     mockSpawn.mockReturnValue(mockChild);
 
     main(["node", "runner.mjs", "/tmp/request.json"]);

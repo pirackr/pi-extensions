@@ -200,9 +200,13 @@ export function renderSummaryResults(
 
 		if (status.usage) {
 			const u = status.usage;
+			const costTotal =
+				typeof u.cost === "number"
+					? u.cost
+					: (u.cost?.total ?? 0);
 			parts.push(
 				`Tokens: ${u.totalTokens} (in: ${u.input}, out: ${u.output}, cache read: ${u.cacheRead}, cache write: ${u.cacheWrite})`,
-				`Cost: $${u.cost.total.toFixed(4)}`,
+				`Cost: $${Number.isFinite(costTotal) ? costTotal.toFixed(4) : "0.0000"}`,
 				`Turns: ${u.turns}`,
 			);
 		}

@@ -36,8 +36,11 @@ export function runTaskMode(requestPath) {
   let currentTools = [];
   let currentActivity = "";
   let compactionCount = 0;
-  let contextWindow = 0;
-  let contextUsage = { tokens: 0, window: 0, percent: 0 };
+  let contextWindow = null;
+  // Live context usage uses the latest valid assistant-message usage, never
+  // the cumulative billing total; compaction_end resets it to null until a
+  // post-compaction assistant message arrives.
+  let latestContextTokens = null;
 
   // Best-effort private transcript: mirrors the human-readable pane output
   // (assistant text, tool markers, stderr, terminal summary) into a file the
@@ -180,10 +183,48 @@ export function runTaskMode(requestPath) {
 
   // --- RPC helpers ---
 
-  const writeRpcCommand = (id, method, params) => {
-    const cmd = JSON.stringify({ jsonrpc: "2.0", id, method, params });
+  const writeRpcCommand = (id, type, params) => {
+    const cmd = params
+      ? JSON.stringify({ type, id, ...params })
+      : JSON.stringify({ type, id });
     child.stdin.write(cmd + "\n");
   };
+
+  // Live context usage derived from the latest valid assistant-message usage
+  // and the context window captured from get_state. tokens/percent are null
+  // until an assistant message arrives (and after compaction_end).
+  const liveContextUsage = () => ({
+    tokens: latestContextTokens,
+    window: contextWindow,
+    percent:
+      latestContextTokens != null && contextWindow > 0
+        ? Math.round((latestContextTokens / contextWindow) * 100)
+        : null,
+  });
+
+  const liveStatus = () => ({
+    ...baseStatus(),
+    state: "running",
+    pid: child?.pid,
+    tools: currentTools,
+    activity: currentActivity,
+    contextUsage: liveContextUsage(),
+    compactionCount,
+    usage: { ...usage },
+    turns: usage.turns,
+  });
+
+  let stdinEnded = false;
+  const endStdin = () => {
+    if (stdinEnded) return;
+    stdinEnded = true;
+    try {
+      child.stdin.end();
+    } catch {
+      // stdin already closed.
+    }
+  };
+  let statsFallbackTimer;
 
   const activityFor = (toolName) => {
     const base = toolName.replace(/_web$/, "").replace(/web_/g, "web ");
@@ -205,76 +246,64 @@ export function runTaskMode(requestPath) {
     if (event.type === "response") {
       const rid = event.id ?? 0;
 
-      // Route get_state response — capture id mapping
+      // Route get_state response — capture model contextWindow from data
       if (rid === getStateId) {
-        const state = event.response?.state ?? {};
-        const tokens = state.tokens ?? 0;
-        const window = state.contextWindow ?? 0;
-        contextWindow = window;
-        contextUsage = {
-          tokens,
-          window,
-          percent: window > 0 ? Math.round((tokens / window) * 100) : 0,
-        };
+        const model = event.data?.model;
+        contextWindow = model?.contextWindow ?? null;
         return;
       }
 
-      // Route prompt response — capture contextWindow from st2
+      // Route prompt response — success:false means the task was rejected
       if (rid === promptId) {
-        const st2 = event.response?.st2;
-        if (st2?.contextWindow) {
-          contextWindow = st2.contextWindow;
-          const tu = st2.tokensUsed ?? {};
-          contextUsage = {
-            tokens: tu.total ?? st2.tokensUsed?.total ?? 0,
-            window: st2.contextWindow,
-            percent: st2.contextWindow > 0
-              ? Math.round(((tu.total ?? 0) / st2.contextWindow) * 100)
-              : 0,
-          };
+        if (event.success === false) {
+          errorMessage = event.error || "prompt rejected";
+          requestTermination("cancelled");
         }
         return;
       }
 
-      // Route get_session_stats response
+      // Route get_session_stats response — authoritative contextUsage from data
       if (rid === getStatsId) {
         statsReceived = true;
-        const usageData = event.response?.usage ?? {};
+        if (statsFallbackTimer) clearTimeout(statsFallbackTimer);
+        const data = event.data ?? {};
+        const tokens = data.tokens ?? {};
+        // get_session_stats returns cost as a scalar number, not the
+        // {input, output, cacheRead, cacheWrite, total} object the renderers
+        // expect — normalize it.
+        const costTotal = typeof data.cost === "number" ? data.cost : data.cost?.total ?? 0;
         sessionStats = {
-          input: usageData.input || 0,
-          output: usageData.output || 0,
-          cacheRead: usageData.cacheRead || 0,
-          cacheWrite: usageData.cacheWrite || 0,
-          totalTokens: usageData.totalTokens || 0,
+          input: tokens.input || 0,
+          output: tokens.output || 0,
+          cacheRead: tokens.cacheRead || 0,
+          cacheWrite: tokens.cacheWrite || 0,
+          totalTokens: tokens.total || 0,
           cost: {
-            input: usageData.cost?.input || 0,
-            output: usageData.cost?.output || 0,
-            cacheRead: usageData.cost?.cacheRead || 0,
-            cacheWrite: usageData.cost?.cacheWrite || 0,
-            total: usageData.cost?.total || 0,
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: costTotal,
           },
-          turns: usageData.turns || 0,
+          // turns stay as accumulated from message_end, never toolCalls
+          turns: usage.turns,
         };
+        const authoritative = data.contextUsage;
+        if (authoritative) {
+          contextWindow = authoritative.contextWindow ?? null;
+          latestContextTokens = authoritative.tokens ?? null;
+        }
+        // Write one last running status with the best available contextUsage,
+        // then end stdin so the child exits and `close` writes the terminal
+        // status (sole terminal-status writer).
+        writeStatus(liveStatus());
+        endStdin();
         return;
-      }
-
-      // Generic response — try to extract contextWindow from st2
-      const st2 = event.response?.st2;
-      if (st2?.contextWindow) {
-        contextWindow = st2.contextWindow;
-        const tu = st2.tokensUsed ?? {};
-        contextUsage = {
-          tokens: tu.total ?? st2.tokensUsed?.total ?? 0,
-          window: st2.contextWindow,
-          percent: st2.contextWindow > 0
-            ? Math.round(((tu.total ?? 0) / st2.contextWindow) * 100)
-            : 0,
-        };
       }
       return;
     }
 
-    // agent_settled → send get_session_stats
+    // agent_settled → send get_session_stats (authoritative contextUsage)
     if (event.type === "agent_settled") {
       stopReason = event.stopReason;
       const finalMsg = event.message;
@@ -284,21 +313,27 @@ export function runTaskMode(requestPath) {
           .map((p) => p.text)
           .join("\n");
       }
-      // Send get_session_stats with unique id
+      // Send get_session_stats with a unique id
       getStatsId = ++nextResponseId;
       writeRpcCommand(getStatsId, "get_session_stats");
-      // Arm a 3s timer to ensure we write final status even if stats are delayed
-      setTimeout(() => {
+      // Bounded ~3s fallback: write the last running status from live
+      // contextUsage and end stdin; the `close` handler remains the sole
+      // terminal-status writer, so a non-zero exit cannot be masked.
+      statsFallbackTimer = setTimeout(() => {
         if (!statsReceived && !timedOut && !cancelled) {
-          writeFinalStatusFromBuffer();
+          writeStatus(liveStatus());
+          endStdin();
         }
       }, 3000);
       return;
     }
 
-    // compaction_end
+    // compaction_end — reset live tokens/percent until a post-compaction
+    // assistant message arrives; increment the counter.
     if (event.type === "compaction_end") {
       compactionCount += 1;
+      latestContextTokens = null;
+      writeStatus(liveStatus());
       return;
     }
 
@@ -312,18 +347,7 @@ export function runTaskMode(requestPath) {
       const activity = summary ? `${name}(${summary})` : name;
       currentActivity = activity;
       currentTools = Object.keys(toolCounts);
-      writeStatus({
-        ...baseStatus(),
-        state: "running",
-        pid: child.pid,
-        tools: currentTools,
-        activity:
-          currentActivity.length > 60
-            ? currentActivity.slice(0, 60) + "…"
-            : currentActivity,
-        contextUsage: { ...contextUsage },
-        compactionCount,
-      });
+      writeStatus(liveStatus());
       return;
     }
 
@@ -332,15 +356,7 @@ export function runTaskMode(requestPath) {
       const name = event.toolName || "tool";
       emit(`  ${summarizeResult(name, event)}\n`);
       currentActivity = "";
-      writeStatus({
-        ...baseStatus(),
-        state: "running",
-        pid: child.pid,
-        tools: currentTools,
-        activity: currentActivity,
-        contextUsage: { ...contextUsage },
-        compactionCount,
-      });
+      writeStatus(liveStatus());
       return;
     }
 
@@ -371,31 +387,12 @@ export function runTaskMode(requestPath) {
           .map((p) => p.text)
           .join("\n");
       }
-    }
-  };
-
-  // Capture prompt response for output (st2 text)
-  let promptSt2Text = "";
-  const capturePromptSt2 = (line) => {
-    if (!line.trim()) return;
-    let event;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      return;
-    }
-    if (
-      event.type === "response" &&
-      event.id === promptId &&
-      event.response?.st2?.text
-    ) {
-      promptSt2Text += event.response.st2.text;
-    }
-    if (event.type === "message_update") {
-      const msg = event.assistantMessageEvent;
-      if (msg?.type === "text_delta" && msg.delta) {
-        promptSt2Text += msg.delta;
+      // Live context usage tracks the latest valid assistant-message usage
+      // (per-message totalTokens), never the cumulative billing total.
+      if (Number.isFinite(message.usage?.totalTokens)) {
+        latestContextTokens = message.usage.totalTokens;
       }
+      writeStatus(liveStatus());
     }
   };
 
@@ -406,7 +403,7 @@ export function runTaskMode(requestPath) {
     const stoppedNormally =
       stopReason !== "error" &&
       stopReason !== "aborted" &&
-      (finalOutput.trim() || promptSt2Text.trim());
+      finalOutput.trim();
     const state =
       timedOut
         ? "timed_out"
@@ -415,8 +412,7 @@ export function runTaskMode(requestPath) {
           : stoppedNormally
             ? "succeeded"
             : "failed";
-    const result =
-      finalOutput.trim() || promptSt2Text.trim() || "(no output)";
+    const result = finalOutput.trim() || "(no output)";
     // Merge session stats into usage if available
     const mergedUsage = sessionStats || { ...usage };
     writeStatus({
@@ -429,7 +425,7 @@ export function runTaskMode(requestPath) {
       errorMessage,
       result,
       usage: mergedUsage,
-      contextUsage: { ...contextUsage },
+      contextUsage: liveContextUsage(),
       compactionCount,
     });
     emit(`\n\n[${request.agent} ${state}]\n`);
@@ -446,6 +442,7 @@ export function runTaskMode(requestPath) {
 
   const clearGlobalTimers = () => {
     clearTimeout(timeout);
+    if (statsFallbackTimer) clearTimeout(statsFallbackTimer);
     if (killTimer) clearTimeout(killTimer);
   };
 
@@ -514,7 +511,7 @@ export function runTaskMode(requestPath) {
 
   const taskText = fs.readFileSync(request.taskPath, "utf8");
   promptId = ++nextResponseId;
-  writeRpcCommand(promptId, "prompt", { text: taskText, promptId: "1" });
+  writeRpcCommand(promptId, "prompt", { message: taskText });
 
   child.stdout.on("data", (chunk) => {
     output.write(chunk);

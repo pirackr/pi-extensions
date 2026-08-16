@@ -32,8 +32,9 @@ Status surfaces after this change, from closest to farthest:
   `renderSummaryResults` blocks.
 - No `ctx.ui` usage at all (widget/status/footer untouched).
 - The standalone `watch-subagents` dashboard (spec + tool, Aug 2026) was
-  removed; observability is now the shared tmux session (one parent window per
-  Pi session, one pane per task) plus runner transcripts under
+  removed and its design is now marked **deprecated**; observability is the
+  shared tmux session (one parent window per Pi session, one pane per task)
+  plus runner transcripts under
   `/tmp/pi-subagent-transcripts`.
 
 ## Reference UI (pi-subagents) and agreed deviations
@@ -236,9 +237,9 @@ stdin.end() → exit 0                    run end → restore/clear       result
 
 - Steering tool (`steer`) — follow-up; the rpc switch enables it.
 - TUI-mode children / interactive panes.
-- Re-introducing the standalone `watch-subagents` dashboard; the retained
-  `2026-08-07-watch-subagents-design.md` spec describes that surface and the
-  new status fields are backward-compatible with any file-based reader.
+- Re-introducing the standalone `watch-subagents` dashboard — its spec
+  (`2026-08-07-watch-subagents-design.md`) is marked deprecated; the new
+  status fields are backward-compatible with any file-based reader.
 - Per-run config knobs for glyphs/colors (constants in `render.ts` suffice).
 - Context-window configuration: `(NN%)` derives from the child model's
   declared `contextWindow`.

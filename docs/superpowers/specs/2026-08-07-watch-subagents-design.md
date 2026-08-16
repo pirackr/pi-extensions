@@ -1,5 +1,13 @@
 # watch-subagents — subagent run dashboard design
 
+> **DEPRECATED (2026-08-16)** — the standalone `watch-subagents` tool was
+> removed (commit `c6b0110`) and this design is superseded by observability
+> inside the extension itself: the shared tmux session (one parent window per
+> Pi session, panes per task) plus the pi-subagents-style in-pi UI
+> (`2026-08-16-tmux-subagents-pi-subagents-ui-design.md`). Kept for history;
+> the new status fields (`tools`, `activity`, `contextUsage`) remain
+> backward-compatible with the file-based data model described here.
+
 ## Goal
 
 A standalone command that shows every agent of a `run_subagents` batch in **one

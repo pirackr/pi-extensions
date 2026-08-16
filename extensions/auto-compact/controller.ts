@@ -237,6 +237,19 @@ export class AutoCompactController {
 		this.lastError = error instanceof Error ? error.message : String(error);
 	}
 
+	/**
+	 * Clear a triggered-but-unfired state so the next evaluate() can re-trigger
+	 * at a safer point (e.g. the run was still active when the threshold was
+	 * crossed, so no compact() was launched). Only call when no compaction was
+	 * actually started; callers that launched a compact must use
+	 * recordComplete/recordFailure instead.
+	 */
+	deferTrigger(): void {
+		this.inFlight = false;
+		this.armed = false;
+		this.awaitingBelowThreshold = false;
+	}
+
 	// ------------------------------------------------------------------
 	// Status
 	// ------------------------------------------------------------------

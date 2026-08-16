@@ -176,15 +176,17 @@ On `session_start`, the extension:
 4. Resets session-local controller state.
 5. Evaluates current usage if the model and usage are available.
 
-This handles resumed sessions that already exceed their effective threshold.
+Because session start is always run-free, a resumed session that already exceeds its effective threshold fires `ctx.compact()` immediately rather than waiting for the first completed run.
 
 ### Model selection
 
-On `model_select`, the controller resets threshold state for the new canonical model key and evaluates usage immediately. Switching from a large-context model to a smaller one can therefore compact before the user sends another prompt.
+On `model_select`, the controller resets threshold state for the new canonical model key and evaluates usage immediately (firing when idle, deferring to the next settled run otherwise). Switching from a large-context model to a smaller one can therefore compact before the user sends another prompt.
 
-### Completed turn
+### Settled run (compaction trigger)
 
-On `turn_end`, the controller resolves current usage and policy. If the threshold is armed, usage is known, and usage is at or above the effective threshold, it marks compaction in flight and calls `ctx.compact()`.
+Compaction is triggered on `agent_settled`, not `turn_end`. `turn_end` is emitted between tool-call batches *inside* an active agent run, and `ctx.compact()` maps to Pi's manual compaction path, which begins with `abort()` — firing from `turn_end` would kill the live run (`"This operation was aborted"` and a dead session). `agent_settled` fires once per prompt run, after the run fully finishes *and* after Pi's own native compaction check, so `abort()` is a no-op and the native attempt has already won or lost (the gate's in-flight dedup plus a short cooldown after any compaction entry prevent a duplicate).
+
+On `agent_settled`, the controller resolves current usage and policy. If the threshold is armed, usage is known, and usage is at or above the effective threshold, it marks compaction in flight and calls `ctx.compact()`.
 
 `ctx.compact()` uses Pi's manual compaction path internally. The extension does not provide custom summary content through `session_before_compact`, so Pi continues to own summary generation, cut-point selection, file tracking, and `keepRecentTokens`.
 
@@ -224,6 +226,7 @@ The threshold is edge-triggered:
 - It rearms after usage is observed below the threshold.
 - A model change resets and rearms evaluation for the new model.
 - A successful compaction leaves it disarmed until reliable post-compaction usage is available and below threshold.
+- A triggered-but-unfired crossing (the session was not idle, or a compaction entry was written moments ago) is cleared via `deferTrigger()` and re-evaluated at the next safe point instead of firing mid-run.
 
 This prevents repeated summaries when one compaction does not reduce usage below the configured threshold.
 

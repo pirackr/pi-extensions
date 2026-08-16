@@ -174,6 +174,12 @@ An enabled rule must contain exactly one of `percent` or `tokens`. A disabled ru
 
 Manual `/compact` invocations and Pi's overflow recovery are never blocked by this extension. Pi continues to own summary generation, cut-point selection, file tracking, and `keepRecentTokens`.
 
+### Behavior
+
+The extension triggers its own compaction **after a run fully settles** (the `agent_settled` point, once per prompt run), never from `turn_end` — `turn_end` fires *inside* an active agent run, and compaction's internal abort would kill the live run. A resumed session that already exceeds its threshold compacts immediately at startup. A short cooldown plus the in-flight dedup prevents double compaction when Pi's native auto-compaction wins the race.
+
+When the custom threshold is *later* than Pi's built-in threshold (`contextWindow − reserveTokens`), Pi's native compaction keeps firing at its own threshold in the band between the two, and the extension cancels those attempts as premature — you will see an `Auto-compaction cancelled` status until usage reaches the custom threshold, at which point Pi's compaction is allowed through. If that band is noisy, align the thresholds: lower the extension's `percent`/`tokens`, or raise Pi's `compaction.reserveTokens` in `settings.json` so both fire at the same point.
+
 ### Reloading Configuration
 
 Configuration changes take effect through Pi's normal `/reload` flow. The extension re-reads configuration from all layers on each session start and model change.

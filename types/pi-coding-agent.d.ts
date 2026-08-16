@@ -129,6 +129,10 @@ declare module "@earendil-works/pi-coding-agent" {
 		toolResults: unknown[];
 	}
 
+	export interface AgentSettledEvent {
+		type: "agent_settled";
+	}
+
 	export interface CompactionPreparation {
 		firstKeptEntryId: string;
 		tokensBefore: number;
@@ -228,6 +232,13 @@ declare module "@earendil-works/pi-coding-agent" {
 			event: "turn_end",
 			handler: (
 				event: TurnEndEvent,
+				ctx: ExtensionContext,
+			) => void | Promise<void>,
+		): void;
+		on(
+			event: "agent_settled",
+			handler: (
+				event: AgentSettledEvent,
 				ctx: ExtensionContext,
 			) => void | Promise<void>,
 		): void;

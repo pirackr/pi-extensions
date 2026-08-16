@@ -83,6 +83,7 @@ function makeCtx(
 			percent: number | null;
 		};
 		trusted?: boolean;
+		isIdle?: boolean;
 	} = {},
 ) {
 	return {
@@ -102,7 +103,7 @@ function makeCtx(
 			getSessionId: () => "sess-1",
 			getSessionName: () => "test",
 		},
-		isIdle: () => true,
+		isIdle: () => overrides.isIdle ?? true,
 		hasPendingMessages: () => false,
 	};
 }
@@ -137,7 +138,7 @@ describe("registration", () => {
 		const eventCalls = pi.on.mock.calls.map((c) => c[0]);
 		expect(eventCalls).toContain("session_start");
 		expect(eventCalls).toContain("model_select");
-		expect(eventCalls).toContain("turn_end");
+		expect(eventCalls).toContain("agent_settled");
 		expect(eventCalls).toContain("session_before_compact");
 		expect(eventCalls).toContain("session_compact");
 	});
@@ -199,7 +200,7 @@ describe("session_start", () => {
 		expect(compactCalls).toHaveLength(0);
 	});
 
-	it("evaluates usage immediately on resumed session with above-threshold usage", () => {
+	it("compacts immediately on resumed session with above-threshold usage", () => {
 		const pi = makeFakePi();
 		createExtension(pi);
 		const handler = getHandler(pi, "session_start");
@@ -208,9 +209,9 @@ describe("session_start", () => {
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
 		handler!({ type: "session_start", reason: "resume" }, ctx as any);
-		// session_start evaluates usage but does not call compact directly;
-		// the controller should be in-flight because the resumed session
-		// already exceeds the effective threshold.
+		// Session start is run-free, so the extension fires its own compact
+		// immediately for a resumed session that already exceeds the threshold.
+		expect(ctx.compact).toHaveBeenCalledTimes(1);
 		expect(controller.status().inFlight).toBe(true);
 	});
 
@@ -279,10 +280,10 @@ describe("model_select", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. turn_end — threshold crossing triggers compact
+// 4. agent_settled — threshold crossing triggers compact
 // ---------------------------------------------------------------------------
 
-describe("turn_end threshold crossing", () => {
+describe("agent_settled threshold crossing", () => {
 	beforeEach(() => {
 		mockReadFileSync.mockReset();
 		mockReadFileSync.mockImplementation((path: fs.PathOrFileDescriptor) => {
@@ -312,16 +313,13 @@ describe("turn_end threshold crossing", () => {
 		});
 		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
 
-		// Then: turn_end with usage above threshold (80% of 200000 = 160000)
-		const turnHandler = getHandler(pi, "turn_end");
+		// Then: agent_settled with usage above threshold (80% of 200000 = 160000)
+		const settleHandler = getHandler(pi, "agent_settled");
 		const ctx2 = makeCtx({
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		turnHandler!(
-			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
-			ctx2 as any,
-		);
+		settleHandler!({ type: "agent_settled" }, ctx2 as any);
 
 		expect(ctx2.compact).toHaveBeenCalledTimes(1);
 		const compactOpts = ctx2.compact.mock.calls[0][0];
@@ -340,15 +338,12 @@ describe("turn_end threshold crossing", () => {
 		});
 		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
 
-		const turnHandler = getHandler(pi, "turn_end");
+		const settleHandler = getHandler(pi, "agent_settled");
 		const ctx2 = makeCtx({
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 100000, contextWindow: 200000, percent: 50 },
 		});
-		turnHandler!(
-			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
-			ctx2 as any,
-		);
+		settleHandler!({ type: "agent_settled" }, ctx2 as any);
 
 		expect(ctx2.compact).not.toHaveBeenCalled();
 	});
@@ -364,17 +359,46 @@ describe("turn_end threshold crossing", () => {
 		});
 		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
 
-		const turnHandler = getHandler(pi, "turn_end");
+		const settleHandler = getHandler(pi, "agent_settled");
 		const ctx2 = makeCtx({
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: null, contextWindow: 200000, percent: null },
 		});
-		turnHandler!(
-			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
-			ctx2 as any,
-		);
+		settleHandler!({ type: "agent_settled" }, ctx2 as any);
 
 		expect(ctx2.compact).not.toHaveBeenCalled();
+	});
+
+	it("defers when the session is not idle (mid-run) and fires at the next idle settle", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		// agent_settled while a run is still active: must NOT fire, because
+		// session.compact() aborts the live run ("This operation was aborted").
+		const settleHandler = getHandler(pi, "agent_settled");
+		const ctxBusy = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+			isIdle: false,
+		});
+		settleHandler!({ type: "agent_settled" }, ctxBusy as any);
+		expect(ctxBusy.compact).not.toHaveBeenCalled();
+		expect(controller.status().inFlight).toBe(false);
+
+		// Next settle while idle: fires.
+		const ctxIdle = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		settleHandler!({ type: "agent_settled" }, ctxIdle as any);
+		expect(ctxIdle.compact).toHaveBeenCalledTimes(1);
 	});
 });
 
@@ -523,24 +547,23 @@ describe("session_before_compact gate", () => {
 		const pi = makeFakePi();
 		createExtension(pi);
 
-		// session_start to load config and arm
+		// session_start over threshold already set inFlight (compact fired)
 		const startHandler = getHandler(pi, "session_start");
 		const ctx1 = makeCtx({
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
 		startHandler!({ type: "session_start", reason: "startup" }, ctx1 as any);
+		expect(ctx1.compact).toHaveBeenCalledTimes(1);
 
-		// turn_end triggers compact (sets inFlight)
-		const turnHandler = getHandler(pi, "turn_end");
+		// A later settle while still in flight dedupes
+		const settleHandler = getHandler(pi, "agent_settled");
 		const ctx2 = makeCtx({
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		turnHandler!(
-			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
-			ctx2 as any,
-		);
+		settleHandler!({ type: "agent_settled" }, ctx2 as any);
+		expect(ctx2.compact).not.toHaveBeenCalled();
 
 		// Pi also tries threshold compaction — should be cancelled
 		const beforeHandler = getHandler(pi, "session_before_compact");
@@ -594,23 +617,15 @@ describe("session_compact sync", () => {
 			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
 		});
 
-		// First trigger a compact so controller is in-flight
+		// Trigger a compact so the controller is in-flight (session_start
+		// fires immediately for an over-threshold session).
 		const startHandler = getHandler(pi, "session_start");
 		const ctx1 = makeCtx({
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
 		startHandler!({ type: "session_start", reason: "startup" }, ctx1 as any);
-
-		const turnHandler = getHandler(pi, "turn_end");
-		const ctx2 = makeCtx({
-			model: makeModel("anthropic", "claude-3-opus", 200000),
-			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
-		});
-		turnHandler!(
-			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
-			ctx2 as any,
-		);
+		expect(ctx1.compact).toHaveBeenCalledTimes(1);
 
 		// Now session_compact fires
 		handler!(
@@ -624,16 +639,16 @@ describe("session_compact sync", () => {
 			ctx as any,
 		);
 
-		// After completion, evaluate should not re-trigger
+		// After completion, the next agent_settled must not re-trigger:
+		// the controller waits for usage to drop below the threshold.
+		const settleHandler = getHandler(pi, "agent_settled");
 		const ctx3 = makeCtx({
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		turnHandler!(
-			{ type: "turn_end", turnIndex: 4, message: {}, toolResults: [] },
-			ctx3 as any,
-		);
+		settleHandler!({ type: "agent_settled" }, ctx3 as any);
 		expect(ctx3.compact).not.toHaveBeenCalled();
+		expect(controller.status().inFlight).toBe(false);
 	});
 });
 
@@ -671,16 +686,13 @@ describe("UI notifications", () => {
 		});
 		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
 
-		const turnHandler = getHandler(pi, "turn_end");
+		const settleHandler = getHandler(pi, "agent_settled");
 		const ctx2 = makeCtx({
 			hasUI: true,
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		turnHandler!(
-			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
-			ctx2 as any,
-		);
+		settleHandler!({ type: "agent_settled" }, ctx2 as any);
 
 		// Invoke onComplete callback from compact
 		const compactOpts = ctx2.compact.mock.calls[0][0] as {
@@ -714,16 +726,13 @@ describe("UI notifications", () => {
 		});
 		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
 
-		const turnHandler = getHandler(pi, "turn_end");
+		const settleHandler = getHandler(pi, "agent_settled");
 		const ctx2 = makeCtx({
 			hasUI: true,
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		turnHandler!(
-			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
-			ctx2 as any,
-		);
+		settleHandler!({ type: "agent_settled" }, ctx2 as any);
 
 		const compactOpts = ctx2.compact.mock.calls[0][0] as {
 			onError?: (e: Error) => void;
@@ -748,16 +757,13 @@ describe("UI notifications", () => {
 		});
 		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
 
-		const turnHandler = getHandler(pi, "turn_end");
+		const settleHandler = getHandler(pi, "agent_settled");
 		const ctx2 = makeCtx({
 			hasUI: true,
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		turnHandler!(
-			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
-			ctx2 as any,
-		);
+		settleHandler!({ type: "agent_settled" }, ctx2 as any);
 
 		const compactOpts = ctx2.compact.mock.calls[0][0] as {
 			onError?: (e: Error) => void;
@@ -780,16 +786,13 @@ describe("UI notifications", () => {
 		});
 		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
 
-		const turnHandler = getHandler(pi, "turn_end");
+		const settleHandler = getHandler(pi, "agent_settled");
 		const ctx2 = makeCtx({
 			hasUI: true,
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		turnHandler!(
-			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
-			ctx2 as any,
-		);
+		settleHandler!({ type: "agent_settled" }, ctx2 as any);
 
 		const compactOpts = ctx2.compact.mock.calls[0][0] as {
 			onError?: (e: Error) => void;
@@ -812,16 +815,13 @@ describe("UI notifications", () => {
 		});
 		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
 
-		const turnHandler = getHandler(pi, "turn_end");
+		const settleHandler = getHandler(pi, "agent_settled");
 		const ctx2 = makeCtx({
 			hasUI: false,
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		turnHandler!(
-			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
-			ctx2 as any,
-		);
+		settleHandler!({ type: "agent_settled" }, ctx2 as any);
 
 		const compactOpts = ctx2.compact.mock.calls[0][0] as {
 			onComplete?: (result: {
@@ -1068,15 +1068,12 @@ describe("global disablement", () => {
 		});
 		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
 
-		const turnHandler = getHandler(pi, "turn_end");
+		const settleHandler = getHandler(pi, "agent_settled");
 		const ctx2 = makeCtx({
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 		});
-		turnHandler!(
-			{ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] },
-			ctx2 as any,
-		);
+		settleHandler!({ type: "agent_settled" }, ctx2 as any);
 
 		expect(ctx2.compact).not.toHaveBeenCalled();
 	});

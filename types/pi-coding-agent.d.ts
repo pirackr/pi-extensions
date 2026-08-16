@@ -1,4 +1,27 @@
 declare module "@earendil-works/pi-coding-agent" {
+	// ------------------------------------------------------------------
+	// Extension widgets (tmux-subagent UI)
+	// ------------------------------------------------------------------
+
+	export type WidgetPlacement = "aboveEditor" | "belowEditor";
+
+	export interface ExtensionWidgetOptions {
+		placement?: WidgetPlacement;
+	}
+
+	export interface Component {
+		render(width: number): string[];
+		invalidate(): void;
+	}
+
+	export interface Theme {
+		fg(color: string, text: string): string;
+	}
+
+	export interface TUI {
+		requestRender(): void;
+	}
+
 	export interface ExtensionUIContext {
 		notify(message: string, type?: "info" | "warning" | "error"): void;
 		confirm(title: string, message: string, opts?: unknown): Promise<boolean>;
@@ -12,6 +35,18 @@ declare module "@earendil-works/pi-coding-agent" {
 			placeholder?: string,
 			opts?: unknown,
 		): Promise<string | undefined>;
+		setWidget(
+			key: string,
+			content: string[] | undefined,
+			options?: ExtensionWidgetOptions,
+		): void;
+		setWidget(
+			key: string,
+			content:
+				| ((tui: TUI, theme: Theme) => Component & { dispose?(): void })
+				| undefined,
+			options?: ExtensionWidgetOptions,
+		): void;
 		setStatus(key: string, text: string | undefined): void;
 	}
 

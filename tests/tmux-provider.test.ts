@@ -621,7 +621,7 @@ describe("renderSummaryResults", () => {
 			[renderStatus({ parsedResult: { summary: makeSummary() } })],
 			"/tmp/pi-subagent-abc",
 		);
-		expect(text).toContain("scout_research / task-1 (succeeded)");
+		expect(text).toContain("scout_research · task-1 · succeeded");
 		expect(text).toContain("<coordinator-summary>");
 		expect(text).toContain("Status: succeeded");
 		expect(text).toContain("Outcome: done");
@@ -738,9 +738,9 @@ describe("renderSummaryResults", () => {
 			],
 			"/tmp/pi-subagent-abc",
 		);
-		expect(text).toContain("scout / task-1 (succeeded) — model: test-model");
-		expect(text).toContain("fetcher / task-2 (failed) — model: test-model");
-		expect(text).toContain("synth / task-3 (succeeded) — model: test-model");
+		expect(text).toContain("scout · task-1 · succeeded");
+		expect(text).toContain("fetcher · task-2 · failed");
+		expect(text).toContain("synth · task-3 · succeeded");
 		expect(text).toContain("Status: succeeded");
 		expect(text).toContain("Status: partial");
 		expect(text).toContain("Result: /data/out.org");

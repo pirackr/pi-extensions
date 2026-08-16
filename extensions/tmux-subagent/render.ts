@@ -223,3 +223,88 @@ export function renderSummaryResults(
 	if (artifactsPath) sections.push(`Artifacts retained at: ${artifactsPath}`);
 	return sections.join("\n\n");
 }
+
+// ---------------------------------------------------------------------------
+// Live-render glyphs and formatters (Task 1)
+// ---------------------------------------------------------------------------
+
+export const SPINNER_FRAMES = [
+	"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+];
+
+export const TURN_GLYPH = "↻";
+export const TOOL_GLYPH = "⚙";
+export const ACTIVITY_GLYPH = "⎿";
+export const COMPACTION_GLYPH = "⇊";
+
+export function statusIcon(
+	state:
+		| "starting"
+		| "running"
+		| "succeeded"
+		| "failed"
+		| "timed_out"
+		| "cancelled",
+	frame: number,
+): string {
+	if (state === "succeeded") return "✓";
+	if (state === "failed" || state === "timed_out") return "✗";
+	if (state === "cancelled") return "■";
+	return SPINNER_FRAMES[frame % SPINNER_FRAMES.length];
+}
+
+export function formatTokens(n: number): string {
+	if (n < 1000) return `${n} tok`;
+	if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k tok`;
+	return `${(n / 1_000_000).toFixed(1)}M tok`;
+}
+
+export function formatElapsed(
+	startedAt?: string | number,
+	finishedAt?: string | number,
+): string {
+	if (startedAt == null) return "";
+	const diff =
+		(typeof finishedAt === "number"
+			? finishedAt
+			: typeof finishedAt === "string"
+				? new Date(finishedAt).getTime()
+				: Date.now()) -
+		(typeof startedAt === "number"
+			? startedAt
+			: new Date(startedAt).getTime());
+	if (diff < 1000) return `${diff}ms`;
+	if (diff < 60_000) return `${(diff / 1000).toFixed(1)}s`;
+	if (diff < 3_600_000) {
+		const totalSeconds = Math.floor(diff / 1000);
+		return `${Math.floor(totalSeconds / 60)}m${totalSeconds % 60}s`;
+	}
+	const totalMinutes = Math.floor(diff / 60_000);
+	return `${Math.floor(totalMinutes / 60)}h${totalMinutes % 60}m`;
+}
+
+export function truncateVisibleWidth(
+	text: string,
+	maxVisible: number,
+): string {
+	// ANSI escape sequences should not count toward visible width.
+	let visible = 0;
+	let inEscape = false;
+	const result: string[] = [];
+	for (const ch of text) {
+		if (inEscape) {
+			result.push(ch);
+			if (ch === "m") inEscape = false;
+			continue;
+		}
+		if (ch === "\x1b") {
+			inEscape = true;
+			result.push(ch);
+			continue;
+		}
+		if (visible >= maxVisible) break;
+		visible++;
+		result.push(ch);
+	}
+	return result.join("");
+}

@@ -80,13 +80,13 @@ describe("runControlMode", () => {
 });
 
 describe("runTaskMode", () => {
-  let mockChild;
-  let stdoutCallbacks;
-  let stderrCallbacks;
-  let errorCallbacks;
-  let exitCallbacks;
-  let closeCallbacks;
-  let stdinMocks;
+  let mockChild: any;
+  let stdoutCallbacks: Map<string, Function[]>;
+  let stderrCallbacks: Map<string, Function[]>;
+  let errorCallbacks: Function[];
+  let exitCallbacks: Function[];
+  let closeCallbacks: Function[];
+  let stdinMocks: any;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -162,12 +162,12 @@ describe("runTaskMode", () => {
     vi.restoreAllMocks();
   });
 
-  function emitStdoutRpc(data) {
+  function emitStdoutRpc(data: string) {
     const cbs = stdoutCallbacks.get("data") ?? [];
     for (const cb of cbs) cb(Buffer.from(data + "\n"));
   }
 
-  function emitStderr(data) {
+  function emitStderr(data: string) {
     const cbs = stderrCallbacks.get("data") ?? [];
     for (const cb of cbs) cb(Buffer.from(data));
   }

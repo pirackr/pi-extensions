@@ -34,7 +34,18 @@ import {
 	type PaneSpec,
 	type TmuxExecutor,
 } from "./tmux.ts";
-import { parseCoordinatorResult, renderSummaryResults } from "./render.ts";
+import {
+	parseCoordinatorResult,
+	renderSummaryResults,
+	renderWidgetLines,
+	renderWindowTitle,
+	renderPaneTitle,
+	renderNotification,
+	renderSectionHeading,
+	renderTaskRow,
+	toWidgetTask,
+	type WidgetRun,
+} from "./render.ts";
 import { Type } from "typebox";
 import { loadSubagentConfiguration } from "./config.ts";
 
@@ -50,8 +61,56 @@ const TERMINAL_STATES = new Set([
 // ---------------------------------------------------------------------------
 // Re-export render.ts for downstream consumers
 // ---------------------------------------------------------------------------
-export { parseCoordinatorResult, renderSummaryResults } from "./render.ts";
-export type { CoordinatorSummary, RenderStatus } from "./render.ts";
+export {
+	parseCoordinatorResult,
+	renderSummaryResults,
+	renderWidgetLines,
+	renderWindowTitle,
+	renderPaneTitle,
+	renderNotification,
+	renderSectionHeading,
+	renderTaskRow,
+	toWidgetTask,
+} from "./render.ts";
+export type {
+	CoordinatorSummary,
+	RenderStatus,
+	WidgetRun,
+	WidgetTask,
+	WidgetTheme,
+} from "./render.ts";
+
+// ---------------------------------------------------------------------------
+// Shared widget registry for live UI (Tasks 6-9)
+// ---------------------------------------------------------------------------
+// Structurally compatible with WidgetTask fields — used for type-safe casting.
+export interface TaskStatusLike {
+	taskId: string;
+	agent: string;
+	state: string;
+	startedAt?: string;
+	finishedAt?: string;
+	model: string;
+	usage?: { totalTokens?: number; turns?: number };
+	tools?: number;
+	activity?: string;
+	contextUsage?: { percent?: number | null };
+	compactionCount?: number;
+	result?: string;
+	errorMessage?: string;
+}
+
+export const widgetRuns = new Map<string, WidgetRun>();
+let frame = 0;
+
+// ---------------------------------------------------------------------------
+// Best-effort tmux helper (Task 7)
+// ---------------------------------------------------------------------------
+function bestEffort<T>(fn: () => Promise<T>): void {
+	fn().catch(() => {
+		// Non-fatal: a tmux failure must never fail the tool.
+	});
+}
 
 export interface PiInvocation {
 	command: string;
@@ -133,6 +192,18 @@ export interface TaskStatus {
 		};
 		turns: number;
 	};
+	/** Active tool names (from runner live status). */
+	tools?: string[];
+	/** Current activity string (from runner live status). */
+	activity?: string;
+	/** Live context usage (from runner live status). */
+	contextUsage?: {
+		tokens: number;
+		contextWindow: number;
+		percent: number | null;
+	};
+	/** Number of compactions (from runner live status). */
+	compactionCount?: number;
 }
 
 export interface SubagentDetails {
@@ -381,6 +452,7 @@ export function renderProgress(
 	windowName: string,
 	windowId: string,
 	statuses: TaskStatus[],
+	objectives?: Record<string, string>,
 ): string {
 	const counts = statuses.reduce<Record<string, number>>((acc, status) => {
 		acc[status.state] = (acc[status.state] || 0) + 1;
@@ -398,7 +470,23 @@ export function renderProgress(
 	const attach = windowId
 		? `tmux attach -t ${session}:${windowId}`
 		: `tmux attach -t ${session}`;
-	return `Tmux session: ${session}\nWindow: ${windowName} (${windowId})\nAttach: ${attach}\nProgress: ${summary || "starting"}\n${detail}`;
+
+	// Build inline progress rows using widget row format (Task 8)
+	const rows: string[] = [];
+	const attachLines = [
+		`Tmux session: ${session}`,
+		`Window: ${windowName} (${windowId})`,
+		`Attach: ${attach}`,
+	];
+	// Add widget-style task rows
+	for (const status of statuses) {
+		const obj = objectives?.[status.taskId];
+		const widgetTask = toWidgetTask(status as TaskStatusLike);
+		const taskRows = renderTaskRow(widgetTask, { frame });
+		rows.push(...taskRows);
+	}
+
+	return [...attachLines, ...rows, `Progress: ${summary || "starting"}`].join("\n");
 }
 
 export function renderResults(
@@ -407,7 +495,7 @@ export function renderResults(
 	prompts?: Record<string, { system: string; task: string }>,
 ): string {
 	const sections = statuses.map((status) => {
-		const heading = `=== ${status.agent} / ${status.taskId} (${status.state}) — model: ${status.model} ===`;
+		const heading = renderSectionHeading(status as TaskStatusLike);
 		const prompt = prompts?.[status.taskId];
 		const promptSection = prompt
 			? `Prompt sent:\n${truncateResult(`# System\n${prompt.system}\n\n# Task\n${prompt.task}`)}`
@@ -757,6 +845,23 @@ export default function (pi: ExtensionAPI) {
 					model: item.profile.model,
 				}),
 			);
+
+			// Widget registry entry (Tasks 6-9)
+			widgetRuns.set(runDir, {
+				runId: path.basename(runDir),
+				startedAt: statuses[0]?.startedAt ?? new Date().toISOString(),
+				tasks: prepared.map((p) => ({
+					taskId: p.taskId,
+					agent: p.task.agent,
+					objective: p.task.objective,
+				})),
+				statuses: Object.fromEntries(
+					statuses.map((s) => [s.taskId, s] as const),
+				),
+			});
+
+			// Track which task IDs have already been notified (Task 8)
+			const notifiedTaskIds = new Set<string>();
 			let keepArtifacts = true;
 			let launchedPaneIds: string[] = [];
 			const tmuxExec: TmuxExecutor = (args) => runCommand("tmux", args);
@@ -767,11 +872,25 @@ export default function (pi: ExtensionAPI) {
 					: `tmux attach -t ${session}`;
 
 			const emitUpdate = () => {
+				// Increment frame for widget animation (Tasks 6-9)
+				frame++;
+
+				// Build objectives map for inline progress (Task 8)
+				const objectives = Object.fromEntries(
+					prepared.map((p) => [p.taskId, p.task.objective] as const),
+				);
+
 				onUpdate?.({
 					content: [
 						{
 							type: "text",
-							text: renderProgress(session, windowName, windowId, statuses),
+							text: renderProgress(
+								session,
+								windowName,
+								windowId,
+								statuses,
+								objectives,
+							),
 						},
 					],
 					details: {
@@ -785,6 +904,20 @@ export default function (pi: ExtensionAPI) {
 						results: [...statuses],
 					},
 				});
+
+				// Update footer status in TUI mode (Task 6)
+				if (ctx.mode === "tui" && ctx.ui?.setStatus) {
+					const aggTitle = renderWindowTitle(
+						[...widgetRuns.values()],
+						{ frame },
+					);
+					ctx.ui.setStatus(
+						"tmux-subagents",
+						aggTitle.length > 80
+							? aggTitle.slice(0, 80) + "…"
+							: aggTitle,
+					);
+				}
 			};
 
 			try {
@@ -883,6 +1016,48 @@ export default function (pi: ExtensionAPI) {
 				launchedPaneIds = launchResult.paneIds;
 				emitUpdate();
 
+				// Register widget in TUI mode (Task 6)
+				let widgetDispose: (() => void) | undefined;
+				if (ctx.mode === "tui" && ctx.ui?.setWidget) {
+					const widgetComponent = (tui: { requestRender(): void }) => ({
+						render(width: number): string[] {
+							return renderWidgetLines([...widgetRuns.values()], {
+								frame,
+								width,
+							});
+						},
+						invalidate(): void {
+							tui.requestRender();
+						},
+						dispose(): void {
+							tui.requestRender();
+							widgetDispose?.();
+						},
+					});
+					ctx.ui.setWidget("tmux-subagents", widgetComponent, {
+						placement: "aboveEditor",
+					});
+
+					// Start animation interval
+					let animationTimer: ReturnType<typeof setInterval>;
+					widgetDispose = () => {
+						clearInterval(animationTimer);
+					};
+					animationTimer = setInterval(() => {
+						frame++;
+						ctx.ui?.setStatus?.("tmux-subagents", ""); // trigger re-render
+						if (widgetRuns.size === 0) {
+							clearInterval(animationTimer);
+						}
+					}, 120);
+				}
+
+				// Best-effort pane-border setup (Task 7)
+				if (windowId) {
+					bestEffort(() => tmuxExec(["set-window-option", "-t", windowId, "pane-border-status", "top"]));
+					bestEffort(() => tmuxExec(["set-window-option", "-t", windowId, "pane-border-format", "#{pane_title}"]));
+				}
+
 				let lastProgress = "";
 				let deadlineHit = false;
 				const overallDeadline =
@@ -897,12 +1072,71 @@ export default function (pi: ExtensionAPI) {
 						if (latest) statuses[index] = latest;
 					}
 
+					// Update widgetRuns with latest statuses (Task 6)
+					const widgetRun = widgetRuns.get(runDir);
+					if (widgetRun) {
+						for (let index = 0; index < requests.length; index++) {
+							widgetRun.statuses[statuses[index].taskId] = statuses[index];
+						}
+					}
+
 					const progress = statuses
 						.map((status) => `${status.taskId}:${status.state}`)
 						.join("|");
 					if (progress !== lastProgress) {
 						lastProgress = progress;
 						emitUpdate();
+
+						// Emit notifications on terminal state transitions (Task 8)
+						for (let index = 0; index < statuses.length; index++) {
+							const status = statuses[index];
+							if (TERMINAL_STATES.has(status.state) && !notifiedTaskIds.has(status.taskId)) {
+								notifiedTaskIds.add(status.taskId);
+								const notified = toWidgetTask(status as TaskStatusLike);
+								if (ctx.mode === "tui" && ctx.ui?.notify) {
+									const type =
+										status.state === "succeeded" || status.state === "cancelled"
+											? "info" as const
+											: "error" as const;
+									ctx.ui.notify(renderNotification(notified).join("\n"), type);
+								}
+							}
+						}
+
+						// Best-effort window title rename on state change (Task 7)
+						if (windowId) {
+							bestEffort(() =>
+								tmuxExec([
+									"rename-window",
+									"-t",
+									windowId,
+									renderWindowTitle([...widgetRuns.values()], { frame }),
+								]),
+							);
+
+							// Best-effort pane title pushes (Task 7)
+							for (const paneId of launchedPaneIds) {
+								const paneStatus = statuses.find(
+									(s) => s.taskId === paneId.replace("pane-", ""),
+								);
+								if (paneStatus) {
+									const paneTitle = renderPaneTitle(
+										toWidgetTask(paneStatus as TaskStatusLike),
+										{ frame },
+									);
+									bestEffort(() =>
+										tmuxExec([
+											"set-option",
+											"-p",
+											"-t",
+											paneId,
+											"pane-title",
+											paneTitle,
+										]),
+									);
+								}
+							}
+						}
 					}
 
 					if (statuses.every((status) => TERMINAL_STATES.has(status.state)))
@@ -993,6 +1227,30 @@ export default function (pi: ExtensionAPI) {
 					: "";
 				throw new Error(`${message}${artifactNote}`);
 			} finally {
+				// Clean up widget registry (Tasks 6-9)
+				widgetRuns.delete(runDir);
+
+				// Clear widget and footer only when the last run finishes
+				if (widgetRuns.size === 0) {
+					if (ctx.mode === "tui" && ctx.ui?.setWidget) {
+						ctx.ui.setWidget("tmux-subagents", undefined);
+					}
+					if (ctx.ui?.setStatus) {
+						ctx.ui.setStatus("tmux-subagents", undefined);
+					}
+					// Restore window name when no more runs (Task 7)
+					if (windowId) {
+						const restoredName = buildWindowName(ctx.cwd ?? process.cwd(), {
+							homedir: os.homedir(),
+							topic: ctx?.sessionManager?.getSessionName?.(),
+							firstPrompt: firstUserPrompt(ctx?.sessionManager),
+						});
+						bestEffort(() =>
+							tmuxExec(["rename-window", "-t", windowId, restoredName]),
+						);
+					}
+				}
+
 				if (!keepArtifacts || retainArtifacts === "never") {
 					try {
 						await fs.promises.rm(runDir, { recursive: true, force: true });

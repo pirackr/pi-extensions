@@ -75,7 +75,9 @@ vi.mock("../extensions/tmux-subagent/tmux.ts", () => ({
 		paneIds: ["%1"],
 	}),
 	cancelPanes: vi.fn().mockResolvedValue(undefined),
-	ensureSharedSession: vi.fn().mockResolvedValue({ created: false, reused: true }),
+	ensureSharedSession: vi
+		.fn()
+		.mockResolvedValue({ created: false, reused: true }),
 	findParentWindow: vi.fn().mockResolvedValue(null),
 	withMutationLock: vi.fn(async (fn) => fn()),
 	ensureParentWindow: vi.fn().mockResolvedValue({
@@ -85,7 +87,9 @@ vi.mock("../extensions/tmux-subagent/tmux.ts", () => ({
 		pid: "1",
 		cwd: ".",
 	}),
-	listPanes: vi.fn().mockResolvedValue([{ id: "%1", dead: false, runId: "", taskId: "" }]),
+	listPanes: vi
+		.fn()
+		.mockResolvedValue([{ id: "%1", dead: false, runId: "", taskId: "" }]),
 	listParentWindows: vi.fn().mockResolvedValue([]),
 	reclaimStaleWindows: vi.fn().mockResolvedValue(undefined),
 	closeParentWindow: vi.fn().mockResolvedValue(undefined),
@@ -102,13 +106,20 @@ vi.mock("../extensions/tmux-subagent/tmux.ts", () => ({
 // ---------------------------------------------------------------------------
 // Import under test (after mocks)
 // ---------------------------------------------------------------------------
-import { TmuxSubagentProvider, TmuxSubagentProviderDescriptor } from "../extensions/tmux-subagent/provider.ts";
-import { TmuxExecutor } from "../extensions/tmux-subagent/tmux.ts";
-import { runCommand } from "../extensions/tmux-subagent/index.ts";
 import {
-	type AttemptResult,
-	type ProviderDescriptor,
-	type SerializedError,
+	TmuxSubagentProvider,
+	TmuxSubagentProviderDescriptor,
+} from "../extensions/tmux-subagent/provider.ts";
+import type { TmuxExecutor } from "../extensions/tmux-subagent/tmux.ts";
+import {
+	runCommand,
+	summarizeSummaryDetails,
+	type TaskStatus,
+} from "../extensions/tmux-subagent/index.ts";
+import type {
+	AttemptResult,
+	ProviderDescriptor,
+	SerializedError,
 } from "../extensions/subagent-dispatch/contract.ts";
 import {
 	FakeSubagentProvider,
@@ -118,9 +129,7 @@ import {
 	MockDispatchPolicy,
 } from "../extensions/subagent-dispatch/index.ts";
 import { ProviderRegistry } from "../extensions/subagent-dispatch/registry.ts";
-import {
-	negotiateProvider,
-} from "../extensions/subagent-dispatch/contract.ts";
+import { negotiateProvider } from "../extensions/subagent-dispatch/contract.ts";
 
 // ---------------------------------------------------------------------------
 // Mock tmuxExec for launchBatch testing
@@ -170,7 +179,10 @@ describe("TmuxSubagentProvider — executeAttempt contract", () => {
 	it("returns an AttemptResult with output, usage, and metadata", async () => {
 		const provider = new TmuxSubagentProvider();
 		const plan = { attemptId: "att-1", planId: "p1", index: 0 };
-		const result = await provider.executeAttempt(plan, new AbortController().signal);
+		const result = await provider.executeAttempt(
+			plan,
+			new AbortController().signal,
+		);
 
 		expect(result).toBeDefined();
 		expect(result.output).toBeDefined();
@@ -183,7 +195,10 @@ describe("TmuxSubagentProvider — executeAttempt contract", () => {
 	it("F1: metadata includes startedAt and finishedAt ISO timestamps", async () => {
 		const provider = new TmuxSubagentProvider();
 		const plan = { attemptId: "att-ts", planId: "p1", index: 0 };
-		const result = await provider.executeAttempt(plan, new AbortController().signal);
+		const result = await provider.executeAttempt(
+			plan,
+			new AbortController().signal,
+		);
 
 		expect(result.metadata?.startedAt).toBeDefined();
 		expect(result.metadata?.finishedAt).toBeDefined();
@@ -195,13 +210,19 @@ describe("TmuxSubagentProvider — executeAttempt contract", () => {
 			result.metadata?.finishedAt,
 		);
 		// finishedAt must be >= startedAt.
-		expect(new Date(result.metadata?.finishedAt as string) >= new Date(result.metadata?.startedAt as string)).toBe(true);
+		expect(
+			new Date(result.metadata?.finishedAt as string) >=
+				new Date(result.metadata?.startedAt as string),
+		).toBe(true);
 	});
 
 	it("F7: metadata includes sessionId from launchResult.window", async () => {
 		const provider = new TmuxSubagentProvider();
 		const plan = { attemptId: "att-sid", planId: "p1", index: 0 };
-		const result = await provider.executeAttempt(plan, new AbortController().signal);
+		const result = await provider.executeAttempt(
+			plan,
+			new AbortController().signal,
+		);
 
 		expect(result.metadata?.sessionId).toBe("parent");
 	});
@@ -237,7 +258,12 @@ describe("TmuxSubagentProvider — executeAttempt contract", () => {
 
 	it("falls back to task-N when taskId missing from taskInfo", async () => {
 		const provider = new TmuxSubagentProvider();
-		const plan = { attemptId: "att-fallback", planId: "p1", index: 3, taskInfo: {} };
+		const plan = {
+			attemptId: "att-fallback",
+			planId: "p1",
+			index: 3,
+			taskInfo: {},
+		};
 		await provider.executeAttempt(plan, new AbortController().signal);
 
 		const { launchBatch } = await import("../extensions/tmux-subagent/tmux.ts");
@@ -248,7 +274,12 @@ describe("TmuxSubagentProvider — executeAttempt contract", () => {
 
 	it("falls back to 'worker' when agent missing from taskInfo", async () => {
 		const provider = new TmuxSubagentProvider();
-		const plan = { attemptId: "att-agent-fallback", planId: "p1", index: 0, taskInfo: {} };
+		const plan = {
+			attemptId: "att-agent-fallback",
+			planId: "p1",
+			index: 0,
+			taskInfo: {},
+		};
 		await provider.executeAttempt(plan, new AbortController().signal);
 
 		const { launchBatch } = await import("../extensions/tmux-subagent/tmux.ts");
@@ -264,9 +295,9 @@ describe("TmuxSubagentProvider — executeAttempt contract", () => {
 		const plan = { attemptId: "a3", planId: "p1", index: 0 };
 
 		// F2: provider must throw before launching when already aborted.
-		await expect(provider.executeAttempt(plan, controller.signal)).rejects.toThrow(
-			"Attempt a3 cancelled before launch",
-		);
+		await expect(
+			provider.executeAttempt(plan, controller.signal),
+		).rejects.toThrow("Attempt a3 cancelled before launch");
 		const { launchBatch } = await import("../extensions/tmux-subagent/tmux.ts");
 		expect(launchBatch).not.toHaveBeenCalled();
 	});
@@ -288,8 +319,24 @@ describe("TmuxSubagentProvider — executeAttempt contract", () => {
 
 describe("negotiateProvider — tmux provider capability", () => {
 	const providers = [
-		{ id: "fake-provider", adapterVersion: "0.0.1", protocolVersion: "0.1.0", executionSpecVersion: "0.1.0", capabilities: ["local"], maxConcurrentAttempts: 10, maxAttemptsPerTask: 100 },
-		{ id: "tmux-subagent", adapterVersion: "0.0.1", protocolVersion: "0.1.0", executionSpecVersion: "0.1.0", capabilities: ["tmux"], maxConcurrentAttempts: 10, maxAttemptsPerTask: 100 },
+		{
+			id: "fake-provider",
+			adapterVersion: "0.0.1",
+			protocolVersion: "0.1.0",
+			executionSpecVersion: "0.1.0",
+			capabilities: ["local"],
+			maxConcurrentAttempts: 10,
+			maxAttemptsPerTask: 100,
+		},
+		{
+			id: "tmux-subagent",
+			adapterVersion: "0.0.1",
+			protocolVersion: "0.1.0",
+			executionSpecVersion: "0.1.0",
+			capabilities: ["tmux"],
+			maxConcurrentAttempts: 10,
+			maxAttemptsPerTask: 100,
+		},
 	];
 
 	it("selects tmux provider when capabilities = ['tmux']", () => {
@@ -298,9 +345,9 @@ describe("negotiateProvider — tmux provider capability", () => {
 	});
 
 	it("rejects tmux provider for non-tmux capabilities", () => {
-		expect(() => negotiateProvider(providers, "tmux-subagent", ["local"])).toThrow(
-			'Provider "tmux-subagent" lacks capabilities: local',
-		);
+		expect(() =>
+			negotiateProvider(providers, "tmux-subagent", ["local"]),
+		).toThrow('Provider "tmux-subagent" lacks capabilities: local');
 	});
 
 	it("auto-selects tmux provider for tmux requirements", () => {
@@ -391,9 +438,7 @@ describe("parseCoordinatorResult", () => {
 	it("extracts all 6 fields from a succeeded summary", () => {
 		const result = parseCoordinatorResult(FULL_SUMMARY);
 		expect(result.summary.status).toBe("succeeded");
-		expect(result.summary.outcome).toBe(
-			"Found 3 credible sources for the query",
-		);
+		expect(result.summary.outcome).toBe("Found 3 credible sources for the query");
 		expect(result.summary.evidenceAdded).toBe("3");
 		expect(result.summary.keyChanges).toEqual([
 			"Updated findings-1.org with source A",
@@ -408,18 +453,14 @@ describe("parseCoordinatorResult", () => {
 	});
 
 	it("parses all 4 statuses", () => {
-		expect(parseCoordinatorResult(FAILED_SUMMARY).summary.status).toBe(
-			"failed",
-		);
+		expect(parseCoordinatorResult(FAILED_SUMMARY).summary.status).toBe("failed");
 		expect(parseCoordinatorResult(PARTIAL_SUMMARY).summary.status).toBe(
 			"partial",
 		);
 		expect(parseCoordinatorResult(BLOCKED_SUMMARY).summary.status).toBe(
 			"blocked",
 		);
-		expect(parseCoordinatorResult(FULL_SUMMARY).summary.status).toBe(
-			"succeeded",
-		);
+		expect(parseCoordinatorResult(FULL_SUMMARY).summary.status).toBe("succeeded");
 	});
 
 	it("extracts artifact block when present", () => {
@@ -447,9 +488,7 @@ Key changes: none
 Contradictions/blockers: none
 Recommended next action: do something
 </coordinator-summary>`;
-		expect(() => parseCoordinatorResult(text)).toThrow(
-			"missing Status field",
-		);
+		expect(() => parseCoordinatorResult(text)).toThrow("missing Status field");
 	});
 
 	it("throws when Outcome field is missing", () => {
@@ -460,9 +499,7 @@ Key changes: none
 Contradictions/blockers: none
 Recommended next action: do something
 </coordinator-summary>`;
-		expect(() => parseCoordinatorResult(text)).toThrow(
-			"missing Outcome field",
-		);
+		expect(() => parseCoordinatorResult(text)).toThrow("missing Outcome field");
 	});
 
 	it("throws when Evidence added field is missing", () => {
@@ -578,10 +615,7 @@ Recommended next action: fix blockers
 			"second item",
 			"third item",
 		]);
-		expect(result.summary.contradictions).toEqual([
-			"blocker one",
-			"blocker two",
-		]);
+		expect(result.summary.contradictions).toEqual(["blocker one", "blocker two"]);
 	});
 });
 
@@ -590,7 +624,11 @@ Recommended next action: fix blockers
 // ---------------------------------------------------------------------------
 
 function renderStatus(
-	partial: Partial<RenderStatus> & { parsedResult?: RenderStatus["parsedResult"]; result_path?: string; usage?: RenderStatus["usage"] },
+	partial: Partial<RenderStatus> & {
+		parsedResult?: RenderStatus["parsedResult"];
+		result_path?: string;
+		usage?: RenderStatus["usage"];
+	},
 ): RenderStatus {
 	return {
 		taskId: "task-1",
@@ -614,6 +652,59 @@ function makeSummary(
 		...overrides,
 	};
 }
+
+describe("summary-mode detail retention", () => {
+	it("excludes raw child output and artifact payloads while retaining the coordinator summary and task metadata", () => {
+		const [detail] = summarizeSummaryDetails([
+			{
+				taskId: "task-1",
+				agent: "scout_research",
+				state: "succeeded",
+				startedAt: "2026-08-12T18:13:14.000Z",
+				finishedAt: "2026-08-12T18:15:00.000Z",
+				model: "test-model",
+				result: "RAW CHILD OUTPUT THAT MUST NOT REACH THE PARENT SESSION",
+				result_path: "/tmp/report.org",
+				usage: {
+					input: 100,
+					output: 50,
+					cacheRead: 10,
+					cacheWrite: 5,
+					totalTokens: 165,
+					cost: {
+						input: 0.001,
+						output: 0.002,
+						cacheRead: 0.0001,
+						cacheWrite: 0.0002,
+						total: 0.0033,
+					},
+					turns: 3,
+				},
+				parsedResult: {
+					summary: makeSummary(),
+					artifact: "RAW ARTIFACT PAYLOAD THAT MUST NOT REACH THE PARENT SESSION",
+				},
+			} as TaskStatus & {
+				result_path: string;
+				parsedResult: { summary: CoordinatorSummary; artifact: string };
+			},
+		]);
+
+		expect(detail).toMatchObject({
+			taskId: "task-1",
+			agent: "scout_research",
+			state: "succeeded",
+			startedAt: "2026-08-12T18:13:14.000Z",
+			finishedAt: "2026-08-12T18:15:00.000Z",
+			model: "test-model",
+			result_path: "/tmp/report.org",
+			usage: { totalTokens: 165 },
+			parsedResult: { summary: makeSummary() },
+		});
+		expect(detail).not.toHaveProperty("result");
+		expect(detail.parsedResult).not.toHaveProperty("artifact");
+	});
+});
 
 describe("renderSummaryResults", () => {
 	it("renders the complete coordinator-summary envelope for succeeded tasks", () => {
@@ -685,10 +776,7 @@ describe("renderSummaryResults", () => {
 	});
 
 	it("shows (no coordinator-summary) for succeeded without parsed result", () => {
-		const text = renderSummaryResults(
-			[renderStatus({})],
-			"/tmp/pi-subagent-abc",
-		);
+		const text = renderSummaryResults([renderStatus({})], "/tmp/pi-subagent-abc");
 		expect(text).toContain("(no coordinator-summary)");
 	});
 
@@ -837,10 +925,7 @@ describe("usage aggregation", () => {
 			{ totalTokens: 200, input: 100, output: 100, cacheRead: 10, cacheWrite: 5 },
 			{ totalTokens: 50, input: 25, output: 25, cacheRead: 0, cacheWrite: 0 },
 		];
-		const total = usages.reduce(
-			(sum, u) => sum + u.totalTokens,
-			0,
-		);
+		const total = usages.reduce((sum, u) => sum + u.totalTokens, 0);
 		expect(total).toBe(350);
 	});
 });

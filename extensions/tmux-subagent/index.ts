@@ -34,7 +34,11 @@ import {
 	type PaneSpec,
 	type TmuxExecutor,
 } from "./tmux.ts";
-import { parseCoordinatorResult, renderSummaryResults } from "./render.ts";
+import {
+	parseCoordinatorResult,
+	renderSummaryResults,
+	type ParsedCoordinatorResult,
+} from "./render.ts";
 import { Type } from "typebox";
 import { loadSubagentConfiguration } from "./config.ts";
 
@@ -133,6 +137,34 @@ export interface TaskStatus {
 		};
 		turns: number;
 	};
+}
+
+export interface SummaryTaskStatus extends Omit<TaskStatus, "result"> {
+	result_path?: string;
+	parsedResult?: Pick<ParsedCoordinatorResult, "summary">;
+}
+
+/**
+ * Remove full child output after summary-mode validation/export so Pi does not
+ * serialize it in the parent tool-result details. Full output remains only in
+ * the retained run artifacts and transcripts.
+ */
+export function summarizeSummaryDetails(
+	statuses: TaskStatus[],
+): SummaryTaskStatus[] {
+	return statuses.map((rawStatus) => {
+		const {
+			result: _result,
+			parsedResult,
+			...status
+		} = rawStatus as TaskStatus & {
+			result_path?: string;
+			parsedResult?: ParsedCoordinatorResult;
+		};
+		return parsedResult
+			? { ...status, parsedResult: { summary: parsedResult.summary } }
+			: status;
+	});
 }
 
 export interface SubagentDetails {
@@ -371,8 +403,7 @@ export function renderTmuxInfo(details: SubagentDetails): string {
 	];
 	if (details.layoutWarning)
 		lines.push(`Layout warning: ${details.layoutWarning}`);
-	if (details.transcriptDir)
-		lines.push(`Transcripts: ${details.transcriptDir}`);
+	if (details.transcriptDir) lines.push(`Transcripts: ${details.transcriptDir}`);
 	return lines.join("\n");
 }
 
@@ -496,9 +527,7 @@ export async function validateAndExportSummaryResults(
 export default function (pi: ExtensionAPI) {
 	const { config, profiles, userConfigPath } =
 		loadSubagentConfiguration(extensionDir);
-	const profileMap = new Map(
-		profiles.map((profile) => [profile.name, profile]),
-	);
+	const profileMap = new Map(profiles.map((profile) => [profile.name, profile]));
 	const profileSummary = profiles
 		.map((profile) => `${profile.name}: ${profile.description}`)
 		.join("; ");
@@ -606,9 +635,7 @@ export default function (pi: ExtensionAPI) {
 				retain_artifacts?: string;
 				return_mode?: "full" | "summary";
 			};
-			const returnMode = (typedParams.return_mode ?? "full") as
-				| "full"
-				| "summary";
+			const returnMode = (typedParams.return_mode ?? "full") as "full" | "summary";
 			if (
 				typedParams.tasks.length === 0 ||
 				typedParams.tasks.length > config.maxTasks
@@ -637,13 +664,9 @@ export default function (pi: ExtensionAPI) {
 			await runCommand("tmux", ["-V"]);
 			await fs.promises.access(runnerPath, fs.constants.R_OK);
 			for (const childExtension of config.childExtensions) {
-				await fs.promises
-					.access(childExtension, fs.constants.R_OK)
-					.catch(() => {
-						throw new Error(
-							`Configured child extension not found: ${childExtension}`,
-						);
-					});
+				await fs.promises.access(childExtension, fs.constants.R_OK).catch(() => {
+					throw new Error(`Configured child extension not found: ${childExtension}`);
+				});
 			}
 
 			const prepared = await Promise.all(
@@ -662,13 +685,9 @@ export default function (pi: ExtensionAPI) {
 								: path.resolve(ctx?.cwd ?? ".", cwdSetting);
 					const stat = await fs.promises.stat(cwd);
 					if (!stat.isDirectory())
-						throw new Error(
-							`Task working directory is not a directory: ${cwd}`,
-						);
+						throw new Error(`Task working directory is not a directory: ${cwd}`);
 					const timeoutSeconds =
-						timeoutOverride ??
-						profile.timeoutSeconds ??
-						config.defaultTimeoutSeconds;
+						timeoutOverride ?? profile.timeoutSeconds ?? config.defaultTimeoutSeconds;
 					return {
 						task,
 						profile,
@@ -710,8 +729,7 @@ export default function (pi: ExtensionAPI) {
 
 			// Parent identity: the immutable Pi session id owns one window in the
 			// shared tmux session; display names are derived and may be renamed.
-			const parentSessionId =
-				ctx?.sessionManager?.getSessionId?.() ?? "unknown";
+			const parentSessionId = ctx?.sessionManager?.getSessionId?.() ?? "unknown";
 			const parentCwd = ctx?.cwd ?? process.cwd();
 			const windowName = buildWindowName(parentCwd, {
 				homedir: os.homedir(),
@@ -726,10 +744,7 @@ export default function (pi: ExtensionAPI) {
 				transcriptRoot,
 				parentSessionId.replace(/[^A-Za-z0-9._-]/g, "_"),
 			);
-			const transcriptDir = path.join(
-				transcriptParentDir,
-				path.basename(runDir),
-			);
+			const transcriptDir = path.join(transcriptParentDir, path.basename(runDir));
 			await fs.promises.mkdir(transcriptParentDir, {
 				recursive: true,
 				mode: 0o700,
@@ -744,10 +759,7 @@ export default function (pi: ExtensionAPI) {
 			const runner = getRunnerInvocation();
 			const piInvocation = getPiInvocation();
 			const requests: RunnerRequest[] = [];
-			const promptContents = new Map<
-				string,
-				{ system: string; task: string }
-			>();
+			const promptContents = new Map<string, { system: string; task: string }>();
 			const statuses: TaskStatus[] = prepared.map(
 				(item: (typeof prepared)[number]) => ({
 					taskId: item.taskId,
@@ -805,11 +817,7 @@ export default function (pi: ExtensionAPI) {
 						"request",
 						`${item.taskId}-prompt.md`,
 					);
-					const taskPath = path.join(
-						runDir,
-						"request",
-						`${item.taskId}-task.md`,
-					);
+					const taskPath = path.join(runDir, "request", `${item.taskId}-task.md`);
 					await fs.promises.writeFile(promptPath, item.profile.systemPrompt, {
 						mode: 0o600,
 					});
@@ -844,11 +852,7 @@ export default function (pi: ExtensionAPI) {
 							item.task.webSearchMaxFetches ?? config.webSearchMaxFetches,
 					};
 					requests.push(request);
-					const requestPath = path.join(
-						runDir,
-						"request",
-						`${item.taskId}.json`,
-					);
+					const requestPath = path.join(runDir, "request", `${item.taskId}.json`);
 					await fs.promises.writeFile(
 						requestPath,
 						JSON.stringify(request, null, 2),
@@ -905,8 +909,7 @@ export default function (pi: ExtensionAPI) {
 						emitUpdate();
 					}
 
-					if (statuses.every((status) => TERMINAL_STATES.has(status.state)))
-						break;
+					if (statuses.every((status) => TERMINAL_STATES.has(status.state))) break;
 					if (Date.now() > overallDeadline) {
 						deadlineHit = true;
 						for (let index = 0; index < statuses.length; index++) {
@@ -937,8 +940,7 @@ export default function (pi: ExtensionAPI) {
 					if (statuses[index].state === "succeeded") continue;
 					const stderr = await readStderrTail(requests[index].stderrPath);
 					if (stderr)
-						statuses[index].errorMessage =
-							statuses[index].errorMessage || stderr;
+						statuses[index].errorMessage = statuses[index].errorMessage || stderr;
 				}
 
 				// Summary mode: validate coordinator-summary and export artifacts.
@@ -958,7 +960,8 @@ export default function (pi: ExtensionAPI) {
 					transcriptDir,
 					layoutWarning,
 					artifactsPath: keepArtifacts ? runDir : null,
-					results: statuses,
+					results:
+						returnMode === "summary" ? summarizeSummaryDetails(statuses) : statuses,
 				};
 				const rendered =
 					returnMode === "summary"

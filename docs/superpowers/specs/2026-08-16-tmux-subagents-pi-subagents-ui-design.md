@@ -14,6 +14,7 @@ Status surfaces after this change, from closest to farthest:
 | Footer status | pi footer (`setStatus`) | one compact glance line: `⣷ worker+scout · 1/2 done · 1m20s` |
 | Widget | above pi editor (`setWidget`) | per-agent rows: spinner/icon, agent, objective, `↻N`, `⚙ N tools`, tokens `(NN%)`, elapsed, activity |
 | Inline progress | tool `onUpdate` stream | same rows as widget + tmux attach info (what the parent model sees) |
+| Completion notification | pi UI (`notify`) | one notification per terminal task, using the same icon/stats/result preview renderer |
 | Results | tool return content | notification-style headers; `<coordinator-summary>` envelope unchanged |
 | Window title | tmux status bar | `⣷ worker+scout · 1/2 done · 1m20s`, restored to topic name at end |
 | Pane strips | tmux pane border | `⠹ worker · ↻3 · ⚙ 5 tools` per task pane |
@@ -96,11 +97,13 @@ stdin (LF-delimited JSONL, same framing the parser already handles).
 - **Task delivery**: read `request.taskPath` and send
   `{"type":"prompt","message":<task text>}`. stdin stays **open** (do not
   end it — rpc mode reads commands until EOF).
-- **Completion**: on `agent_settled`, send `get_session_stats` (id-correlated);
-  on its response, write the final status (authoritative `contextUsage`) and
-  `child.stdin.end()` → pi exits cleanly (exit 0, verified). The final write
-  is bounded by a ~3 s fallback timer: on expiry, write the final status with
-  the live `contextUsage` and end stdin anyway.
+- **Completion**: on `agent_settled`, send `get_session_stats` (id-correlated).
+  On its response, write one last `running` status with authoritative
+  `contextUsage` and call `child.stdin.end()`. The stats wait is bounded by a
+  ~3 s fallback timer: on expiry, write the last running status with live
+  `contextUsage` and end stdin anyway. The child `close` handler remains the
+  sole terminal-status writer, preserving the authoritative exit code and
+  preventing a late non-zero exit from being masked.
 - **Safety net**: if `agent_settled` never arrives, existing timeout → kill
   process group fallback is unchanged. If the `prompt` response is
   `success:false`, set `errorMessage` and terminate.
@@ -124,9 +127,12 @@ Written by `runner.mjs` (atomic tmp+rename, unchanged pattern):
 | `compactionCount` (number) | every `compaction_end` | `⇊N` annotation |
 
 All optional and additive — existing consumers (`readStatus`, any file-based
-reader) are unaffected. Live `percent` is computed as
-`usage.totalTokens / contextWindow * 100`; the final status overwrites it with
-`get_session_stats`'s `contextUsage`.
+reader) are unaffected. Aggregate `usage` remains the billing/result total,
+but live context utilization is computed from the latest valid assistant
+message's `usage.totalTokens`, never the aggregate sum. On `compaction_end`,
+live `tokens` and `percent` become null until a post-compaction assistant
+message supplies valid usage. The final running status uses
+`get_session_stats`'s authoritative `contextUsage` when available.
 
 ### 3. Pure renderers (`render.ts`)
 
@@ -143,10 +149,13 @@ New exports:
 - `renderTaskRow(task, {frame, theme?})` — icon + `agent · objective` +
   stats, then `⎿ activity` line. `theme` optional (identity when absent) so
   plain-text and colored rendering share one implementation.
-- `renderWidgetLines(runs, {frame, theme?})` — header `● Subagents (tmux)`,
-  task rows, footer `2 running · 1 done`, multi-run grouping, line cap ~12.
-- `renderWindowTitle(run)` — `⣷ worker+scout · 1/2 done · 1m20s`,
-  `✓ 2/2 done · 1m42s` when all terminal.
+- `renderWidgetLines(runs, {frame, theme?, width})` — header `● Subagents
+  (tmux)`, task rows, footer `2 running · 1 done`, multi-run grouping, an exact
+  12-line cap, and ANSI-safe truncation so no visible line exceeds `width`.
+- `renderWindowTitle(runs)` — aggregate all active runs in the parent window:
+  `⣷ worker+scout · 1/2 done · 1m20s`; terminal icon is `✓` only when every
+  task succeeded, `✗` when any failed/timed out, and `■` for cancellations
+  when there are no failures.
 - `renderPaneTitle(task, {frame})` — short `⠹ worker · ↻3 · ⚙ 5 tools`.
 - `renderNotification(task)` — completion box: `✓ worker · Find auth files
   completed` + stats + `⎿` preview (result or errorMessage, ~120 chars).
@@ -164,26 +173,33 @@ and prompt echo are unchanged.
 
 ### 4. Extension wiring (`index.ts`)
 
-- **Module registry** `widgetRuns: Map<runId, {tasks, objectives, agents,
-  startedAt}>` — supports concurrent `run_subagents` calls in one session.
+- **Module registry** `widgetRuns: Map<runId, WidgetRun>` — supports concurrent
+  `run_subagents` calls in one session and is the aggregate source for the
+  widget, footer, and parent-window title.
 - **Widget** (`ctx.ui.setWidget("tmux-subagents", (tui, theme) => component)`)
   only when `ctx.mode === "tui"`. Factory: 120 ms `setInterval` advancing a
   frame and calling `tui.requestRender()` (pattern used by pi's own animated
   components; verified against `interactive-mode.js`); `render()` reads
   `widgetRuns` + frame; `dispose()` clears the timer. Widget cleared when the
   registry empties (run `finally`).
-- **Footer status**: `ctx.ui.setStatus("tmux-subagents", …)` on state
-  transitions; cleared at end. Not TUI-gated (works in RPC mode).
-- **Inline progress**: `renderProgress` upgraded to the row format + attach
-  info; `emitUpdate` unchanged otherwise.
-- **Window title**: on state-count change, or ≥5 s since last rename:
-  `renameWindow(tmuxExec, windowId, renderWindowTitle(run))`. On run end,
-  restore by recomputing `buildWindowName(cwd, {homedir, topic:
-  getSessionName(), firstPrompt})` — the same inputs the
-  `session_info_changed` handler uses, so a mid-run `/name` is not clobbered.
+- **Footer status**: `ctx.ui.setStatus("tmux-subagents", …)` renders one
+  aggregate title across all registry runs on state transitions; cleared only
+  when the registry empties. Not TUI-gated (works in RPC mode).
+- **Inline progress and notifications**: `renderProgress` is upgraded to the
+  row format + attach info. Each run tracks notified task ids; the first
+  observed terminal transition emits `renderNotification(task)` exactly once
+  through guarded `ctx.ui.notify` (`info` for success/cancel, `error` for
+  failed/timed_out).
+- **Window title**: on aggregate state-count change, or ≥5 s since last
+  rename: `renameWindow(tmuxExec, windowId,
+  renderWindowTitle([...widgetRuns.values()]))`. Cleanup lives in `finally`:
+  after deleting this run, render the remaining aggregate when other runs are
+  active; restore only when the registry empties by recomputing
+  `buildWindowName(cwd, {homedir, topic: getSessionName(), firstPrompt})`.
 - **Pane strips**: after `launchBatch`, on the run's own window only:
   `set-window-option pane-border-status top` + `pane-border-format
-  "#{pane_title}"`; push `pane-title` per pane on change (throttled ≥1 s).
+  "#{pane_title}"`; compare each pane's newly rendered title with its previous
+  value and push changes at most once per second per pane.
   All tmux calls best-effort (try/catch — a tmux failure must never fail the
   tool).
 - `TaskStatus` interface gains optional `tools`, `activity`, `contextUsage`,
@@ -199,7 +215,8 @@ and prompt echo are unchanged.
   icon per state; token/elapsed formatting edges (0, 999, 1.2M; ms/s/m+s;
   missing start); stats row incl. singular tool and `(NN%)` omission; task
   row with/without activity; widget lines (header, footer counts, multi-run,
-  line cap); window title (running/done/failed/elapsed); pane title;
+  exact line cap, ANSI-safe widths 20/80); aggregate window title
+  (running/all-succeeded/failed/cancelled/elapsed); pane title;
   notification (completed/failed/stopped, preview truncation); section
   heading. Summary-mode rendering keeps the envelope.
 - Verification: `npx tsc`, `npx vitest run`, `smoke-load.ts`, then one real
@@ -216,8 +233,8 @@ get_state → contextWindow               poll status/*.json            widget r
 tool_execution_start → tools/activity   every 250 ms                  footer status
 message_end → usage/contextUsage                                     window title
 compaction_end → compactionCount        renderWidgetLines/renderStats pane strips
-agent_settled → stats → final status →  emitUpdate (progress rows)    inline progress
-stdin.end() → exit 0                    run end → restore/clear       results/notifications
+agent_settled → stats → running status  emitUpdate (progress rows)    inline progress
+stdin.end() → close → terminal status   run end → restore/clear       results/notifications
 ```
 
 ## Error handling
@@ -227,11 +244,11 @@ stdin.end() → exit 0                    run end → restore/clear       result
 | `prompt` rejected (`success:false`) | `errorMessage`, terminate child, normal failure path |
 | `agent_settled` never fires | existing timeout → SIGTERM → SIGKILL fallback |
 | `get_state` response absent | `contextWindow = null` → `(NN%)` omitted, everything else works |
-| `get_session_stats` response slow/missing after `agent_settled` | bounded ~3 s fallback: final status from live `contextUsage`, `stdin.end()` anyway |
+| `get_session_stats` response slow/missing after `agent_settled` | bounded ~3 s fallback: last running status uses live `contextUsage`, then `stdin.end()`; `close` writes terminal status |
 | tmux rename / pane-border / pane-title fails | best-effort try/catch, never fails the tool |
 | widget/setStatus unavailable (json mode) | guarded by `ctx.mode === "tui"` / existence checks |
 | mid-run `/name` while window title active | restore recomputes from current session name |
-| concurrent runs | shared registry; widget cleared only when empty |
+| concurrent runs | widget/footer/window title aggregate the shared registry; restore/clear only when empty |
 
 ## Non-goals
 
@@ -250,9 +267,12 @@ stdin.end() → exit 0                    run end → restore/clear       result
    widget animate (spinner, live `↻`/`⚙`/tokens/elapsed, `⎿` activity), the
    footer line, and the tmux window title change; `tmux attach` to check the
    pane strips and header lines.
-2. Let it finish: notification headers in the result, window name restored,
-   widget and footer cleared.
-3. Failure path: one task with an invalid cwd → `✗` row, red window-title
-   state, failure notification, `stderr` tail preserved.
+2. Let it finish: exactly one completion notification per task, notification
+   headers in the result, window name restored, widget and footer cleared.
+3. Failure path: temporarily configure a test profile with an invalid model id
+   but a valid cwd, so the pane launches and the child exits non-zero. Confirm a
+   `✗` row, `✗` aggregate window title (no color assumption), one failure
+   notification, authoritative non-zero exit code, and preserved `stderr` tail;
+   then remove the temporary profile.
 4. Summary mode (`return_mode: "summary"`): `<coordinator-summary>` envelopes
    intact with notification headers above them.

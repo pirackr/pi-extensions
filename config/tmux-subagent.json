@@ -2,7 +2,8 @@
   "models": {
     "strong": "Qwen3.6-35B-A3B-MTP-GGUF",
     "eval": "gemma-4-26B-A4B-it-GGUF-UD-Q4_K_XL",
-    "light": "gpt-oss-20b-GGUF-Q4_K_M"
+    "light": "gpt-oss-20b-GGUF-Q4_K_M",
+    "fast": "XYZAILab_XYZ-Aquila-mini-GGUF-Q4_K_M"
   },
   "childExtensions": [
     "../extensions/web-search/index.ts"

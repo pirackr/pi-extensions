@@ -71,7 +71,7 @@
     },
     "scout_research": {
       "description": "Discover and evaluate sources — finds URLs, assesses credibility, returns findings and a scored source list",
-      "model": "strong",
+      "model": "fast",
       "thinking": "high",
       "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
       "access": "read",

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A **pi package** (the `pi` coding agent from `@earendil-works/pi-coding-agent`) that ships extensions and skills. It is not an application and has no build output.
+A **pi package** (the `pi` coding agent from `@earendil-works/pi-coding-agent`) that ships extensions, skills, and prompt templates. It is not an application and has no build output.
 
 `package.json` has no `scripts` and no `dependencies` — the `"keywords": ["pi-package"]` entry is what marks the directory as an installable pi package. There is **nothing to build, lint, or test**; pi loads the TypeScript directly via jiti at runtime.
 
@@ -24,6 +24,7 @@ Pi discovers resources by path, so directory shape is load-bearing:
 
 - `extensions/*.ts` or `extensions/<name>/index.ts` — an extension module. Default-exports `function (pi: ExtensionAPI)` and calls `pi.registerTool(...)` / `pi.on(...)` / `pi.registerCommand(...)`.
 - `skills/<name>/SKILL.md` — a skill. **Must** be a directory containing `SKILL.md`; a flat `skills/foo.md` is not discovered (this is why `skills/subagent-skill.md` became `skills/subagent/SKILL.md`).
+- `prompts/<name>.md` — a prompt template, invoked as `/name` (e.g. `prompts/plan.md` → `/plan`). Filename becomes the command name; `description` + optional `argument-hint` frontmatter drive autocomplete; `$@`/`${@:-default}` substitute arguments.
 
 Frontmatter drives behaviour: `name` + `description` are required, and `disable-model-invocation: true` makes a skill user-invoked only (`/handoff`, `/grill-me`) rather than something the model reaches for on its own.
 

@@ -602,9 +602,10 @@ describe("renderProgress", () => {
 		expect(result).toContain("1 succeeded");
 		expect(result).toContain("1 running");
 		expect(result).toContain("1 failed");
-		expect(result).toContain("task-1 (worker) [gpt-4o] succeeded");
-		expect(result).toContain("task-2 (reviewer) [gpt-4o] running");
-		expect(result).toContain("task-3 (tester) [gpt-4o] failed");
+		// Widget row format: icon agent · ↻turns · ⚙ tools · tokens · elapsed
+		expect(result).toContain("✓ worker ·");
+		expect(result).toContain("⠋ reviewer ·");
+		expect(result).toContain("✗ tester ·");
 		expect(result).toContain("1 running");
 		expect(result).toContain("1 failed");
 	});
@@ -637,7 +638,7 @@ describe("renderProgress", () => {
 			statuses,
 		);
 		expect(result).toContain("1 running");
-		expect(result).toContain("task-1 (worker) [gpt-4o] running");
+		expect(result).toContain("⠋ worker ·");
 	});
 });
 
@@ -655,9 +656,7 @@ describe("renderResults", () => {
 		];
 
 		const result = renderResults(statuses, null);
-		expect(result).toContain(
-			"=== worker / task-1 (succeeded) — model: gpt-4o ===",
-		);
+		expect(result).toContain("=== ✓ worker · task-1 · succeeded ===");
 		expect(result).toContain("Done!");
 	});
 
@@ -675,9 +674,7 @@ describe("renderResults", () => {
 		];
 
 		const result = renderResults(statuses, null);
-		expect(result).toContain(
-			"=== worker / task-1 (failed) — model: gpt-4o ===",
-		);
+		expect(result).toContain("=== ✗ worker · task-1 · failed ===");
 		expect(result).toContain("Something broke");
 		expect(result).toContain("Partial output:\nPartial");
 	});
@@ -734,12 +731,8 @@ describe("renderResults", () => {
 		];
 
 		const result = renderResults(statuses, null);
-		expect(result).toContain(
-			"=== worker / task-1 (succeeded) — model: gpt-4o ===",
-		);
-		expect(result).toContain(
-			"=== reviewer / task-2 (failed) — model: gpt-4o ===",
-		);
+		expect(result).toContain("=== ✓ worker · task-1 · succeeded ===");
+		expect(result).toContain("=== ✗ reviewer · task-2 · failed ===");
 	});
 });
 

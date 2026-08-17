@@ -18,10 +18,8 @@ function handler(pi: ReturnType<typeof fakePi>, event: string) {
 }
 
 function command(pi: ReturnType<typeof fakePi>) {
-  return (
-    pi.registerCommand.mock.calls.find(([name]) => name === "ntfy")?.[1]
-      .handler as (args: string, ctx: any) => Promise<void>
-  );
+  return pi.registerCommand.mock.calls.find(([name]) => name === "ntfy")?.[1]
+    .handler as (args: string, ctx: any) => Promise<void>;
 }
 
 function context(cwd = "/work/grinder") {
@@ -60,22 +58,19 @@ describe("registration and reset", () => {
     expect(pi.registerCommand).toHaveBeenCalledWith("ntfy", expect.any(Object));
   });
 
-  it.each([
-    "startup",
-    "reload",
-    "new",
-    "resume",
-    "fork",
-  ])("resets enabled and pending state on %s", async (reason) => {
-    const { pi, publish } = setup();
-    const ctx = context();
-    handler(pi, "session_start")({ reason: "startup" }, ctx);
-    await command(pi)("on", ctx);
-    handler(pi, "turn_start")({}, ctx);
-    handler(pi, "session_start")({ reason: reason as string }, ctx);
-    await handler(pi, "agent_settled")({}, ctx);
-    expect(publish).not.toHaveBeenCalled();
-  });
+  it.each(["startup", "reload", "new", "resume", "fork"])(
+    "resets enabled and pending state on %s",
+    async (reason) => {
+      const { pi, publish } = setup();
+      const ctx = context();
+      handler(pi, "session_start")({ reason: "startup" }, ctx);
+      await command(pi)("on", ctx);
+      handler(pi, "turn_start")({}, ctx);
+      handler(pi, "session_start")({ reason: reason as string }, ctx);
+      await handler(pi, "agent_settled")({}, ctx);
+      expect(publish).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("completion delivery", () => {
@@ -88,10 +83,10 @@ describe("completion delivery", () => {
     await handler(pi, "agent_settled")({}, ctx);
     await handler(pi, "agent_settled")({}, ctx);
     expect(publish).toHaveBeenCalledTimes(1);
-    expect(publish).toHaveBeenCalledWith(
-      loaded.config,
-      { title: "Pi · grinder", body: "Task finished" },
-    );
+    expect(publish).toHaveBeenCalledWith(loaded.config, {
+      title: "Pi · grinder",
+      body: "Task finished",
+    });
   });
 
   it("does not publish while off or without a preceding turn_start", async () => {
@@ -157,10 +152,10 @@ describe("/ntfy", () => {
     const ctx = context();
     handler(pi, "session_start")({ reason: "startup" }, ctx);
     await command(pi)("test", ctx);
-    expect(publish).toHaveBeenCalledWith(
-      loaded.config,
-      { title: "Pi · grinder", body: "ntfy test notification" },
-    );
+    expect(publish).toHaveBeenCalledWith(loaded.config, {
+      title: "Pi · grinder",
+      body: "ntfy test notification",
+    });
   });
 
   it("refuses to test without a topic", async () => {
@@ -192,14 +187,14 @@ describe("/ntfy", () => {
 describe("safe failures", () => {
   it("warns on publishing failure without rejecting the settled handler", async () => {
     const { pi, publish } = setup();
-    publish.mockRejectedValue(
-      new Error("ntfy request failed with HTTP 500"),
-    );
+    publish.mockRejectedValue(new Error("ntfy request failed with HTTP 500"));
     const ctx = context();
     handler(pi, "session_start")({ reason: "startup" }, ctx);
     await command(pi)("on", ctx);
     handler(pi, "turn_start")({}, ctx);
-    await expect(handler(pi, "agent_settled")({}, ctx)).resolves.toBeUndefined();
+    await expect(
+      handler(pi, "agent_settled")({}, ctx),
+    ).resolves.toBeUndefined();
     expect(ctx.ui.notify).toHaveBeenLastCalledWith(
       "ntfy notification failed: ntfy request failed with HTTP 500",
       "warning",

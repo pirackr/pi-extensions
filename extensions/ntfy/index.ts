@@ -155,13 +155,10 @@ export function createNtfyExtension(
             loaded && resolveTopicUrl(loaded.config)
               ? resolveTopicUrl(loaded.config)!
               : "not configured";
-          const auth = loaded && loaded.config.token
-            ? "enabled"
-            : "disabled";
-          const warningSummary =
-            loaded?.warnings.length
-              ? ` (${loaded.warnings.length} config warning(s))`
-              : "";
+          const auth = loaded && loaded.config.token ? "enabled" : "disabled";
+          const warningSummary = loaded?.warnings.length
+            ? ` (${loaded.warnings.length} config warning(s))`
+            : "";
           notify(
             ctx,
             `ntfy notifications: ${status}\n` +
@@ -172,11 +169,7 @@ export function createNtfyExtension(
             "info",
           );
         } else {
-          notify(
-            ctx,
-            "Usage: /ntfy [on|off|test]",
-            "warning",
-          );
+          notify(ctx, "Usage: /ntfy [on|off|test]", "warning");
         }
       }
     },

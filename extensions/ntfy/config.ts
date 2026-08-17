@@ -50,14 +50,20 @@ function validateLayer(
       };
   }
   for (const key of FIELDS) {
-    if (key in object && (typeof object[key] !== "string" || object[key] === "")) {
+    if (
+      key in object &&
+      (typeof object[key] !== "string" || object[key] === "")
+    ) {
       return {
         value: null,
         warning: `Ignored invalid ${source}: '${key}' must be a non-empty string.`,
       };
     }
   }
-  if (typeof object.server === "string" && normalizeServer(object.server) === null) {
+  if (
+    typeof object.server === "string" &&
+    normalizeServer(object.server) === null
+  ) {
     return {
       value: null,
       warning: `Ignored invalid ${source}: 'server' must be an HTTP(S) URL.`,
@@ -72,7 +78,10 @@ function readJsonFile(file: string): unknown {
     return JSON.parse(content);
   } catch (error) {
     // Preserve ENOENT so callers can silently skip missing optional config
-    if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (
+      error instanceof Error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
       throw error;
     }
     throw new Error(

@@ -32,9 +32,11 @@ export async function publishNtfy(
       headers,
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`ntfy request failed with HTTP ${response.status}`);
+    if (!response.ok)
+      throw new Error(`ntfy request failed with HTTP ${response.status}`);
   } catch (error) {
-    if (controller.signal.aborted) throw new Error(`ntfy request timed out after ${timeoutMs}ms`);
+    if (controller.signal.aborted)
+      throw new Error(`ntfy request timed out after ${timeoutMs}ms`);
     throw error;
   } finally {
     clearTimeout(timer);

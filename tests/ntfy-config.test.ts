@@ -23,13 +23,11 @@ vi.mock("node:fs", async () => {
   };
 });
 
-import { readFileSync } from "node:fs";
 import {
   loadNtfyConfiguration,
   resolveTopicUrl,
 } from "../extensions/ntfy/config.ts";
 
-const readFile = vi.mocked(readFileSync);
 const options = {
   packageRoot: "/pkg",
   agentDir: "/agent",
@@ -47,7 +45,9 @@ beforeEach(() => {
 
 describe("loadNtfyConfiguration", () => {
   it("loads the packaged default without inventing a topic or token", () => {
-    setFiles({ "/pkg/config/ntfy.json": JSON.stringify({ server: "https://ntfy.sh" }) });
+    setFiles({
+      "/pkg/config/ntfy.json": JSON.stringify({ server: "https://ntfy.sh" }),
+    });
     expect(loadNtfyConfiguration(options)).toMatchObject({
       config: { server: "https://ntfy.sh" },
       userConfigPath: "/agent/ntfy/config.json",
@@ -103,7 +103,10 @@ describe("loadNtfyConfiguration", () => {
       ...options,
       env: { NTFY_SERVER: "file:///tmp/leak" },
     });
-    expect(result.config).toEqual({ server: "https://ntfy.sh", topic: "alerts" });
+    expect(result.config).toEqual({
+      server: "https://ntfy.sh",
+      topic: "alerts",
+    });
     expect(result.warnings.join("\n")).toContain("NTFY_SERVER");
   });
 
@@ -119,9 +122,21 @@ describe("loadNtfyConfiguration", () => {
 
 describe("resolveTopicUrl", () => {
   it.each([
-    [{ server: "https://ntfy.sh", topic: "pi-alerts" }, "https://ntfy.sh/pi-alerts"],
-    [{ server: "https://ntfy.sh/", topic: "/pi-alerts" }, "https://ntfy.sh/pi-alerts"],
-    [{ server: "https://ignored.example", topic: "https://push.example/team/pi" }, "https://push.example/team/pi"],
+    [
+      { server: "https://ntfy.sh", topic: "pi-alerts" },
+      "https://ntfy.sh/pi-alerts",
+    ],
+    [
+      { server: "https://ntfy.sh/", topic: "/pi-alerts" },
+      "https://ntfy.sh/pi-alerts",
+    ],
+    [
+      {
+        server: "https://ignored.example",
+        topic: "https://push.example/team/pi",
+      },
+      "https://push.example/team/pi",
+    ],
   ])("resolves %j", (config, expected) => {
     expect(resolveTopicUrl(config)).toBe(expected);
   });

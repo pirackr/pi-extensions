@@ -80,6 +80,15 @@ Direct API calls — no `open-websearch`, no `npx`, no daemon. Architecture:
 Dependencies: `@mozilla/readability` + `linkedom` (DOMParser doesn't exist in Node — that's why linkedom, not the plan's original approach) + `typebox`. Tests in `tests/web-search.test.ts` (run with `npx vitest run`; note the `vi.mock('node:fs')` that neutralizes the real `.env` so tests are deterministic).
 
 
+## opencode-zen extension
+
+`extensions/opencode-zen/index.ts` registers an `opencode-zen` provider so pi can use OpenCode Zen's hosted models — including the free tier (`deepseek-v4-flash-free`, `nemotron-3-ultra-free`, `big-pickle`, ...) with no account. This is how the opencode CLI itself works: it authenticates anonymously with the shared credential `public` plus opencode client headers (`x-opencode-client`, `x-opencode-session`, `x-opencode-project`, `x-opencode-request`) and a CLI User-Agent; the Zen gateway grants the free models, rate-limited.
+
+- Key resolution: `OPENCODE_API_KEY` env → `auth.json` `opencode-zen` entry → anonymous `public`. Anonymous mode filters the catalog to free models (models.dev `cost.input === 0`).
+- `baseUrl` `https://opencode.ai/zen/v1`, `api: "openai-completions"` — only models served over `/chat/completions` are registered (all free models plus the DeepSeek/MiniMax/GLM/Kimi paid families). Claude/GPT/Gemini lines need other streaming APIs and are omitted.
+- Model list is refined at load: live `GET /zen/v1/models` narrows, models.dev `status: deprecated` drops, anonymous mode keeps free only. `staticModels` in the file is the offline fallback — refresh it when the Zen catalog rotates.
+- Data caveat: free models are limited-time promos and some log data for model improvement (see opencode.ai/docs/zen).
+
 ## `.pi/` in this repo
 
 `.pi/settings.json` is this workspace's own pi config and includes `".."` — the repo installs itself so the extensions and skills under development are live while working here. It also pulls `git:github.com/obra/superpowers` and the `pi-hashline-edit` / `pi-lens` / `pi-lean-ctx` npm packages.

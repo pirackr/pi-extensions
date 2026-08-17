@@ -198,10 +198,44 @@ declare module "@earendil-works/pi-coding-agent" {
 	}
 
 	// ------------------------------------------------------------------
+	// Providers
+	// ------------------------------------------------------------------
+
+	export interface ProviderModelConfig {
+		id: string;
+		name?: string;
+		reasoning?: boolean;
+		input?: Array<"text" | "image">;
+		cost?: {
+			input: number;
+			output: number;
+			cacheRead: number;
+			cacheWrite: number;
+		};
+		contextWindow?: number;
+		maxTokens?: number;
+		headers?: Record<string, string>;
+		compat?: Record<string, unknown>;
+	}
+
+	export interface ProviderConfig {
+		name?: string;
+		baseUrl?: string;
+		api?: string;
+		apiKey?: string;
+		authHeader?: boolean;
+		headers?: Record<string, string>;
+		models?: ProviderModelConfig[];
+		compat?: Record<string, unknown>;
+	}
+
+	// ------------------------------------------------------------------
 	// ExtensionAPI
 	// ------------------------------------------------------------------
 
 	export interface ExtensionAPI {
+		registerProvider(name: string, config: ProviderConfig): void;
+		unregisterProvider(name: string): void;
 		registerTool(tool: {
 			name: string;
 			label: string;

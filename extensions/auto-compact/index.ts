@@ -7,6 +7,7 @@ import type {
 	SessionStartEvent,
 	ModelSelectEvent,
 	AgentSettledEvent,
+	TurnEndEvent,
 	SessionBeforeCompactEvent,
 	SessionCompactEvent,
 	CompactOptions,
@@ -141,16 +142,20 @@ function fireCompact(ctx: ExtensionContext): void {
  * be idle (never mid-run, where compact()'s abort would kill the run) and no
  * compaction entry may have been written within the cooldown window (a stale
  * over-threshold snapshot from Pi's just-completed native compaction).
+ *
+ * Option C: "idle" is nuanced — if `isIdle()` is false but there are no pending
+ * messages, the model is in a transient state (thinking / tool execution) and
+ * compacting is acceptable.
  */
 function maybeFireAtIdle(ctx: ExtensionContext): void {
 	const result = evaluateUsage(ctx);
 	if (!result?.triggered) {
 		return;
 	}
-	if (!ctx.isIdle()) {
+	if (!isSafeToCompact(ctx)) {
 		// Run still active (possible at model_select; agent_settled is always
 		// idle). Firing now would abort the live run — defer to the next
-		// evaluation instead.
+		// evaluation instead. Option A ensures the crossing is preserved.
 		controller.deferTrigger();
 		return;
 	}
@@ -161,6 +166,59 @@ function maybeFireAtIdle(ctx: ExtensionContext): void {
 		return;
 	}
 	fireCompact(ctx);
+}
+
+/**
+ * Option C: Nuanced idle check. "Safe to compact" means either truly idle
+ * or in a transient state with no pending messages (model is thinking or
+ * executing a tool, not actively generating).
+ */
+function isSafeToCompact(ctx: ExtensionContext): boolean {
+	if (ctx.isIdle()) return true;
+	// Not idle but no pending messages — model is in a transient state.
+	// Safe enough to compact; the abort will end the current operation
+	// but the session stays alive.
+	return !ctx.hasPendingMessages();
+}
+
+/**
+ * Option B: Aggressive mid-run compaction via turn_end.
+ * Fires compact without idle check. After completion, injects a continue
+ * prompt so the agent resumes its interrupted work.
+ */
+function fireCompactAtTurnEnd(pi: ExtensionAPI, ctx: ExtensionContext): void {
+	const options: CompactOptions = {
+		onComplete: () => {
+			lastCompactAt = Date.now();
+			controller.recordComplete();
+			// Inject continue prompt (Option B): tell the agent to resume.
+			pi.sendMessage(
+				{
+					customType: "auto-compact/continue",
+					content:
+						"Context was auto-compacted mid-run. Please continue your previous work from where you left off.",
+					display: false,
+				},
+				{ triggerTurn: true, deliverAs: "followUp" },
+			);
+			if (ctx.hasUI) {
+				ctx.ui.notify("Auto-compaction completed (mid-run)", "info");
+			}
+		},
+		onError: (error: Error) => {
+			if (isBenignCompactionError(error)) {
+				// Pi's native auto-compaction already compacted — treat as completion.
+				lastCompactAt = Date.now();
+				controller.recordComplete();
+				return;
+			}
+			controller.recordFailure(error);
+			if (ctx.hasUI) {
+				ctx.ui.notify(`Auto-compaction failed: ${error.message}`, "error");
+			}
+		},
+	};
+	ctx.compact(options);
 }
 
 function formatStatus(ctx: ExtensionContext): string {
@@ -273,15 +331,14 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	// agent_settled — post-run trigger.
+	// agent_settled — post-run trigger (idle compaction).
 	//
-	// Compaction MUST NOT be fired from turn_end: that event is emitted between
-	// tool-call batches INSIDE an active agent run (pi-agent-core agent-loop),
-	// and session.compact() begins with abort(), which kills the live run
-	// ("This operation was aborted" + a dead session). agent_settled fires once
-	// per prompt run, after the run fully finishes AND after Pi's own native
-	// compaction check (_handlePostAgentRun), so it is the safe point: abort()
-	// is a no-op and the native attempt has already won or lost.
+	// Compaction fires once per prompt run, after the run fully finishes AND
+	// after Pi's own native compaction check (_handlePostAgentRun), so it is
+	// the safe point: abort() is a no-op and the native attempt has already
+	// won or lost.
+	//
+	// Mid-run compaction is handled by the turn_end handler below (Option B).
 	pi.on("agent_settled", (_event: AgentSettledEvent, ctx: ExtensionContext) => {
 		try {
 			// Re-resolve policy in case model changed without model_select.
@@ -309,6 +366,24 @@ export default function (pi: ExtensionAPI) {
 				controller.recordComplete();
 			}
 			maybeFireAtIdle(ctx);
+		} catch {
+			// Non-fatal.
+		}
+	});
+
+	// turn_end — aggressive mid-run interception (Option B).
+	//
+	// Fires compact without idle check when threshold is crossed mid-run.
+	// After compaction, injects a continue prompt so the agent resumes.
+	// The controller's in-flight dedup ensures we don't fire multiple times
+	// within the same run (turn_end fires once per tool-call batch, but
+	// evaluate() returns triggered:false when inFlight=true).
+	pi.on("turn_end", (_event: TurnEndEvent, ctx: ExtensionContext) => {
+		try {
+			const result = evaluateUsage(ctx);
+			if (result?.triggered) {
+				fireCompactAtTurnEnd(pi, ctx);
+			}
 		} catch {
 			// Non-fatal.
 		}

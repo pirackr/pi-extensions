@@ -30,6 +30,7 @@ export interface ControllerStatus {
 	lastPolicy: ResolvedPolicy | null;
 	lastError: string | null;
 	lastUsageTokens: number | null;
+	deferred: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +55,8 @@ export class AutoCompactController {
 	private inFlight = false;
 	/** Set after recordComplete/recordFailure to prevent immediate re-trigger. */
 	private awaitingBelowThreshold = false;
+	/** Threshold was crossed but deferred (run active / cooldown). Preserve for next evaluate(). */
+	private deferred = false;
 	private lastPolicy: ResolvedPolicy | null = null;
 	private lastError: string | null = null;
 	private lastUsageTokens: number | null = null;
@@ -72,6 +75,7 @@ export class AutoCompactController {
 		this.armed = false;
 		this.inFlight = false;
 		this.awaitingBelowThreshold = false;
+		this.deferred = false;
 		this.lastPolicy = null;
 		this.lastError = null;
 		this.lastUsageTokens = null;
@@ -88,6 +92,8 @@ export class AutoCompactController {
 	 * - Skips silently when policy is null or effectiveThresholdTokens is null.
 	 * - Skips silently when policy.enabled is false.
 	 * - Atomically marks in-flight when threshold is first crossed.
+	 * - Resumes deferred crossings: if a crossing was deferred (run active),
+	 *   fires immediately on the next evaluate() call when usage remains above.
 	 *
 	 * Returns `{ triggered: true }` when compaction is initiated;
 	 * `{ triggered: false }` otherwise.
@@ -116,6 +122,20 @@ export class AutoCompactController {
 		// Track last known state for status reporting.
 		this.lastPolicy = policy;
 		this.lastUsageTokens = usageTokens;
+
+		// ---- Deferred crossing (Option A): re-fire immediately if still above threshold ----
+		if (this.deferred) {
+			this.deferred = false;
+			if (usageTokens >= threshold) {
+				// Crossing persists — fire immediately (run must be idle now).
+				this.inFlight = true;
+				this.armed = false;
+				return { triggered: true };
+			}
+			// Usage dropped below while deferred — arm normally.
+			this.armed = true;
+			return { triggered: false };
+		}
 
 		if (this.armed) {
 			if (usageTokens >= threshold) {
@@ -243,11 +263,15 @@ export class AutoCompactController {
 	 * crossed, so no compact() was launched). Only call when no compaction was
 	 * actually started; callers that launched a compact must use
 	 * recordComplete/recordFailure instead.
+	 *
+	 * Preserves "threshold was crossed" state via `deferred` flag so the next
+	 * evaluate() call re-fires immediately rather than waiting for a new crossing.
 	 */
 	deferTrigger(): void {
 		this.inFlight = false;
 		this.armed = false;
 		this.awaitingBelowThreshold = false;
+		this.deferred = true;
 	}
 
 	// ------------------------------------------------------------------
@@ -265,6 +289,7 @@ export class AutoCompactController {
 			lastPolicy: this.lastPolicy,
 			lastError: this.lastError,
 			lastUsageTokens: this.lastUsageTokens,
+			deferred: this.deferred,
 		};
 	}
 }

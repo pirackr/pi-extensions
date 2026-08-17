@@ -84,6 +84,7 @@ function makeCtx(
 		};
 		trusted?: boolean;
 		isIdle?: boolean;
+		hasPendingMessages?: boolean;
 	} = {},
 ) {
 	return {
@@ -104,7 +105,7 @@ function makeCtx(
 			getSessionName: () => "test",
 		},
 		isIdle: () => overrides.isIdle ?? true,
-		hasPendingMessages: () => false,
+		hasPendingMessages: () => overrides.hasPendingMessages ?? false,
 	};
 }
 
@@ -132,13 +133,14 @@ describe("registration", () => {
 		);
 	});
 
-	it("registers all five events", () => {
+	it("registers all six events (session_start, model_select, agent_settled, turn_end, session_before_compact, session_compact)", () => {
 		const pi = makeFakePi();
 		createExtension(pi);
 		const eventCalls = pi.on.mock.calls.map((c) => c[0]);
 		expect(eventCalls).toContain("session_start");
 		expect(eventCalls).toContain("model_select");
 		expect(eventCalls).toContain("agent_settled");
+		expect(eventCalls).toContain("turn_end");
 		expect(eventCalls).toContain("session_before_compact");
 		expect(eventCalls).toContain("session_compact");
 	});
@@ -369,7 +371,7 @@ describe("agent_settled threshold crossing", () => {
 		expect(ctx2.compact).not.toHaveBeenCalled();
 	});
 
-	it("defers when the session is not idle (mid-run) and fires at the next idle settle", () => {
+	it("defers when the session is not idle AND has pending messages (mid-run) and fires at the next idle settle", () => {
 		const pi = makeFakePi();
 		createExtension(pi);
 
@@ -380,13 +382,15 @@ describe("agent_settled threshold crossing", () => {
 		});
 		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
 
-		// agent_settled while a run is still active: must NOT fire, because
-		// session.compact() aborts the live run ("This operation was aborted").
+		// agent_settled while a run is still active (isIdle=false AND hasPendingMessages=true):
+		// must NOT fire, because session.compact() aborts the live run ("This operation was aborted").
 		const settleHandler = getHandler(pi, "agent_settled");
 		const ctxBusy = makeCtx({
 			model: makeModel("anthropic", "claude-3-opus", 200000),
 			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
 			isIdle: false,
+			// hasPendingMessages defaults to false; override to true for true mid-run.
+			hasPendingMessages: true,
 		});
 		settleHandler!({ type: "agent_settled" }, ctxBusy as any);
 		expect(ctxBusy.compact).not.toHaveBeenCalled();
@@ -399,6 +403,163 @@ describe("agent_settled threshold crossing", () => {
 		});
 		settleHandler!({ type: "agent_settled" }, ctxIdle as any);
 		expect(ctxIdle.compact).toHaveBeenCalledTimes(1);
+	});
+
+	// Option A: deferred crossings persist across defers.
+	it("preserves deferred crossing and fires immediately at next idle settle", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		// Threshold crossed while not idle — defer (Option A: sets deferred=true).
+		const settleHandler = getHandler(pi, "agent_settled");
+		const ctxBusy = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+			isIdle: false,
+			hasPendingMessages: true,
+		});
+		settleHandler!({ type: "agent_settled" }, ctxBusy as any);
+		expect(ctxBusy.compact).not.toHaveBeenCalled();
+		expect(controller.status().deferred).toBe(true);
+
+		// Next idle settle: deferred crossing fires immediately.
+		const ctxIdle = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		settleHandler!({ type: "agent_settled" }, ctxIdle as any);
+		expect(ctxIdle.compact).toHaveBeenCalledTimes(1);
+		expect(controller.status().deferred).toBe(false);
+	});
+
+	it("resets deferred flag when usage drops below threshold during defer", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		// Cross threshold while not idle — defer.
+		const settleHandler = getHandler(pi, "agent_settled");
+		const ctxBusy = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+			isIdle: false,
+			hasPendingMessages: true,
+		});
+		settleHandler!({ type: "agent_settled" }, ctxBusy as any);
+		expect(controller.status().deferred).toBe(true);
+
+		// Usage dropped below threshold while deferred.
+		const ctxBelow = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 100000, contextWindow: 200000, percent: 50 },
+		});
+		settleHandler!({ type: "agent_settled" }, ctxBelow as any);
+		expect(controller.status().deferred).toBe(false);
+		expect(controller.status().armed).toBe(true);
+		// Compact was NOT called because usage dropped below threshold.
+		expect(ctxBelow.compact).not.toHaveBeenCalled();
+	});
+
+	// Option B: turn_end interception.
+	it("turn_end handler fires compaction when threshold crossed mid-run", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		// turn_end fires mid-run with threshold exceeded — compact called without idle check.
+		const turnEndHandler = getHandler(pi, "turn_end");
+		const ctxMidRun = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		turnEndHandler!({ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] }, ctxMidRun as any);
+		expect(ctxMidRun.compact).toHaveBeenCalledTimes(1);
+	});
+
+	it("turn_end compaction injects continue prompt via sendMessage", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		const turnEndHandler = getHandler(pi, "turn_end");
+		const ctxMidRun = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+		turnEndHandler!({ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] }, ctxMidRun as any);
+
+		// Trigger onComplete to check continue prompt injection.
+		const compactOpts = ctxMidRun.compact.mock.calls[0][0] as {
+			onComplete?: (result: unknown) => void;
+		};
+		compactOpts.onComplete!({
+			summary: "summarized",
+			firstKeptEntryId: "e1",
+			tokensBefore: 170000,
+		});
+
+		// Continue prompt was sent.
+		expect(pi.sendMessage).toHaveBeenCalledWith(
+			{
+				customType: "auto-compact/continue",
+				content:
+					"Context was auto-compacted mid-run. Please continue your previous work from where you left off.",
+				display: false,
+			},
+			{ triggerTurn: true, deliverAs: "followUp" },
+		);
+	});
+
+	// Option B: dedup within same run.
+	it("turn_end dedups: second turn_end in same run does not fire again", () => {
+		const pi = makeFakePi();
+		createExtension(pi);
+
+		const startHandler = getHandler(pi, "session_start");
+		const ctx = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+		});
+		startHandler!({ type: "session_start", reason: "startup" }, ctx as any);
+
+		const turnEndHandler = getHandler(pi, "turn_end");
+		const ctxMidRun = makeCtx({
+			model: makeModel("anthropic", "claude-3-opus", 200000),
+			usage: { tokens: 170000, contextWindow: 200000, percent: 85 },
+		});
+
+		// First turn_end fires.
+		turnEndHandler!({ type: "turn_end", turnIndex: 3, message: {}, toolResults: [] }, ctxMidRun as any);
+		expect(ctxMidRun.compact).toHaveBeenCalledTimes(1);
+
+		// Second turn_end in same run — in-flight dedup prevents re-fire.
+		turnEndHandler!({ type: "turn_end", turnIndex: 4, message: {}, toolResults: [] }, ctxMidRun as any);
+		expect(ctxMidRun.compact).toHaveBeenCalledTimes(1);
 	});
 });
 

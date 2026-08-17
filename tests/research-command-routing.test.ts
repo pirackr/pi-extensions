@@ -67,6 +67,13 @@ function fakeModelRegistry() {
 			input: ["text"],
 		},
 		{
+			id: "local/fast",
+			name: "fast",
+			provider: "local",
+			reasoning: false,
+			input: ["text"],
+		},
+		{
 			id: "local/eval",
 			name: "eval",
 			provider: "local",

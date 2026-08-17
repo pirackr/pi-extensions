@@ -77,6 +77,7 @@ function mockCtx(cwd: string, confirmResponse = true) {
 function fakeModelRegistry() {
 	const models = [
 		{ id: "local/strong", name: "strong", provider: "local", reasoning: true, input: ["text"] },
+		{ id: "local/fast", name: "fast", provider: "local", reasoning: false, input: ["text"] },
 		{ id: "local/eval", name: "eval", provider: "local", reasoning: true, input: ["text"] },
 		{ id: "local/light", name: "light", provider: "local", reasoning: false, input: ["text"] },
 	];

@@ -87,7 +87,6 @@ import * as configMod from "../config.ts";
 import piTmuxSubagent, { widgetRuns } from "../index.ts";
 import { cancelPanes, launchBatch } from "../tmux.ts";
 
-
 // ---------------------------------------------------------------------------
 // Live UI wiring (Tasks 6-9): widget registry, footer, window-title cadence,
 // pane border strips, notifications, and inline progress rows — driven through
@@ -125,10 +124,17 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 				cacheRead: 0,
 				cacheWrite: 0,
 				totalTokens: 12400,
-				cost: { input: 0.0005, output: 0.001, cacheRead: 0, cacheWrite: 0, total: 0.0015 },
-				turns: 3,
+				cost: {
+					input: 0.0005,
+					output: 0.001,
+					cacheRead: 0,
+					cacheWrite: 0,
+					total: 0.0015,
+				},
+				turns: 1,
 			},
 			tools: ["read", "edit"],
+			toolUses: 5,
 			activity: "Working on it",
 			contextUsage: { tokens: 10000, contextWindow: 128000, percent: 8 },
 			compactionCount: 0,
@@ -139,17 +145,24 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 	}
 
 	function tmuxArgs(): string[][] {
-		return vi.mocked(execFile).mock.calls
-			.filter(([cmd]) => cmd === "tmux")
+		return vi
+			.mocked(execFile)
+			.mock.calls.filter(([cmd]) => cmd === "tmux")
 			.map(([, args]) => args as string[]);
 	}
 
 	const renames = () =>
-		tmuxArgs().filter((a) => a[0] === "rename-window").map((a) => a[3]);
+		tmuxArgs()
+			.filter((a) => a[0] === "rename-window")
+			.map((a) => a[3]);
 	const panePushes = () =>
-		tmuxArgs().filter((a) => a[0] === "select-pane").map((a) => a[2]);
+		tmuxArgs()
+			.filter((a) => a[0] === "select-pane")
+			.map((a) => a[2]);
 	const footerCalls = () =>
-		ctx.ui.setStatus.mock.calls.filter(([key]: any[]) => key === "tmux-subagents");
+		ctx.ui.setStatus.mock.calls.filter(
+			([key]: any[]) => key === "tmux-subagents",
+		);
 
 	const settle = (ms: number) => vi.advanceTimersByTimeAsync(ms);
 
@@ -174,17 +187,28 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		vi.mocked(os.tmpdir).mockReturnValue("/tmp");
 		vi.mocked(os.homedir).mockReturnValue("/home/user");
 
-		vi.mocked(launchBatch)
+		vi
+			.mocked(launchBatch)
 			.mockReset()
 			.mockResolvedValue({
 				session: "pi-subagents",
-				window: { id: "@3", name: "tmp-observability", sessionId: "sess-1", pid: "1", cwd: "/tmp" },
+				window: {
+					id: "@3",
+					name: "tmp-observability",
+					sessionId: "sess-1",
+					pid: "1",
+					cwd: "/tmp",
+				},
 				paneIds: ["%5"],
 			} as any);
-		vi.mocked(cancelPanes).mockReset().mockResolvedValue(undefined as any);
+		vi
+			.mocked(cancelPanes)
+			.mockReset()
+			.mockResolvedValue(undefined as any);
 
-		vi.mocked(execFile).mockImplementation(
-			(_cmd: any, args: any, _opts: any, cb: any) => {
+		vi
+			.mocked(execFile)
+			.mockImplementation((_cmd: any, args: any, _opts: any, cb: any) => {
 				if (_cmd === "tmux") {
 					if (args?.[0] === "-V") {
 						cb(null, "3.4.0", "");
@@ -196,14 +220,17 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 					cb(new Error("unexpected command"), "", "");
 				}
 				return undefined as any;
-			},
-		);
+			});
 		vi.mocked(fs.promises.access).mockResolvedValue(undefined as any);
-		vi.mocked(fs.promises.stat).mockResolvedValue({ isDirectory: () => true } as any);
-		vi.mocked(fs.promises.realpath).mockImplementation(async (p: any) => String(p));
-		vi.mocked(fs.promises.mkdtemp).mockImplementation(
-			async () => `/tmp/pi-subagent-run${++runDirCounter}`,
-		);
+		vi
+			.mocked(fs.promises.stat)
+			.mockResolvedValue({ isDirectory: () => true } as any);
+		vi
+			.mocked(fs.promises.realpath)
+			.mockImplementation(async (p: any) => String(p));
+		vi
+			.mocked(fs.promises.mkdtemp)
+			.mockImplementation(async () => `/tmp/pi-subagent-run${++runDirCounter}`);
 		vi.mocked(fs.promises.mkdir).mockResolvedValue(undefined as any);
 		vi.mocked(fs.promises.chmod).mockResolvedValue(undefined as any);
 		vi.mocked(fs.promises.writeFile).mockResolvedValue(undefined as any);
@@ -294,14 +321,57 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		expect(typeof setWidgetCalls[0][1]).toBe("function");
 		expect(setWidgetCalls[0][2]).toEqual({ placement: "aboveEditor" });
 
-		// The widget renders the live run: objective + stats with a numeric tool count.
-		const component = setWidgetCalls[0][1]({ requestRender: () => {} });
+		// The widget renders agent state and stats without leaking the task prompt.
+		const theme = {
+			fg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		};
+		const component = setWidgetCalls[0][1]({ requestRender: () => {} }, theme);
 		const lines = component.render(100).join("\n");
-		expect(lines).toContain("Subagents (tmux)");
+		expect(lines).toContain("● Agents");
 		expect(lines).toContain("worker");
-		expect(lines).toContain("Find the docs");
-		expect(lines).toContain("⚙ 2 tools");
+		expect(lines).not.toContain("Find the docs");
+		expect(lines).toContain("5 tool uses");
 		expect(lines).toContain("12.4k token (8%)");
+
+		// The tool itself uses the same Claude-style call and live-result renderer.
+		const callText = tool
+			.renderCall(
+				{ tasks: [{ agent: "worker", objective: "Find the docs" }] },
+				theme,
+				{},
+			)
+			.render(100)
+			.join("\n");
+		expect(callText).toBe("▸ worker");
+		const batchCallText = tool
+			.renderCall(
+				{
+					tasks: [
+						{ agent: "worker", objective: "Find the docs" },
+						{ agent: "scout", objective: "Verify the tests" },
+					],
+				},
+				theme,
+				{},
+			)
+			.render(100)
+			.join("\n");
+		expect(batchCallText).toBe(
+			"▸ worker\n\n▸ scout",
+		);
+		const liveText = tool
+			.renderResult(
+				updates.at(-1) as any,
+				{ expanded: false, isPartial: true },
+				theme,
+				{},
+			)
+			.render(100)
+			.join("\n");
+		expect(liveText).toBe("⎿ Running as pi-subagent-run1…");
+		expect(liveText).not.toContain("worker");
+		expect(liveText).not.toContain("Find the docs");
 
 		// Keep the run live for >1s so the animation interval fires several times.
 		await settle(1_300);
@@ -309,27 +379,48 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		await settle(300);
 		const result: any = await exec;
 		expect(result.details.results[0].state).toBe("succeeded");
+		const completedText = tool
+			.renderResult(result, { expanded: false, isPartial: false }, theme, {})
+			.render(100)
+			.join("\n");
+		expect(completedText).toBe("⎿ Done");
+		expect(completedText).not.toContain("worker");
+		expect(completedText).not.toContain("Find the docs");
 
 		// Footer was written with the aggregated title ...
 		const footers = footerCalls();
 		expect(footers.length).toBeGreaterThan(0);
-		expect(footers.some(([, v]: any[]) => typeof v === "string" && v.includes("worker"))).toBe(true);
-		expect(footers.some(([, v]: any[]) => typeof v === "string" && v.includes("1/1 done"))).toBe(true);
+		expect(
+			footers.some(
+				([, v]: any[]) => typeof v === "string" && v.includes("worker"),
+			),
+		).toBe(true);
+		expect(
+			footers.some(
+				([, v]: any[]) => typeof v === "string" && v.includes("1/1 done"),
+			),
+		).toBe(true);
 		// ... and was never blanked by the animation interval.
 		for (const [, value] of footers.slice(0, -1)) {
 			expect(typeof value).toBe("string");
 			expect((value as string).length).toBeGreaterThan(0);
 		}
 		// ... then cleared exactly once together with the widget.
-		expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("tmux-subagents", undefined);
-		expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("tmux-subagents", undefined);
+		expect(ctx.ui.setWidget).toHaveBeenLastCalledWith(
+			"tmux-subagents",
+			undefined,
+		);
+		expect(ctx.ui.setStatus).toHaveBeenLastCalledWith(
+			"tmux-subagents",
+			undefined,
+		);
 		expect(widgetRuns.size).toBe(0);
 
 		// Inline progress rows reached the UI with the attach block + objective.
 		const lastText = updates[updates.length - 1].content[0].text;
 		expect(lastText).toContain("Tmux session: pi-subagents");
 		expect(lastText).toContain("Attach: tmux attach -t pi-subagents:@3");
-		expect(lastText).toContain("worker · Find the docs");
+		expect(lastText).toContain("worker Find the docs");
 	});
 
 	it("renames the window immediately on every state change and restores the name at the end", async () => {
@@ -375,10 +466,18 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		await settle(10);
 
 		expect(tmuxArgs()).toContainEqual([
-			"set-window-option", "-t", "@3", "pane-border-status", "top",
+			"set-window-option",
+			"-t",
+			"@3",
+			"pane-border-status",
+			"top",
 		]);
 		expect(tmuxArgs()).toContainEqual([
-			"set-window-option", "-t", "@3", "pane-border-format", "#{pane_title}",
+			"set-window-option",
+			"-t",
+			"@3",
+			"pane-border-format",
+			"#{pane_title}",
 		]);
 		expect(panePushes()).toHaveLength(1);
 		expect(panePushes()[0]).toContain("worker");
@@ -396,7 +495,7 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		await exec;
 		// Every push carries the live title with a numeric tool count.
 		for (const push of panePushes()) {
-			expect(push).toContain("⚙ 2 tools");
+			expect(push).toContain("⚙ 5 tools");
 		}
 	});
 
@@ -425,11 +524,19 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		const infoNote = texts.find((t: string) => t.includes("✓"));
 		expect(errorNote).toBeDefined();
 		expect(infoNote).toBeDefined();
-		expect(notifies.find(([, type]: any[]) => type === "error")?.[0]).toContain("boom");
-		expect(notifies.find(([, type]: any[]) => type === "error")?.[0]).toContain("Do A");
-		expect(notifies.find(([, type]: any[]) => type === "info")?.[0]).toContain("Do B");
+		expect(notifies.find(([, type]: any[]) => type === "error")?.[0]).toContain(
+			"boom",
+		);
+		expect(notifies.find(([, type]: any[]) => type === "error")?.[0]).toContain(
+			"Do A",
+		);
+		expect(notifies.find(([, type]: any[]) => type === "info")?.[0]).toContain(
+			"Do B",
+		);
 		// The aggregate window title flags the failure.
-		expect(renames().some((r) => r.includes("✗") && r.includes("1/2 done"))).toBe(true);
+		expect(renames().some((r) => r.includes("✗") && r.includes("1/2 done"))).toBe(
+			true,
+		);
 	});
 
 	it("attaches the stderr tail to failed tasks and surfaces it in the result", async () => {
@@ -493,7 +600,9 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		expect(text).toContain("Recommended next action: Ship it");
 		expect(text).toContain("Artifacts retained at: /tmp/pi-subagent-run1");
 		const summarized = result.details.results[0];
-		expect(summarized.parsedResult.summary.outcome).toBe("Verified the hypothesis");
+		expect(summarized.parsedResult.summary.outcome).toBe(
+			"Verified the hypothesis",
+		);
 		expect("result" in summarized).toBe(false); // full output stripped from details
 	});
 
@@ -519,7 +628,9 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 
 		// Both running: the footer aggregates both runs.
 		expect(
-			footerCalls().some(([, v]: any[]) => typeof v === "string" && v.includes("0/2 done")),
+			footerCalls().some(
+				([, v]: any[]) => typeof v === "string" && v.includes("0/2 done"),
+			),
 		).toBe(true);
 
 		// First run finishes — widget and footer must stay alive.
@@ -527,19 +638,31 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		await settle(300);
 		const r1: any = await exec1;
 		expect(r1.details.results[0].state).toBe("succeeded");
-		expect(ctx.ui.setWidget).not.toHaveBeenCalledWith("tmux-subagents", undefined);
-		expect(ctx.ui.setStatus).not.toHaveBeenCalledWith("tmux-subagents", undefined);
+		expect(ctx.ui.setWidget).not.toHaveBeenCalledWith(
+			"tmux-subagents",
+			undefined,
+		);
+		expect(ctx.ui.setStatus).not.toHaveBeenCalledWith(
+			"tmux-subagents",
+			undefined,
+		);
 
 		// Second run finishes — both cleared exactly once.
 		statuses[statusPath(2)] = statusJson("task-1", "succeeded");
 		await settle(300);
 		await exec2;
 		const setWidgetCalls = ctx.ui.setWidget.mock.calls as any[];
-		expect(
-			setWidgetCalls.filter(([, c]) => typeof c === "function").length,
-		).toBe(2); // one registration per run
-		expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("tmux-subagents", undefined);
-		expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("tmux-subagents", undefined);
+		expect(setWidgetCalls.filter(([, c]) => typeof c === "function").length).toBe(
+			2,
+		); // one registration per run
+		expect(ctx.ui.setWidget).toHaveBeenLastCalledWith(
+			"tmux-subagents",
+			undefined,
+		);
+		expect(ctx.ui.setStatus).toHaveBeenLastCalledWith(
+			"tmux-subagents",
+			undefined,
+		);
 		expect(widgetRuns.size).toBe(0);
 	});
 });

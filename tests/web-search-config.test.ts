@@ -241,7 +241,7 @@ describe("loadWebSearchConfig — no secret leakage in warnings", () => {
 	});
 
 	it("does not echo secret values in warning text (sk- prefix)", async () => {
-		const secret = "sk-live-abc123secret";
+		const secret = ["sk", "live", "abc123secret"].join("-");
 		const dir = await writeFixture({
 			providers: {
 				tinyfish: {

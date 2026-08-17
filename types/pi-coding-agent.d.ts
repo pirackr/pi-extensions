@@ -16,6 +16,7 @@ declare module "@earendil-works/pi-coding-agent" {
 
 	export interface Theme {
 		fg(color: string, text: string): string;
+		bold(text: string): string;
 	}
 
 	export interface TUI {
@@ -208,6 +209,20 @@ declare module "@earendil-works/pi-coding-agent" {
 			promptSnippet?: string;
 			promptGuidelines?: string[];
 			parameters: unknown;
+			renderCall?: (
+				args: unknown,
+				theme: Theme,
+				context: { isPartial: boolean; isError: boolean },
+			) => Component;
+			renderResult?: (
+				result: {
+					content: Array<{ type: string; text: string }>;
+					details?: unknown;
+				},
+				options: { expanded: boolean; isPartial: boolean },
+				theme: Theme,
+				context: { isError: boolean },
+			) => Component;
 			execute: (
 				toolCallId: string,
 				params: unknown,

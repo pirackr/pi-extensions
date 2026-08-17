@@ -64,9 +64,7 @@ export function parseCoordinatorResult(
 		/<coordinator-summary>([\s\S]*?)<\/coordinator-summary>/,
 	);
 	if (!summaryMatch) {
-		throw new Error(
-			"Missing <coordinator-summary> block in subagent output",
-		);
+		throw new Error("Missing <coordinator-summary> block in subagent output");
 	}
 
 	const summaryBlock = summaryMatch[1].trim();
@@ -100,23 +98,17 @@ export function parseCoordinatorResult(
 
 	// Validate required scalar fields.
 	if (!fields["status"]?.[0]) {
-		throw new Error(
-			"Malformed <coordinator-summary>: missing Status field",
-		);
+		throw new Error("Malformed <coordinator-summary>: missing Status field");
 	}
 	const status = fields["status"][0].toLowerCase();
-	if (
-		!["succeeded", "partial", "blocked", "failed"].includes(status)
-	) {
+	if (!["succeeded", "partial", "blocked", "failed"].includes(status)) {
 		throw new Error(
 			`Malformed <coordinator-summary>: invalid Status value "${fields["status"][0]}"`,
 		);
 	}
 
 	if (!fields["outcome"]?.[0]) {
-		throw new Error(
-			"Malformed <coordinator-summary>: missing Outcome field",
-		);
+		throw new Error("Malformed <coordinator-summary>: missing Outcome field");
 	}
 	if (!fields["evidence added"]?.[0]) {
 		throw new Error(
@@ -135,9 +127,7 @@ export function parseCoordinatorResult(
 	if (artifactMatch) {
 		artifact = artifactMatch[1].trim();
 	} else if (opts.requireArtifact) {
-		throw new Error(
-			"Missing <artifact> block in subagent output",
-		);
+		throw new Error("Missing <artifact> block in subagent output");
 	}
 
 	return {
@@ -175,23 +165,17 @@ export function renderSummaryResults(
 				`Status: ${s.status}`,
 				`Outcome: ${s.outcome}`,
 				`Evidence added: ${s.evidenceAdded}`,
-				`Key changes: ${
-					s.keyChanges.length
-						? s.keyChanges.join("; ")
-						: "none"
-				}`,
+				`Key changes: ${s.keyChanges.length ? s.keyChanges.join("; ") : "none"}`,
 				`Contradictions/blockers: ${
-					s.contradictions.length
-						? s.contradictions.join("; ")
-						: "none"
+					s.contradictions.length ? s.contradictions.join("; ") : "none"
 				}`,
 				`Recommended next action: ${s.recommendedNextAction}`,
 				"</coordinator-summary>",
 			);
-		} else if (status.state !== "succeeded") {
-			parts.push(status.errorMessage || "(no output)");
-		} else {
+		} else if (status.state === "succeeded") {
 			parts.push("(no coordinator-summary)");
+		} else {
+			parts.push(status.errorMessage || "(no output)");
 		}
 
 		if (status.result_path && status.state === "succeeded") {
@@ -200,10 +184,7 @@ export function renderSummaryResults(
 
 		if (status.usage) {
 			const u = status.usage;
-			const costTotal =
-				typeof u.cost === "number"
-					? u.cost
-					: (u.cost?.total ?? 0);
+			const costTotal = typeof u.cost === "number" ? u.cost : (u.cost?.total ?? 0);
 			parts.push(
 				`Tokens: ${u.totalTokens} (in: ${u.input}, out: ${u.output}, cache read: ${u.cacheRead}, cache write: ${u.cacheWrite})`,
 				`Cost: $${Number.isFinite(costTotal) ? costTotal.toFixed(4) : "0.0000"}`,
@@ -233,7 +214,16 @@ export function renderSummaryResults(
 // ---------------------------------------------------------------------------
 
 export const SPINNER_FRAMES = [
-	"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+	"⠋",
+	"⠙",
+	"⠹",
+	"⠸",
+	"⠼",
+	"⠴",
+	"⠦",
+	"⠧",
+	"⠇",
+	"⠏",
 ];
 
 export const TURN_GLYPH = "↻";
@@ -274,9 +264,7 @@ export function formatElapsed(
 			: typeof finishedAt === "string"
 				? new Date(finishedAt).getTime()
 				: Date.now()) -
-		(typeof startedAt === "number"
-			? startedAt
-			: new Date(startedAt).getTime());
+		(typeof startedAt === "number" ? startedAt : new Date(startedAt).getTime());
 	if (diff < 1000) return `${diff}ms`;
 	if (diff < 60_000) return `${(diff / 1000).toFixed(1)}s`;
 	if (diff < 3_600_000) {
@@ -287,10 +275,7 @@ export function formatElapsed(
 	return `${Math.floor(totalMinutes / 60)}h${totalMinutes % 60}m`;
 }
 
-export function truncateVisibleWidth(
-	text: string,
-	maxVisible: number,
-): string {
+export function truncateVisibleWidth(text: string, maxVisible: number): string {
 	// ANSI escape sequences should not count toward visible width.
 	let visible = 0;
 	let inEscape = false;
@@ -334,25 +319,24 @@ export interface WidgetTask {
 	errorMessage?: string;
 }
 
-export function toWidgetTask(
-	status:
-		| {
-				taskId: string;
-				agent: string;
-				state: string;
-				startedAt?: string;
-				finishedAt?: string;
-				model: string;
-				usage?: { totalTokens?: number; turns?: number };
-			/** Active tool count — or the runner's list of active tool names. */
-			tools?: number | readonly string[];
-				activity?: string;
-				contextUsage?: { percent?: number | null };
-				compactionCount?: number;
-				result?: string;
-				errorMessage?: string;
-		  },
-): WidgetTask {
+export function toWidgetTask(status: {
+	taskId: string;
+	agent: string;
+	state: string;
+	startedAt?: string;
+	finishedAt?: string;
+	model: string;
+	usage?: { totalTokens?: number; turns?: number };
+	/** Backward-compatible distinct tool names from older runner statuses. */
+	tools?: number | readonly string[];
+	/** Cumulative tool executions, matching pi-subagents' "tool uses" stat. */
+	toolUses?: number;
+	activity?: string;
+	contextUsage?: { percent?: number | null };
+	compactionCount?: number;
+	result?: string;
+	errorMessage?: string;
+}): WidgetTask {
 	return {
 		taskId: status.taskId,
 		agent: status.agent,
@@ -361,11 +345,12 @@ export function toWidgetTask(
 		objective: (status as any).objective,
 		turns: status.usage?.turns ?? 0,
 		tools:
-			typeof status.tools === "number"
+			status.toolUses ??
+			(typeof status.tools === "number"
 				? status.tools
 				: Array.isArray(status.tools)
 					? status.tools.length
-					: 0,
+					: 0),
 		tokenCount: status.usage?.totalTokens ?? 0,
 		percent: status.contextUsage?.percent ?? null,
 		elapsed: formatElapsed(status.startedAt, status.finishedAt),
@@ -376,30 +361,79 @@ export function toWidgetTask(
 	};
 }
 
-export type WidgetTheme = { fg(color: string, text: string): string };
+export type WidgetTheme = {
+	fg(color: string, text: string): string;
+	bold?(text: string): string;
+};
 
-function tokenSegment(task: WidgetTask): string {
-	const tokLabel = "token";
-	let seg = `${formatTokens(task.tokenCount).replace(" tok", ` ${tokLabel}`)}`;
+function tokenSegment(task: WidgetTask, theme?: WidgetTheme): string {
+	const tokenText = formatTokens(task.tokenCount).replace(" tok", " token");
+	const annotations: string[] = [];
 	if (task.percent !== null) {
-		seg = seg.replace(/\s*$/, ` (${task.percent}%)`);
+		const percent = `${Math.round(task.percent)}%`;
+		const color =
+			task.percent >= 85 ? "error" : task.percent >= 70 ? "warning" : "dim";
+		annotations.push(theme ? theme.fg(color, percent) : percent);
 	}
-	return seg;
+	if (task.compactionCount && task.compactionCount > 0) {
+		const compactions = `${COMPACTION_GLYPH}${task.compactionCount}`;
+		annotations.push(theme ? theme.fg("dim", compactions) : compactions);
+	}
+	return annotations.length > 0
+		? `${tokenText} (${annotations.join(" · ")})`
+		: tokenText;
 }
 
-function statsLine(task: WidgetTask): string {
+function statsParts(task: WidgetTask, theme?: WidgetTheme): string[] {
 	const parts: string[] = [];
-	parts.push(`${TURN_GLYPH}${task.turns}`);
+	if (task.turns > 0) {
+		parts.push(`${task.turns} turn${task.turns === 1 ? "" : "s"}`);
+	}
 	if (task.tools > 0) {
-		const toolWord = task.tools === 1 ? "tool" : "tools";
-		parts.push(`${TOOL_GLYPH} ${task.tools} ${toolWord}`);
+		parts.push(`${task.tools} tool use${task.tools === 1 ? "" : "s"}`);
 	}
-	parts.push(tokenSegment(task));
-	parts.push(task.elapsed);
-	if (task.compactionCount && task.compactionCount > 0) {
-		parts.push(`${COMPACTION_GLYPH}${task.compactionCount}`);
+	if (task.tokenCount > 0) parts.push(tokenSegment(task, theme));
+	if (task.elapsed) parts.push(task.elapsed);
+	return parts;
+}
+
+function statsLine(task: WidgetTask, theme?: WidgetTheme): string {
+	return statsParts(task, theme).join(" · ");
+}
+
+function wrapStats(
+	task: WidgetTask,
+	width: number,
+	theme?: WidgetTheme,
+): string[] {
+	const plainParts = statsParts(task);
+	const styledParts = statsParts(task, theme);
+	const plainDivider = " · ";
+	const divider = theme ? theme.fg("dim", "·") : "·";
+	const styledDivider = ` ${divider} `;
+	const lines: string[] = [];
+	let plainLine = "";
+	let styledLine = "";
+
+	for (let index = 0; index < plainParts.length; index++) {
+		const plainPart = plainParts[index];
+		const styledPart = styledParts[index];
+		const nextPlain = plainLine
+			? `${plainLine}${plainDivider}${plainPart}`
+			: plainPart;
+		if (plainLine && nextPlain.length > width) {
+			lines.push(styledLine);
+			plainLine = plainPart;
+			styledLine = styledPart;
+		} else {
+			plainLine = nextPlain;
+			styledLine = styledLine
+				? `${styledLine}${styledDivider}${styledPart}`
+				: styledPart;
+		}
 	}
-	return parts.join(" · ");
+	if (styledLine) lines.push(styledLine);
+	return lines;
 }
 
 export function renderStatsRow(task: WidgetTask): string {
@@ -411,35 +445,62 @@ function iconFor(state: string, frame: number, theme?: WidgetTheme): string {
 	if (!theme) return ch;
 	switch (state) {
 		case "succeeded":
-			return theme.fg("green", ch);
+			return theme.fg("success", ch);
 		case "failed":
 		case "timed_out":
-			return theme.fg("red", ch);
+			return theme.fg("error", ch);
 		case "cancelled":
 			return theme.fg("dim", ch);
 		default:
-			return theme.fg("cyan", ch);
+			return theme.fg("accent", ch);
 	}
 }
 
 function truncateActivity(s: string): string {
 	if (!s) return "";
-	// 60 chars total for the line, minus "⎿ " (2 chars)
-	const maxActivity = 60 - 2; // "⎿ " prefix
-	return s.length > maxActivity ? s.slice(0, maxActivity - 1) + "…" : s;
+	const firstLine =
+		s
+			.split("\n")
+			.find((line) => line.trim())
+			?.trim() ?? "";
+	const maxActivity = 58;
+	return firstLine.length > maxActivity
+		? firstLine.slice(0, maxActivity - 1) + "…"
+		: firstLine;
+}
+
+function isActiveState(state: string): boolean {
+	return state === "starting" || state === "running";
 }
 
 export function renderTaskRow(
 	task: WidgetTask,
-	{ frame, theme }: { frame: number; theme?: WidgetTheme },
+	{
+		frame,
+		theme,
+		width,
+	}: { frame: number; theme?: WidgetTheme; width?: number },
 ): string[] {
 	const icon = iconFor(task.state, frame, theme);
-	const segments: string[] = [`${icon} ${task.agent}`];
-	if (task.objective) segments.push(task.objective);
-	segments.push(statsLine(task));
-	const lines: string[] = [segments.join(" · ")];
-	if (task.activity) {
-		lines.push(`${ACTIVITY_GLYPH} ${truncateActivity(task.activity)}`);
+	const agent = theme?.bold ? theme.bold(task.agent) : task.agent;
+	const objective = task.objective
+		? ` ${theme ? theme.fg("muted", task.objective) : task.objective}`
+		: "";
+	const header = `${icon} ${agent}${objective}`;
+	const plainHeader = `${statusIcon(task.state as any, frame)} ${task.agent}${task.objective ? ` ${task.objective}` : ""}`;
+	const stats = statsLine(task, theme);
+	const plainStats = statsLine(task);
+	const divider = theme ? theme.fg("dim", "·") : "·";
+	const statsDoNotFit =
+		width !== undefined &&
+		plainStats.length > 0 &&
+		plainHeader.length + 3 + plainStats.length > width;
+	const lines = statsDoNotFit
+		? [header, ...wrapStats(task, width, theme)]
+		: [`${header}${stats ? ` ${divider} ${stats}` : ""}`];
+	if (isActiveState(task.state) && task.activity) {
+		const activity = `${ACTIVITY_GLYPH} ${truncateActivity(task.activity)}`;
+		lines.push(theme ? theme.fg("dim", activity) : activity);
 	}
 	return lines;
 }
@@ -459,59 +520,70 @@ export interface WidgetRun {
 function widgetRunToWidgetTasks(run: WidgetRun): WidgetTask[] {
 	return run.tasks.map((t) => {
 		const raw = run.statuses[t.taskId] ?? { state: "starting" };
-		return toWidgetTask({ ...raw, taskId: t.taskId, agent: t.agent, objective: t.objective, model: "" } as any);
+		return toWidgetTask({
+			...raw,
+			taskId: t.taskId,
+			agent: t.agent,
+			// Task objectives can contain arbitrary multi-line prompt content.
+			// Keep the persistent live widget to agent state and stats only.
+			model: "",
+		} as any);
 	});
 }
 
-function footerStatus(runs: WidgetRun[]): string {
-	let running = 0;
-	let done = 0;
-	for (const run of runs) {
-		for (const s of Object.values(run.statuses)) {
-			if (s.state === "starting" || s.state === "running") running++;
-			else done++;
-		}
-	}
-	const parts: string[] = [];
-	if (running > 0) parts.push(`${running} running`);
-	if (done > 0) parts.push(`${done} done`);
-	return parts.join(" · ") || "starting";
-}
-
-const WIDGET_HEADER = "● Subagents (tmux)";
+const WIDGET_HEADER = "Agents";
 const WIDGET_MAX_LINES = 12;
-
-function buildRunnerLines(runs: WidgetRun[], frame: number): string[] {
-	const lines: string[] = [];
-	for (let ri = 0; ri < runs.length; ri++) {
-		if (ri > 0) lines.push(`─ Run ${ri + 1} ─`);
-		const widgets = widgetRunToWidgetTasks(runs[ri]);
-		for (const w of widgets) {
-			const row = renderTaskRow(w, { frame });
-			lines.push(row[0]);
-			if (row[1]) lines.push(row[1]);
-		}
-	}
-	return lines;
-}
 
 export function renderWidgetLines(
 	runs: WidgetRun[],
 	{ frame, theme, width }: { frame: number; theme?: WidgetTheme; width: number },
 ): string[] {
-	const header = WIDGET_HEADER;
-	const footer = footerStatus(runs);
-	const body = buildRunnerLines(runs, frame);
+	const tasks = runs.flatMap(widgetRunToWidgetTasks);
+	const hasActive = tasks.some((task) => isActiveState(task.state));
+	const headingColor = hasActive ? "accent" : "dim";
+	const headingIcon = hasActive ? "●" : "○";
+	const header = theme
+		? theme.fg(headingColor, `${headingIcon} ${WIDGET_HEADER}`)
+		: `${headingIcon} ${WIDGET_HEADER}`;
+	// Three columns are reserved for the tree connector (for example, `├─ `).
+	const entryWidth = Math.max(1, width - 3);
+	const entries = tasks.map((task) =>
+		renderTaskRow(task, { frame, theme, width: entryWidth }),
+	);
+	const lines: string[] = [header];
+	let used = 0;
+	let visibleEntries = 0;
+	const bodyBudget = WIDGET_MAX_LINES - 1;
 
-	// Cap at 12: header + body rows + footer; header/footer always retained
-	if (body.length <= WIDGET_MAX_LINES - 2) {
-		const lines = [header, ...body, footer];
-		return lines.map((l) => truncateVisibleWidth(l, width));
+	for (const entry of entries) {
+		if (used + entry.length > bodyBudget) break;
+		visibleEntries++;
+		used += entry.length;
 	}
-	// Truncate body: keep header + (12-2) body rows (with truncation indicator) + footer
-	const available = WIDGET_MAX_LINES - 3; // 12 - header - ellipsis - footer
-	const truncated = [header, ...body.slice(0, available), "…", footer];
-	return truncated.map((l) => truncateVisibleWidth(l, width));
+	const hidden = entries.length - visibleEntries;
+	if (hidden > 0 && used >= bodyBudget) {
+		visibleEntries = Math.max(0, visibleEntries - 1);
+	}
+
+	for (let index = 0; index < visibleEntries; index++) {
+		const entry = entries[index];
+		const isLast = hidden === 0 && index === visibleEntries - 1;
+		const connector = isLast ? "└─" : "├─";
+		const styledConnector = theme ? theme.fg("dim", connector) : connector;
+		lines.push(`${styledConnector} ${entry[0]}`);
+		const branch = isLast ? "   " : "│  ";
+		const styledBranch = theme ? theme.fg("dim", branch) : branch;
+		for (const continuation of entry.slice(1)) {
+			lines.push(`${styledBranch}${continuation}`);
+		}
+	}
+	if (hidden > 0) {
+		const overflow = `└─ +${hidden} more`;
+		lines.push(theme ? theme.fg("dim", overflow) : overflow);
+	}
+	return lines
+		.slice(0, WIDGET_MAX_LINES)
+		.map((line) => truncateVisibleWidth(line, width));
 }
 
 export function renderWindowTitle(
@@ -550,10 +622,17 @@ export function renderWindowTitle(
 		for (const t of run.tasks) agentSet.add(t.agent);
 	}
 
-	const icon = allSucceeded ? "✓" : anyFailed ? "✗" : anyCancelled ? "■" : SPINNER_FRAMES[frame % SPINNER_FRAMES.length];
+	const icon = allSucceeded
+		? "✓"
+		: anyFailed
+			? "✗"
+			: anyCancelled
+				? "■"
+				: SPINNER_FRAMES[frame % SPINNER_FRAMES.length];
 	const agents = [...agentSet].join("+");
 	const now = Date.now();
-	const startedAt = runs.length > 0 ? new Date(runs[0].startedAt).getTime() : now;
+	const startedAt =
+		runs.length > 0 ? new Date(runs[0].startedAt).getTime() : now;
 	const elapsed = formatElapsed(startedAt, now);
 	return `${icon} ${agents} · ${doneTasks}/${totalTasks} done · ${elapsed}`;
 }
@@ -564,7 +643,7 @@ export function renderPaneTitle(
 ): string {
 	const icon = statusIcon(task.state as any, frame);
 	const parts: string[] = [`${icon} ${task.agent}`];
-	parts.push(`${TURN_GLYPH}${task.turns}`);
+	parts.push(`${task.turns} turn${task.turns === 1 ? "" : "s"}`);
 	if (task.tools > 0) {
 		const toolWord = task.tools === 1 ? "tool" : "tools";
 		parts.push(`${TOOL_GLYPH} ${task.tools} ${toolWord}`);
@@ -574,12 +653,24 @@ export function renderPaneTitle(
 
 export function renderNotification(task: WidgetTask): string[] {
 	const icon = statusIcon(task.state as any, 0);
-	const title = task.objective ? `${icon} ${task.agent} · ${task.objective}` : `${icon} ${task.agent} · ${task.taskId}`;
-	const lines = [title, renderStatsRow(task)];
+	const label = task.objective ?? task.taskId;
+	const outcome =
+		task.state === "succeeded"
+			? "completed"
+			: task.state === "cancelled"
+				? "stopped"
+				: task.state === "timed_out"
+					? "timed out"
+					: "failed";
+	const lines = [`${icon} ${label} ${outcome}`];
+	const stats = renderStatsRow(task);
+	if (stats) lines.push(stats);
 	if (task.result) {
 		lines.push(`${ACTIVITY_GLYPH} ${truncateVisibleWidth(task.result, 120)}`);
 	} else if (task.errorMessage) {
-		lines.push(`${ACTIVITY_GLYPH} ${truncateVisibleWidth(task.errorMessage, 120)}`);
+		lines.push(
+			`${ACTIVITY_GLYPH} ${truncateVisibleWidth(task.errorMessage, 120)}`,
+		);
 	}
 	return lines;
 }

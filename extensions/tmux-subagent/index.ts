@@ -44,8 +44,10 @@ import {
 	renderSectionHeading,
 	renderTaskRow,
 	toWidgetTask,
+	truncateVisibleWidth,
 	type ParsedCoordinatorResult,
 	type WidgetRun,
+	type WidgetTheme,
 } from "./render.ts";
 import { Type } from "typebox";
 import { loadSubagentConfiguration } from "./config.ts";
@@ -94,6 +96,7 @@ export interface TaskStatusLike {
 	model: string;
 	usage?: { totalTokens?: number; turns?: number };
 	tools?: number | string[];
+	toolUses?: number;
 	activity?: string;
 	contextUsage?: { percent?: number | null };
 	compactionCount?: number;
@@ -195,6 +198,8 @@ export interface TaskStatus {
 	};
 	/** Active tool names (from runner live status). */
 	tools?: string[];
+	/** Cumulative tool executions for pi-subagents-compatible UI stats. */
+	toolUses?: number;
 	/** Current activity string (from runner live status). */
 	activity?: string;
 	/** Live context usage (from runner live status). */
@@ -249,6 +254,7 @@ export interface SubagentDetails {
 	layoutWarning?: string;
 	artifactsPath: string | null;
 	results: TaskStatus[];
+	objectives: Record<string, string>;
 }
 
 export interface PreparedTask {
@@ -440,6 +446,99 @@ export function truncateResult(text: string): string {
 	return `${truncated}\n\n[Output truncated.]`;
 }
 
+interface RenderComponent {
+	render(width: number): string[];
+	invalidate(): void;
+}
+
+function textComponent(text: string): RenderComponent {
+	return {
+		render: (width) =>
+			text.split("\n").map((line) => truncateVisibleWidth(line, width)),
+		invalidate: () => undefined,
+	};
+}
+
+export function renderSubagentToolCall(
+	tasks: TaskItem[],
+	details: SubagentDetails | undefined,
+	theme: WidgetTheme,
+): string {
+	const parts: string[] = [];
+
+	if (details?.session) {
+		const sessionDisplay = details.windowId
+			? `${details.session}:${details.windowId}`
+			: details.session;
+		parts.push(`Running as pi in tmux (session: ${sessionDisplay})`);
+	}
+
+	if (tasks.length === 0) {
+		parts.unshift(`${theme.bold?.("Subagents") ?? "Subagents"}`);
+		return parts.join("\n\n");
+	}
+
+	const block = tasks
+		.map((task) => `▸ ${theme.bold?.(task.agent) ?? task.agent}`)
+		.join("\n\n");
+	parts.push(block);
+	return parts.join("\n\n");
+}
+
+export function renderSubagentToolResult(
+	details: SubagentDetails | undefined,
+	text: string,
+	options: { expanded: boolean; isPartial: boolean },
+	theme: WidgetTheme,
+): string {
+	if (!details?.results?.length) return text;
+
+	if (options.isPartial) {
+		const runName = details.artifactsPath
+			? path.basename(details.artifactsPath)
+			: "pi-subagent";
+		return theme.fg("dim", `⎿ Running as ${runName}…`);
+	}
+
+	const failed = details.results.find((status) =>
+		["failed", "timed_out", "cancelled"].includes(status.state),
+	);
+	return failed ? theme.fg("error", "⎿ Failed") : theme.fg("dim", "⎿ Done");
+}
+
+function createToolRenderers() {
+	return {
+		renderCall(args: unknown, theme: WidgetTheme): RenderComponent {
+			const callArgs = args as {
+				tasks?: TaskItem[];
+				result?: { details?: SubagentDetails };
+			};
+			const tasks = callArgs.tasks ?? [];
+			const details = callArgs.result?.details;
+			return textComponent(renderSubagentToolCall(tasks, details, theme));
+		},
+		renderResult(
+			result: {
+				content?: Array<{ type: string; text: string }>;
+				details?: unknown;
+			},
+			options: { expanded: boolean; isPartial: boolean },
+			theme: WidgetTheme,
+		): RenderComponent {
+			const content = result.content?.[0];
+			const text = content?.type === "text" ? content.text : "";
+			return textComponent(
+				renderSubagentToolResult(
+					result.details as SubagentDetails | undefined,
+					text,
+					options,
+					theme,
+				),
+			);
+		},
+	};
+}
+
 /**
  * Deterministic topic source: the first user message of the session. No model
  * call is made; the text is slugified by the naming helper in tmux.ts.
@@ -516,7 +615,9 @@ export function renderProgress(
 		rows.push(...renderTaskRow(widgetTask, { frame }));
 	}
 
-	return [...attachLines, ...rows, `Progress: ${summary || "starting"}`].join("\n");
+	return [...attachLines, ...rows, `Progress: ${summary || "starting"}`].join(
+		"\n",
+	);
 }
 
 export function renderResults(
@@ -715,6 +816,8 @@ export default function (pi: ExtensionAPI) {
 			`Configured profiles: ${profileSummary}. User configuration: ${userConfigPath}. For research loops: pass return_mode: "summary" with retain_artifacts: "always" to keep the coordinator context thin — the tool returns digests plus artifact paths, and full outputs stay on disk.`,
 		parameters: Params,
 
+		...createToolRenderers(),
+
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const typedParams = params as {
 				tasks: TaskItem[];
@@ -866,9 +969,7 @@ export default function (pi: ExtensionAPI) {
 					agent: p.task.agent,
 					objective: p.task.objective,
 				})),
-				statuses: Object.fromEntries(
-					statuses.map((s) => [s.taskId, s] as const),
-				),
+				statuses: Object.fromEntries(statuses.map((s) => [s.taskId, s] as const)),
 			});
 
 			// Track which task IDs have already been notified (Task 8)
@@ -882,7 +983,8 @@ export default function (pi: ExtensionAPI) {
 					? `tmux attach -t ${session}:${windowId}`
 					: `tmux attach -t ${session}`;
 
-			// taskId -> objective, shared by inline progress and notifications (Task 8)
+			// sessionId -> objectives map for inline progress display (task ID → objective)
+			// Also keep objectives for progress bar display
 			const objectives = Object.fromEntries(
 				prepared.map((p) => [p.taskId, p.task.objective] as const),
 			);
@@ -913,20 +1015,16 @@ export default function (pi: ExtensionAPI) {
 						layoutWarning,
 						artifactsPath: runDir,
 						results: [...statuses],
+						objectives,
 					},
 				});
 
 				// Update footer status in TUI mode (Task 6)
 				if (ctx.mode === "tui" && ctx.ui?.setStatus) {
-					const aggTitle = renderWindowTitle(
-						[...widgetRuns.values()],
-						{ frame },
-					);
+					const aggTitle = renderWindowTitle([...widgetRuns.values()], { frame });
 					ctx.ui.setStatus(
 						"tmux-subagents",
-						aggTitle.length > 80
-							? aggTitle.slice(0, 80) + "…"
-							: aggTitle,
+						aggTitle.length > 80 ? aggTitle.slice(0, 80) + "…" : aggTitle,
 					);
 				}
 			};
@@ -1020,10 +1118,7 @@ export default function (pi: ExtensionAPI) {
 				// launchedPaneIds are real tmux pane ids ("%9") in creation order,
 				// matching prepared — map each pane to its task for title pushes.
 				const paneTaskIds = new Map(
-					launchedPaneIds.map((paneId, index) => [
-						paneId,
-						prepared[index]?.taskId,
-					]),
+					launchedPaneIds.map((paneId, index) => [paneId, prepared[index]?.taskId]),
 				);
 				const paneTitleState = new Map<
 					string,
@@ -1038,11 +1133,15 @@ export default function (pi: ExtensionAPI) {
 					// Capture the TUI handle so the animation interval can re-render
 					// the widget without touching the footer status line.
 					let widgetTui: { requestRender(): void } | undefined;
-					const widgetComponent = (tui: { requestRender(): void }) => {
+					const widgetComponent = (
+						tui: { requestRender(): void },
+						theme: WidgetTheme,
+					) => {
 						widgetTui = tui;
 						return {
 							render(width: number): string[] {
 								return renderWidgetLines([...widgetRuns.values()], {
+									theme,
 									frame,
 									width,
 								});
@@ -1077,8 +1176,24 @@ export default function (pi: ExtensionAPI) {
 
 				// Best-effort pane-border setup (Task 7)
 				if (windowId) {
-					bestEffort(() => tmuxExec(["set-window-option", "-t", windowId, "pane-border-status", "top"]));
-					bestEffort(() => tmuxExec(["set-window-option", "-t", windowId, "pane-border-format", "#{pane_title}"]));
+					bestEffort(() =>
+						tmuxExec([
+							"set-window-option",
+							"-t",
+							windowId,
+							"pane-border-status",
+							"top",
+						]),
+					);
+					bestEffort(() =>
+						tmuxExec([
+							"set-window-option",
+							"-t",
+							windowId,
+							"pane-border-format",
+							"#{pane_title}",
+						]),
+					);
 				}
 
 				let lastProgress = "";
@@ -1114,7 +1229,10 @@ export default function (pi: ExtensionAPI) {
 						// Emit notifications on terminal state transitions (Task 8)
 						for (let index = 0; index < statuses.length; index++) {
 							const status = statuses[index];
-							if (TERMINAL_STATES.has(status.state) && !notifiedTaskIds.has(status.taskId)) {
+							if (
+								TERMINAL_STATES.has(status.state) &&
+								!notifiedTaskIds.has(status.taskId)
+							) {
 								notifiedTaskIds.add(status.taskId);
 								const notified = toWidgetTask(status as TaskStatusLike);
 								const objective = objectives[status.taskId];
@@ -1122,8 +1240,8 @@ export default function (pi: ExtensionAPI) {
 								if (ctx.mode === "tui" && ctx.ui?.notify) {
 									const type =
 										status.state === "succeeded" || status.state === "cancelled"
-											? "info" as const
-											: "error" as const;
+											? ("info" as const)
+											: ("error" as const);
 									ctx.ui.notify(renderNotification(notified).join("\n"), type);
 								}
 							}
@@ -1171,13 +1289,7 @@ export default function (pi: ExtensionAPI) {
 									lastPushAt: Date.now(),
 								});
 								bestEffort(() =>
-									tmuxExec([
-										"select-pane",
-										"-T",
-										paneTitle,
-										"-t",
-										paneId,
-									]),
+									tmuxExec(["select-pane", "-T", paneTitle, "-t", paneId]),
 								);
 							}
 						}
@@ -1236,6 +1348,7 @@ export default function (pi: ExtensionAPI) {
 					artifactsPath: keepArtifacts ? runDir : null,
 					results:
 						returnMode === "summary" ? summarizeSummaryDetails(statuses) : statuses,
+					objectives,
 				};
 				const rendered =
 					returnMode === "summary"

@@ -1,7 +1,7 @@
 ---
 name: worker
 description: Explicitly scoped implementation with tests and verification
-model: Kwaipilot_KAT-Coder-V2.5-Dev-GGUF-Q8_0
+model: lemonade_KAT-Coder-Q4-GGUF
 thinking: high
 tools: read,bash,edit,write,grep,find,ls
 access: write

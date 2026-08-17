@@ -189,31 +189,34 @@ describe("renderStatsRow", () => {
 		elapsed: "12.3s",
 	};
 
-	it("shows turns, tools, tokens with %, elapsed", () => {
-		const line = renderStatsRow({ ...base } as any);
-		expect(line).toBe("↻3 · ⚙ 5 tools · 12.4k token (8%) · 12.3s");
+	it("matches pi-subagents turn, tool-use, token, and elapsed wording", () => {
+		expect(renderStatsRow({ ...base } as any)).toBe(
+			"3 turns · 5 tool uses · 12.4k token (8%) · 12.3s",
+		);
 	});
 
-	it("uses singular 'tool' at 1", () => {
-		const line = renderStatsRow({ ...base, tools: 1 } as any);
-		expect(line).toBe("↻3 · ⚙ 1 tool · 12.4k token (8%) · 12.3s");
+	it("uses singular 'tool use' at 1", () => {
+		expect(renderStatsRow({ ...base, tools: 1 } as any)).toBe(
+			"3 turns · 1 tool use · 12.4k token (8%) · 12.3s",
+		);
 	});
 
-	it("omits tools segment at 0", () => {
-		const line = renderStatsRow({ ...base, tools: 0 } as any);
-		expect(line).toBe("↻3 · 12.4k token (8%) · 12.3s");
+	it("omits zero-valued tool and token segments", () => {
+		expect(
+			renderStatsRow({ ...base, tools: 0, tokenCount: 0 } as any),
+		).toBe("3 turns · 12.3s");
 	});
 
 	it("omits (NN%) when percent is null", () => {
-		const line = renderStatsRow({ ...base, percent: null } as any);
-		expect(line).toBe("↻3 · ⚙ 5 tools · 12.4k token · 12.3s");
+		expect(renderStatsRow({ ...base, percent: null } as any)).toBe(
+			"3 turns · 5 tool uses · 12.4k token · 12.3s",
+		);
 	});
 
-	it("appends ⇊1 when compactionCount is 1", () => {
-		const line = renderStatsRow({ ...base, compactionCount: 1 } as any);
-		expect(line).toBe(
-			"↻3 · ⚙ 5 tools · 12.4k token (8%) · 12.3s · ⇊1",
-		);
+	it("groups compaction count with context utilization", () => {
+		expect(
+			renderStatsRow({ ...base, compactionCount: 1 } as any),
+		).toBe("3 turns · 5 tool uses · 12.4k token (8% · ⇊1) · 12.3s");
 	});
 });
 
@@ -235,11 +238,19 @@ describe("renderTaskRow", () => {
 		elapsed: "12.3s",
 	};
 
-	it("includes objective in row", () => {
+	it("matches the pi-subagents agent/description/stats layout", () => {
 		const lines = renderTaskRow({ ...base } as any, { frame: 2 });
 		expect(lines[0]).toBe(
-			"⠹ scout · Find relevant docs · ↻3 · ⚙ 5 tools · 12.4k token (8%) · 12.3s",
+			"⠹ scout Find relevant docs · 3 turns · 5 tool uses · 12.4k token (8%) · 12.3s",
 		);
+	});
+
+	it("moves stats to continuation lines instead of clipping them at narrow widths", () => {
+		const lines = renderTaskRow({ ...base } as any, { frame: 2, width: 55 });
+		expect(lines).toEqual([
+			"⠹ scout Find relevant docs",
+			"3 turns · 5 tool uses · 12.4k token (8%) · 12.3s",
+		]);
 	});
 
 	it("drops objective when absent", () => {
@@ -247,7 +258,7 @@ describe("renderTaskRow", () => {
 			frame: 2,
 		});
 		expect(lines[0]).toBe(
-			"⠹ scout · ↻3 · ⚙ 5 tools · 12.4k token (8%) · 12.3s",
+			"⠹ scout · 3 turns · 5 tool uses · 12.4k token (8%) · 12.3s",
 		);
 	});
 
@@ -282,7 +293,7 @@ describe("renderTaskRow", () => {
 			{ ...base, state: "succeeded" } as any,
 			{ frame: 0, theme },
 		);
-		expect(lines[0]).toContain("[green:✓]");
+		expect(lines[0]).toContain("[success:✓]");
 	});
 
 	it("applies dim theme for cancelled", () => {
@@ -304,7 +315,7 @@ describe("renderTaskRow", () => {
 describe("renderWidgetLines", () => {
 	const makeRun = (
 		tasks: Array<{ taskId: string; agent: string; objective: string }>,
-		statuses: Record<string, { state: string }>,
+		statuses: Record<string, { state: string; [key: string]: unknown }>,
 	) =>
 		({
 			runId: "run-1",
@@ -313,35 +324,43 @@ describe("renderWidgetLines", () => {
 			statuses,
 		}) as any;
 
-	it("renders header and footer", () => {
+	it("keeps arbitrary multi-line objectives out of the persistent widget", () => {
 		const runs = [
 			makeRun(
-				[{ taskId: "t1", agent: "scout", objective: "Find docs" }],
+				[
+					{
+						taskId: "t1",
+						agent: "scout",
+						objective: "Do not use tools.\n<coordinator-summary>\nStatus: succeeded",
+					},
+				],
 				{ t1: { state: "running" } },
 			),
 		];
 		const lines = renderWidgetLines(runs, { frame: 0, width: 80 });
-		expect(lines[0]).toBe("● Subagents (tmux)");
-		const lastLine = lines[lines.length - 1];
-		expect(lastLine).toContain("running");
+		expect(lines[0]).toBe("● Agents");
+		expect(lines[1]).toBe("└─ ⠋ scout");
+		expect(lines.join("\n")).not.toContain("coordinator-summary");
 	});
 
-	it("truncates to 12-line cap, retaining header and footer", () => {
+	it("caps at 12 lines and reports hidden agents", () => {
 		const tasks = Array.from({ length: 20 }, (_, i) => ({
 			taskId: `t${i}`,
 			agent: "scout",
 			objective: "do something",
 		}));
 		const statuses: Record<string, { state: string }> = {};
-		for (const t of tasks) statuses[t.taskId] = { state: "running" };
-		const runs = [makeRun(tasks, statuses)];
-		const lines = renderWidgetLines(runs, { frame: 0, width: 80 });
+		for (const task of tasks) statuses[task.taskId] = { state: "running" };
+		const lines = renderWidgetLines([makeRun(tasks, statuses)], {
+			frame: 0,
+			width: 80,
+		});
 		expect(lines.length).toBeLessThanOrEqual(12);
-		expect(lines[0]).toBe("● Subagents (tmux)");
-		expect(lines[lines.length - 1]).toContain("running");
+		expect(lines[0]).toBe("● Agents");
+		expect(lines.at(-1)).toMatch(/^└─ \+\d+ more$/);
 	});
 
-	it("shows multiple runs with separator", () => {
+	it("flattens concurrent runs into one agent tree", () => {
 		const runs = [
 			makeRun(
 				[{ taskId: "t1", agent: "worker", objective: "a" }],
@@ -352,11 +371,46 @@ describe("renderWidgetLines", () => {
 				{ t2: { state: "succeeded" } },
 			),
 		];
-		const lines = renderWidgetLines(runs, { frame: 0, width: 80 });
-		const hasSeparator = lines.some(
-			(l) => l.startsWith("─") || l.startsWith("━"),
+		const text = renderWidgetLines(runs, { frame: 0, width: 80 }).join("\n");
+		expect(text).toContain("├─ ⠋ worker");
+		expect(text).toContain("└─ ✓ scout");
+		expect(text).not.toContain("worker a");
+		expect(text).not.toContain("scout b");
+		expect(text).not.toContain("Run 2");
+	});
+
+	it("applies reference theme colors", () => {
+		const theme = {
+			fg: (color: string, text: string) => `[${color}:${text}]`,
+			bold: (text: string) => `[bold:${text}]`,
+		};
+		const lines = renderWidgetLines(
+			[makeRun([{ taskId: "t1", agent: "scout", objective: "Find docs" }], { t1: { state: "running" } })],
+			{ frame: 0, theme, width: 120 },
 		);
-		expect(hasSeparator).toBe(true);
+		expect(lines[0]).toBe("[accent:● Agents]");
+		expect(lines[1]).toContain("[accent:⠋]");
+		expect(lines[1]).toContain("[bold:scout]");
+		expect(lines[1]).not.toContain("Find docs");
+	});
+
+	it("wraps live-widget stats onto a continuation line at narrow widths", () => {
+		const runs = [
+			makeRun(
+				[{ taskId: "t1", agent: "scout", objective: "Find docs" }],
+				{
+					t1: {
+						state: "running",
+						usage: { turns: 3, totalTokens: 12400 },
+						toolUses: 5,
+						contextUsage: { percent: 8 },
+					},
+				},
+			),
+		];
+		const lines = renderWidgetLines(runs, { frame: 0, width: 45 });
+		expect(lines).toContain("└─ ⠋ scout");
+		expect(lines).toContain("   3 turns · 5 tool uses · 12.4k token (8%)");
 	});
 
 	it("ANSI-truncates at narrow width", () => {
@@ -466,14 +520,14 @@ describe("renderPaneTitle", () => {
 
 	it("shows icon + agent + turns + tools", () => {
 		const line = renderPaneTitle({ ...base } as any, { frame: 2 });
-		expect(line).toBe("⠹ worker · ↻3 · ⚙ 5 tools");
+		expect(line).toBe("⠹ worker · 3 turns · ⚙ 5 tools");
 	});
 
 	it("omits tools segment at 0", () => {
 		const line = renderPaneTitle({ ...base, tools: 0 } as any, {
 			frame: 2,
 		});
-		expect(line).toBe("⠹ worker · ↻3");
+		expect(line).toBe("⠹ worker · 3 turns");
 	});
 });
 
@@ -495,23 +549,23 @@ describe("renderNotification", () => {
 		elapsed: "12.3s",
 	};
 
-	it("succeeded: icon + agent · objective", () => {
+	it("renders a Claude-style completion title", () => {
 		const lines = renderNotification({ ...base } as any);
-		expect(lines[0]).toBe("✓ scout · Find relevant docs");
+		expect(lines[0]).toBe("✓ Find relevant docs completed");
 	});
 
-	it("failed: shows failed verb", () => {
+	it("labels failures", () => {
 		const lines = renderNotification(
 			{ ...base, state: "failed" } as any,
 		);
-		expect(lines[0]).toBe("✗ scout · Find relevant docs");
+		expect(lines[0]).toBe("✗ Find relevant docs failed");
 	});
 
-	it("falls back to taskId when objective absent", () => {
+	it("falls back to taskId when objective is absent", () => {
 		const lines = renderNotification(
 			{ ...base, objective: undefined } as any,
 		);
-		expect(lines[0]).toBe("✓ scout · t1");
+		expect(lines[0]).toBe("✓ t1 completed");
 	});
 });
 

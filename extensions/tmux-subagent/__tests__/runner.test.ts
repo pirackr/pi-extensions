@@ -330,7 +330,7 @@ describe("runTaskMode", () => {
       statusCalls[statusCalls.length - 1][1] as string,
     );
     expect(lastRunning.tools).toContain("read");
-    expect(lastRunning.activity).toContain("read(");
+    expect(lastRunning.activity).toBe("reading path=/workspace/file.ts…");
     expect(lastRunning.contextUsage).toBeDefined();
     expect(lastRunning.compactionCount).toBeDefined();
   });
@@ -444,6 +444,32 @@ describe("runTaskMode", () => {
       statusCalls[statusCalls.length - 1][1] as string,
     );
     expect(lastRunning.compactionCount).toBe(1);
+  });
+
+  it("preserves cumulative tool-use stats in the terminal status", () => {
+    runTaskMode("/tmp/request.json");
+    for (const toolName of ["read", "read", "edit"]) {
+      emitStdoutRpc(JSON.stringify({ type: "tool_execution_start", toolName }));
+      emitStdoutRpc(JSON.stringify({ type: "tool_execution_end", toolName }));
+    }
+    emitStdoutRpc(
+      JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Result" }],
+          usage: { totalTokens: 100 },
+          stopReason: "end_turn",
+        },
+      }),
+    );
+    emitClose(0);
+
+    const writeCalls = mockWriteFileSync.mock.calls;
+    const terminal = JSON.parse(writeCalls[writeCalls.length - 1][1] as string);
+    expect(terminal.state).toBe("succeeded");
+    expect(terminal.toolUses).toBe(3);
+    expect(terminal.tools).toEqual(["read", "edit"]);
   });
 
   it("captures contextWindow from get_state and live percent from message_end", () => {

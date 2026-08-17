@@ -180,6 +180,7 @@ export function runTaskMode(requestPath) {
   };
 
   const toolCounts = {};
+  let toolUses = 0;
 
   // --- RPC helpers ---
 
@@ -207,6 +208,7 @@ export function runTaskMode(requestPath) {
     state: "running",
     pid: child?.pid,
     tools: currentTools,
+    toolUses,
     activity: currentActivity,
     contextUsage: liveContextUsage(),
     compactionCount,
@@ -227,10 +229,24 @@ export function runTaskMode(requestPath) {
   let statsFallbackTimer;
 
   const activityFor = (toolName) => {
-    const base = toolName.replace(/_web$/, "").replace(/web_/g, "web ");
-    const active = TOOLS_ACTIVE.has(toolName);
-    const short = active ? base : toolName;
-    return short.length > 40 ? short.slice(0, 40) + "…" : short;
+    const display = {
+      read: "reading",
+      ctx_read: "reading",
+      edit: "editing",
+      ctx_edit: "editing",
+      write: "writing",
+      grep: "searching",
+      ctx_grep: "searching",
+      find: "finding files",
+      ctx_find: "finding files",
+      ls: "listing",
+      ctx_ls: "listing",
+      bash: "running command",
+      ctx_shell: "running command",
+      web_lookup: "searching web",
+      fetch_web: "fetching page",
+    };
+    return display[toolName] ?? (TOOLS_ACTIVE.has(toolName) ? toolName.replaceAll("_", " ") : toolName);
   };
 
   const processRpcEvent = (line) => {
@@ -341,10 +357,11 @@ export function runTaskMode(requestPath) {
     if (event.type === "tool_execution_start") {
       const name = event.toolName || event.toolCall?.name || "tool";
       toolCounts[name] = (toolCounts[name] ?? 0) + 1;
+      toolUses += 1;
       const args = event.args ?? event.toolCall?.arguments ?? {};
       const summary = summarizeArgs(args);
       emit(`\n[${name}]${summary ? " " + summary : ""}\n`);
-      const activity = summary ? `${name}(${summary})` : name;
+      const activity = `${activityFor(name)}${summary ? ` ${summary}` : ""}…`;
       currentActivity = activity;
       currentTools = Object.keys(toolCounts);
       writeStatus(liveStatus());
@@ -422,6 +439,8 @@ export function runTaskMode(requestPath) {
       exitCode: closeCode ?? null,
       finishedAt: new Date().toISOString(),
       stopReason,
+      tools: currentTools,
+      toolUses,
       errorMessage,
       result,
       usage: mergedUsage,

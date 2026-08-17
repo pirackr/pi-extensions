@@ -1045,7 +1045,7 @@ Recommended next action: retry
 		expect(s.result_path).toBe("/data/out.org");
 	});
 
-	it.skip("schema exposes result_path in the TypeBox TaskItem", () => {
+	it("schema exposes result_path in the TypeBox TaskItem", () => {
 		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
 			config: {
 				models: {},
@@ -1093,7 +1093,7 @@ Recommended next action: retry
 		expect(taskItemProps).toHaveProperty("result_path");
 	});
 
-	it.skip("rejects a relative result_path upfront", async () => {
+	it("rejects a relative result_path upfront", async () => {
 		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
 			config: {
 				models: {},
@@ -1165,7 +1165,7 @@ Recommended next action: retry
 		).rejects.toThrow("result_path must be an absolute path");
 	});
 
-	it.skip("accepts an absolute result_path", async () => {
+	it("accepts an absolute result_path", async () => {
 		vi.spyOn(configMod, "loadSubagentConfiguration").mockReturnValue({
 			config: {
 				models: {},

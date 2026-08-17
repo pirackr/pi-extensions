@@ -344,7 +344,8 @@ export function toWidgetTask(
 				finishedAt?: string;
 				model: string;
 				usage?: { totalTokens?: number; turns?: number };
-				tools?: number;
+			/** Active tool count — or the runner's list of active tool names. */
+			tools?: number | readonly string[];
 				activity?: string;
 				contextUsage?: { percent?: number | null };
 				compactionCount?: number;
@@ -359,7 +360,12 @@ export function toWidgetTask(
 		model: status.model,
 		objective: (status as any).objective,
 		turns: status.usage?.turns ?? 0,
-		tools: status.tools ?? 0,
+		tools:
+			typeof status.tools === "number"
+				? status.tools
+				: Array.isArray(status.tools)
+					? status.tools.length
+					: 0,
 		tokenCount: status.usage?.totalTokens ?? 0,
 		percent: status.contextUsage?.percent ?? null,
 		elapsed: formatElapsed(status.startedAt, status.finishedAt),

@@ -93,7 +93,7 @@ export interface TaskStatusLike {
 	finishedAt?: string;
 	model: string;
 	usage?: { totalTokens?: number; turns?: number };
-	tools?: number;
+	tools?: number | string[];
 	activity?: string;
 	contextUsage?: { percent?: number | null };
 	compactionCount?: number;
@@ -497,12 +497,6 @@ export function renderProgress(
 	const summary = Object.entries(counts)
 		.map(([state, count]) => `${count} ${state}`)
 		.join(", ");
-	const detail = statuses
-		.map(
-			(status) =>
-				`  ${status.taskId} (${status.agent}) [${status.model}] ${status.state}`,
-		)
-		.join("\n");
 	const attach = windowId
 		? `tmux attach -t ${session}:${windowId}`
 		: `tmux attach -t ${session}`;
@@ -516,10 +510,10 @@ export function renderProgress(
 	];
 	// Add widget-style task rows
 	for (const status of statuses) {
-		const obj = objectives?.[status.taskId];
 		const widgetTask = toWidgetTask(status as TaskStatusLike);
-		const taskRows = renderTaskRow(widgetTask, { frame });
-		rows.push(...taskRows);
+		const objective = objectives?.[status.taskId];
+		if (objective) widgetTask.objective = objective;
+		rows.push(...renderTaskRow(widgetTask, { frame }));
 	}
 
 	return [...attachLines, ...rows, `Progress: ${summary || "starting"}`].join("\n");
@@ -888,14 +882,14 @@ export default function (pi: ExtensionAPI) {
 					? `tmux attach -t ${session}:${windowId}`
 					: `tmux attach -t ${session}`;
 
+			// taskId -> objective, shared by inline progress and notifications (Task 8)
+			const objectives = Object.fromEntries(
+				prepared.map((p) => [p.taskId, p.task.objective] as const),
+			);
+
 			const emitUpdate = () => {
 				// Increment frame for widget animation (Tasks 6-9)
 				frame++;
-
-				// Build objectives map for inline progress (Task 8)
-				const objectives = Object.fromEntries(
-					prepared.map((p) => [p.taskId, p.task.objective] as const),
-				);
 
 				onUpdate?.({
 					content: [
@@ -1041,21 +1035,27 @@ export default function (pi: ExtensionAPI) {
 				// Register widget in TUI mode (Task 6)
 				let widgetDispose: (() => void) | undefined;
 				if (ctx.mode === "tui" && ctx.ui?.setWidget) {
-					const widgetComponent = (tui: { requestRender(): void }) => ({
-						render(width: number): string[] {
-							return renderWidgetLines([...widgetRuns.values()], {
-								frame,
-								width,
-							});
-						},
-						invalidate(): void {
-							tui.requestRender();
-						},
-						dispose(): void {
-							tui.requestRender();
-							widgetDispose?.();
-						},
-					});
+					// Capture the TUI handle so the animation interval can re-render
+					// the widget without touching the footer status line.
+					let widgetTui: { requestRender(): void } | undefined;
+					const widgetComponent = (tui: { requestRender(): void }) => {
+						widgetTui = tui;
+						return {
+							render(width: number): string[] {
+								return renderWidgetLines([...widgetRuns.values()], {
+									frame,
+									width,
+								});
+							},
+							invalidate(): void {
+								tui.requestRender();
+							},
+							dispose(): void {
+								tui.requestRender();
+								widgetDispose?.();
+							},
+						};
+					};
 					ctx.ui.setWidget("tmux-subagents", widgetComponent, {
 						placement: "aboveEditor",
 					});
@@ -1064,10 +1064,11 @@ export default function (pi: ExtensionAPI) {
 					let animationTimer: ReturnType<typeof setInterval>;
 					widgetDispose = () => {
 						clearInterval(animationTimer);
+						widgetTui = undefined;
 					};
 					animationTimer = setInterval(() => {
 						frame++;
-						ctx.ui?.setStatus?.("tmux-subagents", ""); // trigger re-render
+						widgetTui?.requestRender();
 						if (widgetRuns.size === 0) {
 							clearInterval(animationTimer);
 						}
@@ -1105,7 +1106,8 @@ export default function (pi: ExtensionAPI) {
 					const progress = statuses
 						.map((status) => `${status.taskId}:${status.state}`)
 						.join("|");
-					if (progress !== lastProgress) {
+					const stateChanged = progress !== lastProgress;
+					if (stateChanged) {
 						lastProgress = progress;
 						emitUpdate();
 
@@ -1115,6 +1117,8 @@ export default function (pi: ExtensionAPI) {
 							if (TERMINAL_STATES.has(status.state) && !notifiedTaskIds.has(status.taskId)) {
 								notifiedTaskIds.add(status.taskId);
 								const notified = toWidgetTask(status as TaskStatusLike);
+								const objective = objectives[status.taskId];
+								if (objective) notified.objective = objective;
 								if (ctx.mode === "tui" && ctx.ui?.notify) {
 									const type =
 										status.state === "succeeded" || status.state === "cancelled"
@@ -1129,7 +1133,7 @@ export default function (pi: ExtensionAPI) {
 					// Best-effort window title rename on state change or ≥5s (Task 7)
 					if (windowId) {
 						const now = Date.now();
-						if (progress !== lastProgress || now - lastRenameAt >= 5_000) {
+						if (stateChanged || now - lastRenameAt >= 5_000) {
 							lastRenameAt = now;
 							bestEffort(() =>
 								tmuxExec([

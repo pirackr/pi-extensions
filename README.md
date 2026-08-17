@@ -202,6 +202,31 @@ The status command is UI-guarded: when UI is available the report is emitted thr
 
 When no model or usage is available, the report explicitly marks those values as unavailable rather than guessing.
 
+## ntfy Notifications
+
+The ntfy extension sends a notification after Pi fully settles following a prompt. It is session-local and disabled by default.
+
+Configure a topic in `$PI_AGENT_DIR/ntfy/config.json` (normally `~/.pi/agent/ntfy/config.json`):
+
+```json
+{
+  "server": "https://ntfy.sh",
+  "topic": "your-private-topic",
+  "token": "optional-access-token"
+}
+```
+
+Environment variables override file settings: `NTFY_SERVER`, `NTFY_TOPIC`, and `NTFY_TOKEN`. `NTFY_TOPIC` may be either a topic name or a full HTTP(S) topic URL. No project-local configuration is read.
+
+Commands:
+
+- `/ntfy` — show status without exposing the token.
+- `/ntfy on` — enable completion notifications for the current session.
+- `/ntfy off` — disable completion notifications.
+- `/ntfy test` — send a test notification even while notifications are off.
+
+Every new, resumed, forked, or reloaded session starts with notifications off. Completion messages contain only `Pi · <project>` and `Task finished`; prompts, responses, files, and transcripts are never sent.
+
 ## Add a New Extension
 
 ```bash

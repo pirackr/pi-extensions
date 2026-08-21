@@ -59,9 +59,10 @@ Order below is priority order from the review; items marked done get a [x].
 
 ## Polish
 
-- [ ] 9. Distinguish `starting` from `running`
-      Both show a spinner today. Dim `(starting)` label until first runner
-      status lands — disambiguates launch failure from model thinking.
+- [x] 9. Distinguish `starting` from `running`
+      Both showed a spinner; dim `(starting)` label now appears in widget
+      rows and tmux pane titles until the first runner status lands.
+      Tests: __tests__/render.test.ts.
 
 - [ ] 10. Artifact pointer in success notifications
       renderNotification should include result_path for succeeded summary-mode

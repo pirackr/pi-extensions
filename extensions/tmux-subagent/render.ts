@@ -491,8 +491,14 @@ export function renderTaskRow(
 	const objective = task.objective
 		? ` (${theme ? theme.fg("muted", task.objective) : task.objective})`
 		: "";
-	const header = `${icon} ${agent}${objective}`;
-	const plainHeader = `${statusIcon(task.state as any, frame)} ${task.agent}${task.objective ? ` (${task.objective})` : ""}`;
+	// "starting" means the runner has not yet confirmed the pi child —
+	// distinct from "running" (model alive) so a stalled launch is visible.
+	const starting =
+		task.state === "starting"
+			? ` ${theme ? theme.fg("dim", "(starting)") : "(starting)"}`
+			: "";
+	const header = `${icon} ${agent}${objective}${starting}`;
+	const plainHeader = `${statusIcon(task.state as any, frame)} ${task.agent}${task.objective ? ` (${task.objective})` : ""}${task.state === "starting" ? " (starting)" : ""}`;
 	const stats = statsLine(task, theme);
 	const plainStats = statsLine(task);
 	const divider = theme ? theme.fg("dim", "·") : "·";
@@ -647,7 +653,9 @@ export function renderPaneTitle(
 	{ frame }: { frame: number },
 ): string {
 	const icon = statusIcon(task.state as any, frame);
-	const parts: string[] = [`${icon} ${task.agent}`];
+	const parts: string[] = [
+		`${icon} ${task.agent}${task.state === "starting" ? " (starting)" : ""}`,
+	];
 	parts.push(`${task.turns} turn${task.turns === 1 ? "" : "s"}`);
 	if (task.tools > 0) {
 		const toolWord = task.tools === 1 ? "tool" : "tools";

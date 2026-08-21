@@ -712,6 +712,33 @@ export async function validateAndExportSummaryResults(
 // Default export — register the run_subagents tool
 // ---------------------------------------------------------------------------
 
+type Notifier = (message: string, type?: "info" | "warning" | "error") => void;
+
+const pendingNotifications: { text: string; type: "info" | "error" }[] = [];
+
+/** Queue a terminal-task toast; flushed later by flushPendingNotifications. */
+function queueTerminalNotification(
+	text: string,
+	type: "info" | "error",
+): void {
+	pendingNotifications.push({ text, type });
+}
+
+/**
+ * Flush queued completion toasts as ONE combined message. Called when the
+ * last active run finishes (widgetRuns empty): pi's TUI coalesces
+ * back-to-back `info` toasts (showStatus replaces the previous status line),
+ * so per-run toasts emitted while sibling runs are still going overwrite each
+ * other and earlier agents' results are lost.
+ */
+function flushPendingNotifications(notify: Notifier | undefined): void {
+	if (!notify || pendingNotifications.length === 0) return;
+	const batch = pendingNotifications.splice(0);
+	const combined = batch.map((n) => n.text).join("\n\n──────────\n\n");
+	const level = batch.some((n) => n.type === "error") ? "error" : "info";
+	notify(combined, level);
+}
+
 export default function (pi: ExtensionAPI) {
 	const { config, profiles, userConfigPath } =
 		loadSubagentConfiguration(extensionDir);
@@ -784,9 +811,7 @@ export default function (pi: ExtensionAPI) {
 	const Params = Type.Object({
 		tasks: Type.Array(TaskItemSchema, {
 			description:
-				"Independent tasks to execute concurrently; use one item for a single agent",
-			minItems: 1,
-			maxItems: config.maxTasks,
+				"Exactly ONE task for this call. To run multiple subagents, issue multiple run_subagents tool calls in the same block — they execute concurrently and each renders as its own transcript entry.",
 		}),
 		timeout_seconds: Type.Optional(
 			Type.Number({
@@ -810,8 +835,8 @@ export default function (pi: ExtensionAPI) {
 		name: "run_subagents",
 		label: "Tmux Subagents",
 		description:
-			"Run one or more independently scoped Pi agents in visible tmux windows. " +
-			"Use one task for single-agent delegation or multiple non-overlapping tasks for parallel work. " +
+			"Run one independently scoped Pi agent in a visible tmux window. " +
+			"To run multiple subagents, issue multiple run_subagents tool calls in the same block — they execute concurrently and each renders as its own transcript entry. " +
 			"The tool owns process isolation, timeouts, cancellation, status capture, and cleanup; chaining remains parent-driven. " +
 			`Configured profiles: ${profileSummary}. User configuration: ${userConfigPath}. For research loops: pass return_mode: "summary" with retain_artifacts: "always" to keep the coordinator context thin — the tool returns digests plus artifact paths, and full outputs stay on disk.`,
 		parameters: Params,
@@ -826,11 +851,17 @@ export default function (pi: ExtensionAPI) {
 				return_mode?: "full" | "summary";
 			};
 			const returnMode = (typedParams.return_mode ?? "full") as "full" | "summary";
-			if (
-				typedParams.tasks.length === 0 ||
-				typedParams.tasks.length > config.maxTasks
-			) {
-				throw new Error(`Provide between 1 and ${config.maxTasks} tasks.`);
+			if (typedParams.tasks.length === 0) {
+				throw new Error("Provide at least one task.");
+			}
+			if (typedParams.tasks.length > 1) {
+				throw new Error(
+					"run_subagents accepts exactly ONE task per call. " +
+						"To run multiple subagents, issue multiple run_subagents tool calls in the same block — they execute concurrently and each renders as its own transcript entry.",
+				);
+			}
+			if (typedParams.tasks.length > config.maxTasks) {
+				throw new Error(`At most ${config.maxTasks} task allowed.`);
 			}
 
 			const timeoutOverride = typedParams.timeout_seconds;
@@ -1242,7 +1273,10 @@ export default function (pi: ExtensionAPI) {
 										status.state === "succeeded" || status.state === "cancelled"
 											? ("info" as const)
 											: ("error" as const);
-									ctx.ui.notify(renderNotification(notified).join("\n"), type);
+									queueTerminalNotification(
+										renderNotification(notified).join("\n"),
+										type,
+									);
 								}
 							}
 						}
@@ -1388,6 +1422,9 @@ export default function (pi: ExtensionAPI) {
 
 				// Clear widget and footer only when the last run finishes
 				if (widgetRuns.size === 0) {
+					// All runs done: flush queued completion toasts as one combined
+					// message so pi's toast coalescing can't drop earlier agents.
+					flushPendingNotifications(ctx.ui?.notify);
 					if (ctx.mode === "tui" && ctx.ui?.setWidget) {
 						ctx.ui.setWidget("tmux-subagents", undefined);
 					}

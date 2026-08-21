@@ -420,7 +420,7 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		const lastText = updates[updates.length - 1].content[0].text;
 		expect(lastText).toContain("Tmux session: pi-subagents");
 		expect(lastText).toContain("Attach: tmux attach -t pi-subagents:@3");
-		expect(lastText).toContain("worker Find the docs");
+		expect(lastText).toContain("worker (Find the docs)");
 	});
 
 	it("renames the window immediately on every state change and restores the name at the end", async () => {
@@ -500,43 +500,65 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 	});
 
 	it("emits exactly one notification per terminal task with the right type", async () => {
-		statuses[statusPath(1, "task-1")] = statusJson("task-1", "failed");
-		statuses[statusPath(1, "task-2")] = statusJson("task-2", "succeeded");
-		const exec = tool.execute(
+		// One task per call: two concurrent single-task runs. Toasts are held
+		// until the LAST run finishes, then flushed as ONE combined message
+		// (pi's TUI would otherwise coalesce/overwrite back-to-back toasts).
+		statuses[statusPath(1, "task-1")] = statusJson("task-1", "running");
+		statuses[statusPath(2, "task-1")] = statusJson("task-1", "running");
+		const exec1 = tool.execute(
 			"call-1",
-			{
-				tasks: [
-					{ agent: "worker", objective: "Do A", cwd: "/tmp/a" },
-					{ agent: "worker", objective: "Do B", cwd: "/tmp/b" },
-				],
-			},
+			{ tasks: [{ agent: "worker", objective: "Do A" }] },
 			new AbortController().signal,
 			(u: any) => updates.push(u),
 			ctx,
 		);
+		await settle(10);
+		const exec2 = tool.execute(
+			"call-2",
+			{ tasks: [{ agent: "worker", objective: "Do B" }] },
+			new AbortController().signal,
+			(u: any) => updates.push(u),
+			ctx,
+		);
+		// Let both runs register their widget entries before either finishes,
+		// otherwise the first run's cleanup would see an empty registry and
+		// flush early.
+		await settle(20);
+		statuses[statusPath(1, "task-1")] = statusJson("task-1", "failed");
+		statuses[statusPath(2, "task-1")] = statusJson("task-1", "succeeded");
 		await settle(300);
-		await exec;
+		await exec1;
+		await exec2;
 
 		const notifies = ctx.ui.notify.mock.calls;
-		expect(notifies).toHaveLength(2);
-		const texts: string[] = notifies.map(([t]: any[]) => t as string);
-		const errorNote = texts.find((t: string) => t.includes("✗"));
-		const infoNote = texts.find((t: string) => t.includes("✓"));
-		expect(errorNote).toBeDefined();
-		expect(infoNote).toBeDefined();
-		expect(notifies.find(([, type]: any[]) => type === "error")?.[0]).toContain(
-			"boom",
-		);
-		expect(notifies.find(([, type]: any[]) => type === "error")?.[0]).toContain(
-			"Do A",
-		);
-		expect(notifies.find(([, type]: any[]) => type === "info")?.[0]).toContain(
-			"Do B",
-		);
+		// Combined into a single toast by the notify debounce queue.
+		expect(notifies).toHaveLength(1);
+		const [combinedText, combinedType] = notifies[0];
+		expect(combinedType).toBe("error"); // batch contains a failure
+		expect(combinedText).toContain("✗");
+		expect(combinedText).toContain("✓");
+		expect(combinedText).toContain("Do A");
+		expect(combinedText).toContain("Do B");
+		expect(combinedText).toContain("boom");
 		// The aggregate window title flags the failure.
-		expect(renames().some((r) => r.includes("✗") && r.includes("1/2 done"))).toBe(
-			true,
-		);
+		expect(renames().some((r) => r.includes("✗"))).toBe(true);
+	});
+
+	it("rejects multi-task batches and instructs separate calls", async () => {
+		await expect(
+			tool.execute(
+				"call-1",
+				{
+					tasks: [
+						{ agent: "worker", objective: "Do A" },
+						{ agent: "worker", objective: "Do B" },
+					],
+				},
+				new AbortController().signal,
+				(u: any) => updates.push(u),
+				ctx,
+			),
+		).rejects.toThrow(/exactly ONE task per call/);
 	});
 
 	it("attaches the stderr tail to failed tasks and surfaces it in the result", async () => {

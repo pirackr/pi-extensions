@@ -484,10 +484,10 @@ export function renderTaskRow(
 	const icon = iconFor(task.state, frame, theme);
 	const agent = theme?.bold ? theme.bold(task.agent) : task.agent;
 	const objective = task.objective
-		? ` ${theme ? theme.fg("muted", task.objective) : task.objective}`
+		? ` (${theme ? theme.fg("muted", task.objective) : task.objective})`
 		: "";
 	const header = `${icon} ${agent}${objective}`;
-	const plainHeader = `${statusIcon(task.state as any, frame)} ${task.agent}${task.objective ? ` ${task.objective}` : ""}`;
+	const plainHeader = `${statusIcon(task.state as any, frame)} ${task.agent}${task.objective ? ` (${task.objective})` : ""}`;
 	const stats = statsLine(task, theme);
 	const plainStats = statsLine(task);
 	const divider = theme ? theme.fg("dim", "·") : "·";

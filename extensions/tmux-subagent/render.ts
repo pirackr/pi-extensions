@@ -184,12 +184,12 @@ export function renderSummaryResults(
 
 		if (status.usage) {
 			const u = status.usage;
-			const costTotal = typeof u.cost === "number" ? u.cost : (u.cost?.total ?? 0);
+			const costLabel = formatCost(costTotalOf(u.cost));
 			parts.push(
 				`Tokens: ${u.totalTokens} (in: ${u.input}, out: ${u.output}, cache read: ${u.cacheRead}, cache write: ${u.cacheWrite})`,
-				`Cost: $${Number.isFinite(costTotal) ? costTotal.toFixed(4) : "0.0000"}`,
-				`Turns: ${u.turns}`,
 			);
+			if (costLabel) parts.push(`Cost: ${costLabel}`);
+			parts.push(`Turns: ${u.turns}`);
 		}
 
 		if (status.result_path) {
@@ -253,18 +253,86 @@ export function formatTokens(n: number): string {
 	return `${(n / 1_000_000).toFixed(1)}M tok`;
 }
 
+/**
+ * Format a USD cost estimate for display: `~$` prefix marks it as pi's
+ * estimate rather than a billed figure. Figures keep cents at minimum and
+ * four decimals at most. Returns "" when there is nothing to show — a model
+ * pi has no pricing data for reports zero, and "$0.00" beside its tokens
+ * would say the run was measured and found free rather than never measured.
+ */
+export function formatCost(cost: number): string {
+	if (!Number.isFinite(cost) || cost <= 0) return "";
+	if (cost < 0.0001) return "<$0.0001";
+	let s = cost.toFixed(4);
+	while (s.endsWith("0") && /\.\d{3,}$/.test(s)) s = s.slice(0, -1);
+	return `~$${s}`;
+}
+
+/** Normalize a usage.cost that may be a scalar or a {total} object. */
+export function costTotalOf(
+	cost: number | { total?: number } | undefined | null,
+): number {
+	if (typeof cost === "number") return Number.isFinite(cost) ? cost : 0;
+	return typeof cost?.total === "number" && Number.isFinite(cost.total)
+		? cost.total
+		: 0;
+}
+
+// ---------------------------------------------------------------------------
+// Per-agent identity colors (stable hash -> palette)
+// ---------------------------------------------------------------------------
+
+/** Theme color keys cycled by agent-name hash. Identity, not state. */
+export const AGENT_COLOR_KEYS = [
+	"accent",
+	"warning",
+	"success",
+	"muted",
+] as const;
+
+/** tmux 256-colour counterparts of AGENT_COLOR_KEYS (cyan, orange, green, gray). */
+const AGENT_ANSI_COLORS = [45, 214, 114, 245];
+
+/** FNV-1a over the profile name — stable across processes for a given name. */
+export function agentColorIndex(name: string): number {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < name.length; i++) {
+		hash ^= name.charCodeAt(i);
+		hash = Math.imul(hash, 0x01000193) >>> 0;
+	}
+	return hash % AGENT_COLOR_KEYS.length;
+}
+
+export function agentColorKey(name: string): string {
+	return AGENT_COLOR_KEYS[agentColorIndex(name)];
+}
+
+export function agentAnsiColor(name: string): number {
+	return AGENT_ANSI_COLORS[agentColorIndex(name)];
+}
+
+function elapsedMsOf(
+	startedAt?: string | number,
+	finishedAt?: string | number,
+): number | null {
+	if (startedAt == null) return null;
+	const end =
+		typeof finishedAt === "number"
+			? finishedAt
+			: typeof finishedAt === "string"
+				? new Date(finishedAt).getTime()
+				: Date.now();
+	const start =
+		typeof startedAt === "number" ? startedAt : new Date(startedAt).getTime();
+	return end - start;
+}
+
 export function formatElapsed(
 	startedAt?: string | number,
 	finishedAt?: string | number,
 ): string {
-	if (startedAt == null) return "";
-	const diff =
-		(typeof finishedAt === "number"
-			? finishedAt
-			: typeof finishedAt === "string"
-				? new Date(finishedAt).getTime()
-				: Date.now()) -
-		(typeof startedAt === "number" ? startedAt : new Date(startedAt).getTime());
+	const diff = elapsedMsOf(startedAt, finishedAt);
+	if (diff == null) return "";
 	if (diff < 1000) return `${diff}ms`;
 	if (diff < 60_000) return `${(diff / 1000).toFixed(1)}s`;
 	if (diff < 3_600_000) {
@@ -305,6 +373,8 @@ export function truncateVisibleWidth(text: string, maxVisible: number): string {
 export interface WidgetTask {
 	taskId: string;
 	agent: string;
+	/** Stable identity color key derived from the agent name. */
+	agentColor: string;
 	state: string;
 	objective?: string;
 	model: string;
@@ -313,6 +383,12 @@ export interface WidgetTask {
 	tokenCount: number;
 	percent: number | null;
 	elapsed: string;
+	/** Raw elapsed milliseconds — deadline-fraction math in statsParts. */
+	elapsedMs?: number;
+	/** Per-task time budget in seconds; null/undefined = unlimited. */
+	timeoutSeconds?: number | null;
+	/** Estimated USD cost of the run so far; 0 = no pricing data (not shown). */
+	cost?: number;
 	activity?: string;
 	compactionCount?: number;
 	result?: string;
@@ -340,6 +416,7 @@ export function toWidgetTask(status: {
 	return {
 		taskId: status.taskId,
 		agent: status.agent,
+		agentColor: agentColorKey(status.agent),
 		state: status.state,
 		model: status.model,
 		objective: (status as any).objective,
@@ -354,6 +431,12 @@ export function toWidgetTask(status: {
 		tokenCount: status.usage?.totalTokens ?? 0,
 		percent: status.contextUsage?.percent ?? null,
 		elapsed: formatElapsed(status.startedAt, status.finishedAt),
+		elapsedMs: elapsedMsOf(status.startedAt, status.finishedAt) ?? undefined,
+		timeoutSeconds:
+			typeof (status as any).timeoutSeconds === "number"
+				? (status as any).timeoutSeconds
+				: null,
+		cost: costTotalOf((status as any).usage?.cost) || undefined,
 		activity: status.activity,
 		compactionCount: status.compactionCount,
 		result: status.result,
@@ -384,6 +467,16 @@ function tokenSegment(task: WidgetTask, theme?: WidgetTheme): string {
 		: tokenText;
 }
 
+function deadlineSegment(task: WidgetTask, theme?: WidgetTheme): string {
+	const budget = Math.round(task.timeoutSeconds ?? 0);
+	const label = `⏱ ${task.elapsed}/${budget}s`;
+	if (!theme) return label;
+	const fraction =
+		task.elapsedMs != null && budget > 0 ? task.elapsedMs / (budget * 1000) : 0;
+	const color = fraction >= 0.95 ? "error" : fraction >= 0.8 ? "warning" : "dim";
+	return theme.fg(color, label);
+}
+
 function statsParts(task: WidgetTask, theme?: WidgetTheme): string[] {
 	const parts: string[] = [];
 	if (task.turns > 0) {
@@ -393,7 +486,19 @@ function statsParts(task: WidgetTask, theme?: WidgetTheme): string[] {
 		parts.push(`${task.tools} tool use${task.tools === 1 ? "" : "s"}`);
 	}
 	if (task.tokenCount > 0) parts.push(tokenSegment(task, theme));
-	if (task.elapsed) parts.push(task.elapsed);
+	// Cost is only pushed when there is one — formatCost returns "" for runs
+	// with no pricing data rather than printing a measured-and-free "$0.00".
+	const costLabel = formatCost(task.cost ?? 0);
+	if (costLabel) {
+		parts.push(theme ? theme.fg("dim", costLabel) : costLabel);
+	}
+	if (task.elapsed) {
+		parts.push(
+			task.timeoutSeconds != null && task.timeoutSeconds > 0
+				? deadlineSegment(task, theme)
+				: task.elapsed,
+		);
+	}
 	return parts;
 }
 
@@ -487,7 +592,12 @@ export function renderTaskRow(
 	}: { frame: number; theme?: WidgetTheme; width?: number },
 ): string[] {
 	const icon = iconFor(task.state, frame, theme);
-	const agent = theme?.bold ? theme.bold(task.agent) : task.agent;
+	// Agent name carries the identity color (badge-like); state coloring
+	// stays on the icon so identity and status never read as each other.
+	const boldName = theme?.bold ? theme.bold(task.agent) : task.agent;
+	const agent = task.agentColor && theme
+		? theme.fg(task.agentColor, boldName)
+		: boldName;
 	const objective = task.objective
 		? ` (${theme ? theme.fg("muted", task.objective) : task.objective})`
 		: "";
@@ -524,7 +634,13 @@ export function renderTaskRow(
 export interface WidgetRun {
 	runId: string;
 	startedAt: string;
-	tasks: Array<{ taskId: string; agent: string; objective: string }>;
+	tasks: Array<{
+		taskId: string;
+		agent: string;
+		objective: string;
+		/** Per-task time budget in seconds, when configured. */
+		timeoutSeconds?: number;
+	}>;
 	statuses: Record<string, { state: string }>;
 }
 
@@ -535,8 +651,10 @@ function widgetRunToWidgetTasks(run: WidgetRun): WidgetTask[] {
 			...raw,
 			taskId: t.taskId,
 			agent: t.agent,
+			timeoutSeconds: t.timeoutSeconds,
 			// Task objectives can contain arbitrary multi-line prompt content.
-			// Keep the persistent live widget to agent state and stats only.
+			// Keep the persistent live widget to agent state and stats only
+			// (renderProgress passes objectives explicitly for inline updates).
 			model: "",
 		} as any);
 	});
@@ -719,6 +837,9 @@ export function renderSectionHeading(
 			const tok = formatTokens(status.usage.totalTokens).replace(" tok", " token");
 			segs += ` · ${tok}`;
 		}
+		// Cost only when there is one to show (no pricing data → omitted).
+		const total = costTotalOf((status.usage as any).cost);
+		if (total > 0) segs += ` · ${formatCost(total)}`;
 	}
 	return segs + " ===";
 }

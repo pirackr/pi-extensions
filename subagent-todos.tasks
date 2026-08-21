@@ -5,19 +5,27 @@ Order below is priority order from the review; items marked done get a [x].
 
 ## Quick wins (render.ts + a few call sites in index.ts)
 
-- [ ] 1. Cost display everywhere
+- [x] 1. Cost display everywhere
       We aggregate usage.cost.total but never render it. Add `~$0.0042` to
       statsParts(), renderSummaryResults, renderNotification, plus a batch
       total in the combined toast (`3 agents · ~$0.042`). Rule: print NOTHING
       when there is no pricing data (never `$0.00`); `<$0.0001` floor;
       cents minimum / 4 decimals max.
+      Done: formatCost()/costTotalOf() in render.ts; flows into widget rows,
+      notifications, section headings (full mode) via statsParts/heading;
+      summary-mode Cost line now conditional + formatted; batch toast total
+      prepended when >1 agents and total >0.
 
-- [ ] 2. Deadline visibility
+- [x] 2. Deadline visibility
       timed_out is our signature failure mode and it is invisible until hit.
       Show `⏱ 4.1s / 300s` in the stats line; tint warning >80% of budget,
       error >95%. Data: profile.timeoutSeconds / config.defaultTimeoutSeconds
       already flow into RunnerRequest.timeoutMs — plumb into TaskStatus or
       keep in PreparedTask and pass alongside statuses.
+      Done: timeouts map built from prepared tasks in execute(); passed via
+      WidgetRun.tasks + renderProgress param; deadlineSegment() renders
+      `⏱ elapsed/budgets` dim/warning/error; unlimited rows unchanged.
+      Tests: __tests__/render.test.ts.
 
 - [ ] 3. Toast latency fix
       flushPendingNotifications fires only when the LAST run finishes; a fast
@@ -42,10 +50,14 @@ Order below is priority order from the review; items marked done get a [x].
       - Optional `cancel` param on run_subagents keyed by taskId so the MODEL
         can stop a hung subagent without killing the whole call.
 
-- [ ] 6. Per-agent identity colors
+- [x] 6. Per-agent identity colors
       Hash profile name -> small stable palette for badge/icon in widget rows,
       notifications, AND the agent's tmux pane-border-format so pane and
       widget row correspond visually.
+      Done: FNV-1a hash → AGENT_COLOR_KEYS (theme) + AGENT_ANSI_COLORS
+      (tmux 256-colour); agent name colored in themed task rows; one-shot
+      `select-pane -P fg=colourN` per pane at launch. State coloring stays
+      on the icon so identity ≠ status. Tests: __tests__/render.test.ts.
 
 - [ ] 7. Prompt noise in full-mode results
       renderResults echoes system prompt + task prompt per task (50KB cap).

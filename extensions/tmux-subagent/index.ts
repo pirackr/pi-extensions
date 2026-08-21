@@ -45,6 +45,9 @@ import {
 	renderTaskRow,
 	toWidgetTask,
 	truncateVisibleWidth,
+	agentAnsiColor,
+	costTotalOf,
+	formatCost,
 	type ParsedCoordinatorResult,
 	type WidgetRun,
 	type WidgetTheme,
@@ -74,6 +77,11 @@ export {
 	renderSectionHeading,
 	renderTaskRow,
 	toWidgetTask,
+	formatCost,
+	costTotalOf,
+	agentColorKey,
+	agentAnsiColor,
+	AGENT_COLOR_KEYS,
 } from "./render.ts";
 export type {
 	CoordinatorSummary,
@@ -588,6 +596,7 @@ export function renderProgress(
 	windowId: string,
 	statuses: TaskStatus[],
 	objectives?: Record<string, string>,
+	timeouts?: Record<string, number>,
 ): string {
 	const counts = statuses.reduce<Record<string, number>>((acc, status) => {
 		acc[status.state] = (acc[status.state] || 0) + 1;
@@ -612,6 +621,8 @@ export function renderProgress(
 		const widgetTask = toWidgetTask(status as TaskStatusLike);
 		const objective = objectives?.[status.taskId];
 		if (objective) widgetTask.objective = objective;
+		const timeout = timeouts?.[status.taskId];
+		if (timeout != null) widgetTask.timeoutSeconds = timeout;
 		rows.push(...renderTaskRow(widgetTask, { frame }));
 	}
 
@@ -714,14 +725,19 @@ export async function validateAndExportSummaryResults(
 
 type Notifier = (message: string, type?: "info" | "warning" | "error") => void;
 
-const pendingNotifications: { text: string; type: "info" | "error" }[] = [];
+const pendingNotifications: {
+	text: string;
+	type: "info" | "error";
+	cost: number;
+}[] = [];
 
 /** Queue a terminal-task toast; flushed later by flushPendingNotifications. */
 function queueTerminalNotification(
 	text: string,
 	type: "info" | "error",
+	cost = 0,
 ): void {
-	pendingNotifications.push({ text, type });
+	pendingNotifications.push({ text, type, cost });
 }
 
 /**
@@ -734,7 +750,13 @@ function queueTerminalNotification(
 function flushPendingNotifications(notify: Notifier | undefined): void {
 	if (!notify || pendingNotifications.length === 0) return;
 	const batch = pendingNotifications.splice(0);
-	const combined = batch.map((n) => n.text).join("\n\n──────────\n\n");
+	const totalCost = batch.reduce((sum, n) => sum + n.cost, 0);
+	const parts = batch.map((n) => n.text);
+	// Batch total on top so multi-agent fan-outs don't have to be added up.
+	if (batch.length > 1 && totalCost > 0) {
+		parts.unshift(`${batch.length} agents · ${formatCost(totalCost)}`);
+	}
+	const combined = parts.join("\n\n──────────\n\n");
 	const level = batch.some((n) => n.type === "error") ? "error" : "info";
 	notify(combined, level);
 }
@@ -999,6 +1021,7 @@ export default function (pi: ExtensionAPI) {
 					taskId: p.taskId,
 					agent: p.task.agent,
 					objective: p.task.objective,
+					timeoutSeconds: p.timeoutSeconds,
 				})),
 				statuses: Object.fromEntries(statuses.map((s) => [s.taskId, s] as const)),
 			});
@@ -1019,6 +1042,10 @@ export default function (pi: ExtensionAPI) {
 			const objectives = Object.fromEntries(
 				prepared.map((p) => [p.taskId, p.task.objective] as const),
 			);
+			// Per-task time budgets for deadline display in progress rows.
+			const timeouts = Object.fromEntries(
+				prepared.map((p) => [p.taskId, p.timeoutSeconds] as const),
+			);
 
 			const emitUpdate = () => {
 				// Increment frame for widget animation (Tasks 6-9)
@@ -1034,6 +1061,7 @@ export default function (pi: ExtensionAPI) {
 								windowId,
 								statuses,
 								objectives,
+								timeouts,
 							),
 						},
 					],
@@ -1225,6 +1253,22 @@ export default function (pi: ExtensionAPI) {
 							"#{pane_title}",
 						]),
 					);
+					// Per-pane border color from the agent's stable identity color so
+					// a pane and its widget row read as the same agent at a glance.
+					for (let index = 0; index < launchedPaneIds.length; index++) {
+						const spec = panes[index];
+						if (!spec) continue;
+						const paneId = launchedPaneIds[index];
+						bestEffort(() =>
+							tmuxExec([
+								"select-pane",
+								"-P",
+								"-t",
+								paneId,
+								`fg=colour${agentAnsiColor(spec.agent)}`,
+							]),
+						);
+					}
 				}
 
 				let lastProgress = "";
@@ -1276,6 +1320,7 @@ export default function (pi: ExtensionAPI) {
 									queueTerminalNotification(
 										renderNotification(notified).join("\n"),
 										type,
+										costTotalOf(status.usage?.cost),
 									);
 								}
 							}
@@ -1306,10 +1351,10 @@ export default function (pi: ExtensionAPI) {
 								? statuses.find((s) => s.taskId === taskId)
 								: undefined;
 							if (!paneStatus) continue;
-							const paneTitle = renderPaneTitle(
-								toWidgetTask(paneStatus as TaskStatusLike),
-								{ frame },
-							);
+							const paneTask = toWidgetTask(paneStatus as TaskStatusLike);
+							const paneTimeout = timeouts[paneStatus.taskId];
+							if (paneTimeout != null) paneTask.timeoutSeconds = paneTimeout;
+							const paneTitle = renderPaneTitle(paneTask, { frame });
 							const state = paneTitleState.get(paneId) ?? {
 								lastTitle: "",
 								lastPushAt: 0,

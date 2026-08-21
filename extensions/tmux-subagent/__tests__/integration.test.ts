@@ -157,7 +157,10 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 			.map((a) => a[3]);
 	const panePushes = () =>
 		tmuxArgs()
-			.filter((a) => a[0] === "select-pane")
+			// Title pushes are `select-pane -T <title> -t <pane>`; border-style
+			// setup is a one-shot `select-pane -P -t <pane> fg=colourN` and must
+			// not count toward title throttling.
+			.filter((a) => a[0] === "select-pane" && a[1] === "-T")
 			.map((a) => a[2]);
 	const footerCalls = () =>
 		ctx.ui.setStatus.mock.calls.filter(
@@ -213,7 +216,10 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 					if (args?.[0] === "-V") {
 						cb(null, "3.4.0", "");
 					} else {
-						if (args?.[0] === "select-pane") pushTimes.push(Date.now());
+						// Only title pushes are throttled; -P border styling is one-shot.
+						if (args?.[0] === "select-pane" && args?.[1] === "-T") {
+							pushTimes.push(Date.now());
+						}
 						cb(null, "", "");
 					}
 				} else {
@@ -479,6 +485,11 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 			"pane-border-format",
 			"#{pane_title}",
 		]);
+		// One-shot per-pane identity color from the agent-name hash (#6).
+		const borderStyles = () =>
+			tmuxArgs().filter((a) => a[0] === "select-pane" && a[1] === "-P");
+		expect(borderStyles()).toHaveLength(1);
+		expect(borderStyles()[0].join(" ")).toMatch(/^select-pane -P -t \S+ fg=colour\d+$/);
 		expect(panePushes()).toHaveLength(1);
 		expect(panePushes()[0]).toContain("worker");
 

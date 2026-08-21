@@ -440,20 +440,25 @@ export function renderStatsRow(task: WidgetTask): string {
 	return statsLine(task);
 }
 
+/** Theme color key for a task state — shared by icon and text styling. */
+function stateColor(state: string): string {
+	switch (state) {
+		case "succeeded":
+			return "success";
+		case "failed":
+		case "timed_out":
+			return "error";
+		case "cancelled":
+			return "dim";
+		default:
+			return "accent";
+	}
+}
+
 function iconFor(state: string, frame: number, theme?: WidgetTheme): string {
 	const ch = statusIcon(state as any, frame);
 	if (!theme) return ch;
-	switch (state) {
-		case "succeeded":
-			return theme.fg("success", ch);
-		case "failed":
-		case "timed_out":
-			return theme.fg("error", ch);
-		case "cancelled":
-			return theme.fg("dim", ch);
-		default:
-			return theme.fg("accent", ch);
-	}
+	return theme.fg(stateColor(state), ch);
 }
 
 function truncateActivity(s: string): string {
@@ -675,6 +680,14 @@ export function renderNotification(task: WidgetTask): string[] {
 	return lines;
 }
 
+/**
+ * Render a per-task section heading for result blocks.
+ *
+ * Accepts an optional WidgetTheme so user-facing surfaces (tool-result
+ * components, future viewers) get the same state coloring as widget rows.
+ * The default remains plain text: headings embedded in model-facing tool
+ * results must stay ANSI-free.
+ */
 export function renderSectionHeading(
 	status:
 		| {
@@ -685,9 +698,13 @@ export function renderSectionHeading(
 				usage?: { totalTokens?: number; turns?: number };
 		  }
 		| RenderStatus,
+	{ theme }: { theme?: WidgetTheme } = {},
 ): string {
-	const icon = statusIcon(status.state as any, 0);
-	let segs = `=== ${icon} ${status.agent} · ${status.taskId} · ${status.state}`;
+	const icon = iconFor(status.state as any, 0, theme);
+	const stateText = theme
+		? theme.fg(stateColor(status.state as any), status.state)
+		: status.state;
+	let segs = `=== ${icon} ${status.agent} · ${status.taskId} · ${stateText}`;
 	if (status.usage) {
 		if (status.usage.turns) segs += ` — ${status.usage.turns} turns`;
 		if (status.usage.totalTokens) {

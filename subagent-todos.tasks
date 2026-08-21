@@ -1,0 +1,77 @@
+# tmux-subagent UI/UX improvements
+
+Source: comparison vs tintinweb/pi-subagents (cloned at /tmp/pi-subagents).
+Order below is priority order from the review; items marked done get a [x].
+
+## Quick wins (render.ts + a few call sites in index.ts)
+
+- [ ] 1. Cost display everywhere
+      We aggregate usage.cost.total but never render it. Add `~$0.0042` to
+      statsParts(), renderSummaryResults, renderNotification, plus a batch
+      total in the combined toast (`3 agents · ~$0.042`). Rule: print NOTHING
+      when there is no pricing data (never `$0.00`); `<$0.0001` floor;
+      cents minimum / 4 decimals max.
+
+- [ ] 2. Deadline visibility
+      timed_out is our signature failure mode and it is invisible until hit.
+      Show `⏱ 4.1s / 300s` in the stats line; tint warning >80% of budget,
+      error >95%. Data: profile.timeoutSeconds / config.defaultTimeoutSeconds
+      already flow into RunnerRequest.timeoutMs — plumb into TaskStatus or
+      keep in PreparedTask and pass alongside statuses.
+
+- [ ] 3. Toast latency fix
+      flushPendingNotifications fires only when the LAST run finishes; a fast
+      agent's result is invisible until its slowest sibling ends. Debounce
+      ~2–5s after each terminal transition instead. Worst case two toasts
+      merge, best case results arrive when they happen.
+
+- [ ] 4. Rich collapsed tool result
+      `⎿ Done` says nothing to the user OR the orchestrator model. Render:
+      `⎿ ✓ succeeded · 12.4k tok · $0.008 · 41s · artifacts: /tmp/pi-subagent-x`
+      and first line of errorMessage on failure. All data already in
+      details.results. NOTE: keep model-facing plain text ANSI-free — style
+      only the renderResult component (user-facing).
+
+## Medium effort
+
+- [ ] 5. Lean into tmux (our differentiator)
+      - Persistent attach hint in widget footer: `attach: tmux attach -t pi-subagents:@N`
+      - `/subagents` slash command: list runs; actions = attach/switch
+        (`tmux switch-client -t` inside tmux, print command otherwise),
+        kill task, copy transcript path.
+      - Optional `cancel` param on run_subagents keyed by taskId so the MODEL
+        can stop a hung subagent without killing the whole call.
+
+- [ ] 6. Per-agent identity colors
+      Hash profile name -> small stable palette for badge/icon in widget rows,
+      notifications, AND the agent's tmux pane-border-format so pane and
+      widget row correspond visually.
+
+- [ ] 7. Prompt noise in full-mode results
+      renderResults echoes system prompt + task prompt per task (50KB cap).
+      The coordinator wrote the task; drop the system prompt echo entirely,
+      keep task prompt behind expanded view. pi-subagents echoes neither.
+
+- [ ] 8. Smarter widget overflow
+      renderWidgetLines: (a) finished tasks yield rows to active ones instead
+      of truncating past the 12-line cap; (b) informative overflow:
+      `└─ +3 more · 1 failed`.
+
+## Polish
+
+- [ ] 9. Distinguish `starting` from `running`
+      Both show a spinner today. Dim `(starting)` label until first runner
+      status lands — disambiguates launch failure from model thinking.
+
+- [ ] 10. Artifact pointer in success notifications
+      renderNotification should include result_path for succeeded summary-mode
+      tasks — the single most useful line for research loops.
+
+- [x] 11. Style section headings
+      renderSectionHeading accepts optional WidgetTheme; icon + state word
+      colored with the same mapping as iconFor(). Plain-text default kept —
+      model-facing result text must stay ANSI-free.
+
+- [ ] 12. Window-title elapsed honesty
+      renderWindowTitle computes elapsed from runs[0].startedAt only;
+      sequential batches understate age. Track oldest active run start.

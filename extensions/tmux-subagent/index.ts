@@ -51,6 +51,7 @@ import {
 	toWidgetTask,
 	truncateVisibleWidth,
 	agentAnsiColor,
+	compactObjective,
 	costTotalOf,
 	formatCost,
 	type ParsedCoordinatorResult,
@@ -522,7 +523,14 @@ export function renderSubagentToolCall(
 	}
 
 	const block = tasks
-		.map((task) => `▸ ${theme.bold?.(task.agent) ?? task.agent}`)
+		.map((task) => {
+			const label = theme.bold?.(task.agent) ?? task.agent;
+			// Mirror the live-widget rows: agent + compacted one-line objective.
+			const objective = compactObjective(task.objective);
+			return objective
+				? `▸ ${label} ${theme.fg("muted", `(${objective})`)}`
+				: `▸ ${label}`;
+		})
 		.join("\n\n");
 	parts.push(block);
 	return parts.join("\n\n");

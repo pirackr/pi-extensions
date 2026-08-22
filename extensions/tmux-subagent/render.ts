@@ -654,7 +654,7 @@ export interface WidgetRun {
  * Collapse an objective to a single short line for the live widget —
  * objectives are free-text prompts and can span multiple lines.
  */
-function compactObjective(objective?: string): string | undefined {
+export function compactObjective(objective?: string): string | undefined {
 	if (!objective) return undefined;
 	const firstLine =
 		objective

@@ -357,7 +357,7 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 			)
 			.render(100)
 			.join("\n");
-		expect(callText).toBe("▸ worker");
+		expect(callText).toBe("▸ worker (Find the docs)");
 		const batchCallText = tool
 			.renderCall(
 				{
@@ -372,7 +372,7 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 			.render(100)
 			.join("\n");
 		expect(batchCallText).toBe(
-			"▸ worker\n\n▸ scout",
+			"▸ worker (Find the docs)\n\n▸ scout (Verify the tests)",
 		);
 		const liveText = tool
 			.renderResult(

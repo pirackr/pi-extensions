@@ -165,6 +165,21 @@ declare module "@earendil-works/pi-coding-agent" {
 		toolResults: unknown[];
 	}
 
+	export interface InputEvent {
+		type: "input";
+		/** Raw input text, before skill/template expansion. */
+		text: string;
+		images?: unknown;
+		source?: "interactive" | "rpc" | "extension";
+		streamingBehavior?: "steer" | "followUp";
+	}
+
+	export interface InputEventResult {
+		action?: "continue" | "transform" | "handled";
+		text?: string;
+		images?: unknown;
+	}
+
 	export interface AgentSettledEvent {
 		type: "agent_settled";
 	}
@@ -339,6 +354,13 @@ declare module "@earendil-works/pi-coding-agent" {
 				event: SessionCompactEvent,
 				ctx: ExtensionContext,
 			) => void | Promise<void>,
+		): void;
+		on(
+			event: "input",
+			handler: (
+				event: InputEvent,
+				ctx: ExtensionContext,
+			) => void | InputEventResult | Promise<void | InputEventResult>,
 		): void;
 		on(
 			event:

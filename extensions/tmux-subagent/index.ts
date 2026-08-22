@@ -113,6 +113,13 @@ export interface TaskStatusLike {
 }
 
 export const widgetRuns = new Map<string, WidgetRun>();
+/**
+ * Runs that finished but whose widget stays visible above the editor.
+ * The widget keeps showing the final ✓/✗ state until the user sends their
+ * next message (pi.on("input")) or a new run starts — completion summaries
+ * used to flash and vanish the instant the last agent finished.
+ */
+export const finishedRuns: WidgetRun[] = [];
 let frame = 0;
 
 // ---------------------------------------------------------------------------
@@ -122,6 +129,29 @@ function bestEffort<T>(fn: () => Promise<T>): void {
 	fn().catch(() => {
 		// Non-fatal: a tmux failure must never fail the tool.
 	});
+}
+
+/**
+ * Dismiss the finished-agents widget: drop retained finished runs and clear
+ * the TUI widget/footer. No-op when nothing is retained.
+ */
+interface DismissableUI {
+	// Method shorthand keeps parameter checking bivariant, so pi's overloaded
+	// ExtensionUI methods remain assignable to these looser shapes.
+	setWidget?(key: string, widget: unknown): void;
+	setStatus?(key: string, status: unknown): void;
+}
+
+function dismissFinishedWidget(ctx: {
+	mode?: string;
+	ui?: DismissableUI;
+}): void {
+	if (finishedRuns.length === 0) return;
+	finishedRuns.length = 0;
+	if (ctx.mode === "tui") {
+		ctx.ui?.setWidget?.("tmux-subagents", undefined);
+		ctx.ui?.setStatus?.("tmux-subagents", undefined);
+	}
 }
 
 export interface PiInvocation {
@@ -1013,6 +1043,9 @@ export default function (pi: ExtensionAPI) {
 				}),
 			);
 
+			// A new run replaces any finished-runs widget left from the previous one.
+			dismissFinishedWidget(ctx);
+
 			// Widget registry entry (Tasks 6-9)
 			widgetRuns.set(runDir, {
 				runId: path.basename(runDir),
@@ -1199,7 +1232,7 @@ export default function (pi: ExtensionAPI) {
 						widgetTui = tui;
 						return {
 							render(width: number): string[] {
-								return renderWidgetLines([...widgetRuns.values()], {
+								return renderWidgetLines([...widgetRuns.values(), ...finishedRuns], {
 									theme,
 									frame,
 									width,
@@ -1462,20 +1495,20 @@ export default function (pi: ExtensionAPI) {
 					: "";
 				throw new Error(`${message}${artifactNote}`);
 			} finally {
-				// Clean up widget registry (Tasks 6-9)
+				// Retain the finished run in the widget instead of tearing it down:
+				// it keeps showing the final ✓/✗ state (dim "○ Agents" header) until
+				// the user's next message dismisses it — completion summaries used to
+				// flash and disappear the instant the last agent finished.
+				const finishedRun = widgetRuns.get(runDir);
 				widgetRuns.delete(runDir);
+				if (finishedRun) finishedRuns.push(finishedRun);
 
-				// Clear widget and footer only when the last run finishes
 				if (widgetRuns.size === 0) {
 					// All runs done: flush queued completion toasts as one combined
 					// message so pi's toast coalescing can't drop earlier agents.
 					flushPendingNotifications(ctx.ui?.notify);
-					if (ctx.mode === "tui" && ctx.ui?.setWidget) {
-						ctx.ui.setWidget("tmux-subagents", undefined);
-					}
-					if (ctx.ui?.setStatus) {
-						ctx.ui.setStatus("tmux-subagents", undefined);
-					}
+					// Widget and footer intentionally stay visible with final state;
+					// dismissed by pi.on("input") below or when a new run starts.
 					// Restore window name when no more runs (Task 7)
 					if (windowId) {
 						const restoredName = buildWindowName(ctx.cwd ?? process.cwd(), {
@@ -1534,5 +1567,11 @@ export default function (pi: ExtensionAPI) {
 				// Best-effort cleanup.
 			}
 		})();
+	});
+	// Keep the finished-agents widget visible until the user sends their next
+	// message — completion summaries must not flash and vanish (UX fix).
+	pi.on("input", (_event, ctx) => {
+		dismissFinishedWidget(ctx);
+		return { action: "continue" };
 	});
 }

@@ -241,14 +241,14 @@ describe("renderTaskRow", () => {
 	it("matches the pi-subagents agent/description/stats layout", () => {
 		const lines = renderTaskRow({ ...base } as any, { frame: 2 });
 		expect(lines[0]).toBe(
-			"⠹ scout Find relevant docs · 3 turns · 5 tool uses · 12.4k token (8%) · 12.3s",
+			"⠹ scout (Find relevant docs) · 3 turns · 5 tool uses · 12.4k token (8%) · 12.3s",
 		);
 	});
 
 	it("moves stats to continuation lines instead of clipping them at narrow widths", () => {
 		const lines = renderTaskRow({ ...base } as any, { frame: 2, width: 55 });
 		expect(lines).toEqual([
-			"⠹ scout Find relevant docs",
+			"⠹ scout (Find relevant docs)",
 			"3 turns · 5 tool uses · 12.4k token (8%) · 12.3s",
 		]);
 	});

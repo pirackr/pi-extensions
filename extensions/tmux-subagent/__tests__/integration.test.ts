@@ -84,7 +84,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as configMod from "../config.ts";
-import piTmuxSubagent, { widgetRuns } from "../index.ts";
+import piTmuxSubagent, { finishedRuns, widgetRuns } from "../index.ts";
 import { cancelPanes, launchBatch } from "../tmux.ts";
 
 // ---------------------------------------------------------------------------
@@ -101,6 +101,7 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 	let updates: Array<{ content: Array<{ text: string }> }>;
 	let ctx: any;
 	let tool: any;
+	let inputHandlers: Array<(event: any, ctx: any) => unknown>;
 
 	const statusPath = (run: number, task = "task-1") =>
 		`/tmp/pi-subagent-run${run}/status/${task}.json`;
@@ -173,7 +174,9 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		const registered: any[] = [];
 		const mockPi = {
 			registerTool: (t: any) => registered.push(t),
-			on: () => {},
+			on: (event: string, handler: any) => {
+				if (event === "input") inputHandlers.push(handler);
+			},
 		};
 		piTmuxSubagent(mockPi as any);
 		tool = registered.find((t: any) => t.name === "run_subagents");
@@ -185,7 +188,9 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		stderrs = {};
 		pushTimes = [];
 		updates = [];
+		inputHandlers = [];
 		widgetRuns.clear();
+		finishedRuns.length = 0;
 		vi.useFakeTimers();
 		vi.mocked(os.tmpdir).mockReturnValue("/tmp");
 		vi.mocked(os.homedir).mockReturnValue("/home/user");
@@ -284,6 +289,7 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 				},
 			],
 			userConfigPath: "/mock/config.json",
+			projectConfigPath: null,
 		});
 
 		ctx = {
@@ -308,6 +314,7 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 		widgetRuns.clear();
+		finishedRuns.length = 0;
 	});
 
 	it("registers the widget, keeps the footer alive, and clears both when the run finishes", async () => {
@@ -411,16 +418,18 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 			expect(typeof value).toBe("string");
 			expect((value as string).length).toBeGreaterThan(0);
 		}
-		// ... then cleared exactly once together with the widget.
-		expect(ctx.ui.setWidget).toHaveBeenLastCalledWith(
-			"tmux-subagents",
-			undefined,
-		);
-		expect(ctx.ui.setStatus).toHaveBeenLastCalledWith(
-			"tmux-subagents",
-			undefined,
-		);
+		// ... then stays visible with the final state until the next user
+		// message (the run moves to finishedRuns instead of being torn down).
 		expect(widgetRuns.size).toBe(0);
+		expect(finishedRuns).toHaveLength(1);
+		const lastCall = ctx.ui.setWidget.mock.calls.at(-1) as any[];
+		expect(lastCall[1]).toBeDefined(); // no teardown call
+		// Re-rendering the retained widget shows the dim idle header + ✓ row.
+		const doneLines = lastCall[1]({ requestRender: () => {} }, theme)
+			.render(100)
+			.join("\n");
+		expect(doneLines).toContain("○ Agents");
+		expect(doneLines).toContain("✓ worker");
 
 		// Inline progress rows reached the UI with the attach block + objective.
 		const lastText = updates[updates.length - 1].content[0].text;
@@ -680,7 +689,7 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 			undefined,
 		);
 
-		// Second run finishes — both cleared exactly once.
+		// Second run finishes — widget and footer stay alive with final state.
 		statuses[statusPath(2)] = statusJson("task-1", "succeeded");
 		await settle(300);
 		await exec2;
@@ -688,6 +697,31 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		expect(setWidgetCalls.filter(([, c]) => typeof c === "function").length).toBe(
 			2,
 		); // one registration per run
+		expect(setWidgetCalls.at(-1)[1]).toBeDefined(); // no teardown call
+		expect(ctx.ui.setStatus).not.toHaveBeenCalledWith(
+			"tmux-subagents",
+			undefined,
+		);
+		expect(widgetRuns.size).toBe(0);
+		expect(finishedRuns).toHaveLength(2);
+	});
+
+	it("dismisses the finished-agents widget on the user's next message", async () => {
+		statuses[statusPath(1)] = statusJson("task-1", "succeeded");
+		await tool.execute(
+			"call-1",
+			{ tasks: [{ agent: "worker", objective: "Find the docs" }] },
+			new AbortController().signal,
+			(u: any) => updates.push(u),
+			ctx,
+		);
+		expect(finishedRuns).toHaveLength(1);
+
+		// Simulate the user sending their next message.
+		for (const handler of inputHandlers) {
+			handler({ type: "input", text: "next", source: "interactive" }, ctx);
+		}
+		expect(finishedRuns).toHaveLength(0);
 		expect(ctx.ui.setWidget).toHaveBeenLastCalledWith(
 			"tmux-subagents",
 			undefined,
@@ -696,6 +730,12 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 			"tmux-subagents",
 			undefined,
 		);
-		expect(widgetRuns.size).toBe(0);
+
+		// A second dismissal is a harmless no-op.
+		const callsAfterFirst = ctx.ui.setWidget.mock.calls.length;
+		for (const handler of inputHandlers) {
+			handler({ type: "input", text: "again", source: "interactive" }, ctx);
+		}
+		expect(ctx.ui.setWidget.mock.calls.length).toBe(callsAfterFirst);
 	});
 });

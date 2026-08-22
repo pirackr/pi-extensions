@@ -1074,6 +1074,7 @@ Recommended next action: retry
 				},
 			],
 			userConfigPath: "/mock/config.json",
+			projectConfigPath: null,
 		});
 		const registered: any[] = [];
 		const mockPi = {
@@ -1122,6 +1123,7 @@ Recommended next action: retry
 				},
 			],
 			userConfigPath: "/mock/config.json",
+			projectConfigPath: null,
 		});
 		const registered: any[] = [];
 		const mockPi = {
@@ -1194,6 +1196,7 @@ Recommended next action: retry
 				},
 			],
 			userConfigPath: "/mock/config.json",
+			projectConfigPath: null,
 		});
 		const registered: any[] = [];
 		const mockPi = {

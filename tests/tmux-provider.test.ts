@@ -756,7 +756,7 @@ describe("renderSummaryResults", () => {
 			"On-disk transcript: /tmp/pi-subagent-abc/output/task-1.jsonl",
 		);
 		expect(text).toContain("Tokens: 165");
-		expect(text).toContain("Cost: $0.0033");
+		expect(text).toContain("Cost: ~$0.0033");
 		expect(text).toContain("Turns: 3");
 		expect(text).not.toContain("DONT SHOW THIS");
 	});

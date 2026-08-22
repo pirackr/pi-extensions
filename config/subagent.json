@@ -1,0 +1,23 @@
+{
+  "models": {
+    "strong": "x-preview-f-free",
+    "eval": "mimo-v2.5-free",
+    "light": "x-preview-f-free"
+  },
+  "childExtensions": [
+    "../extensions/web-search/index.ts"
+  ],
+  "toolAccess": {
+    "web_lookup": "read",
+    "fetch_web": "read"
+  },
+  "agentDirs": [],
+  "loadContextFiles": true,
+  "defaultTimeoutSeconds": 300,
+  "webSearchMaxLookups": 0,
+  "webSearchMaxFetches": 0,
+  "maxConcurrent": 10,
+  "notificationGroupWaitSeconds": 30,
+  "soloPreviewCharacters": 500,
+  "groupPreviewCharacters": 300
+}

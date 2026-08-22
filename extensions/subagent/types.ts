@@ -52,7 +52,7 @@ export interface ResolvedProfile {
 	readonly thinking: string;
 	readonly tools: string[];
 	readonly access: AgentAccess;
-	readonly timeoutSeconds: number;
+	readonly timeoutSeconds: number | null;
 	readonly systemPrompt: string;
 	readonly source: string;
 }

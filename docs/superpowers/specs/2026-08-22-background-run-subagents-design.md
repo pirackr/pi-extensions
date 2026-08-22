@@ -1,5 +1,8 @@
 # Background `run_subagents` — design
 
+> **Superseded:** replaced by
+> [`2026-08-22-subagent-extension-rewrite-design.md`](./2026-08-22-subagent-extension-rewrite-design.md).
+
 ## Goal
 
 Add a `run_in_background` mode to `run_subagents` that matches the

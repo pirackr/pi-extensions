@@ -650,6 +650,21 @@ export interface WidgetRun {
 	statuses: Record<string, { state: string }>;
 }
 
+/**
+ * Collapse an objective to a single short line for the live widget —
+ * objectives are free-text prompts and can span multiple lines.
+ */
+function compactObjective(objective?: string): string | undefined {
+	if (!objective) return undefined;
+	const firstLine =
+		objective
+			.split("\n")
+			.find((line) => line.trim())
+			?.trim() ?? "";
+	if (!firstLine) return undefined;
+	return firstLine.length > 64 ? `${firstLine.slice(0, 63)}…` : firstLine;
+}
+
 function widgetRunToWidgetTasks(run: WidgetRun): WidgetTask[] {
 	return run.tasks.map((t) => {
 		const raw = run.statuses[t.taskId] ?? { state: "starting" };
@@ -658,9 +673,9 @@ function widgetRunToWidgetTasks(run: WidgetRun): WidgetTask[] {
 			taskId: t.taskId,
 			agent: t.agent,
 			timeoutSeconds: t.timeoutSeconds,
-			// Task objectives can contain arbitrary multi-line prompt content.
-			// Keep the persistent live widget to agent state and stats only
-			// (renderProgress passes objectives explicitly for inline updates).
+			// Show a compacted one-line objective in the row header so the
+			// widget reads as "agent (doing X)" instead of a bare agent name.
+			objective: compactObjective(t.objective),
 			model: "",
 		} as any);
 	});

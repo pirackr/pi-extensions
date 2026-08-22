@@ -343,7 +343,8 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		const lines = component.render(100).join("\n");
 		expect(lines).toContain("● Agents");
 		expect(lines).toContain("worker");
-		expect(lines).not.toContain("Find the docs");
+		// The widget shows a compacted one-line objective next to the agent.
+		expect(lines).toContain("(Find the docs)");
 		expect(lines).toContain("5 tool uses");
 		expect(lines).toContain("12.4k token (8%)");
 

@@ -324,7 +324,7 @@ describe("renderWidgetLines", () => {
 			statuses,
 		}) as any;
 
-	it("keeps arbitrary multi-line objectives out of the persistent widget", () => {
+	it("collapses multi-line objectives to their first line in the widget", () => {
 		const runs = [
 			makeRun(
 				[
@@ -339,8 +339,22 @@ describe("renderWidgetLines", () => {
 		];
 		const lines = renderWidgetLines(runs, { frame: 0, width: 80 });
 		expect(lines[0]).toBe("● Agents");
-		expect(lines[1]).toBe("└─ ⠋ scout");
+		expect(lines[1]).toBe("└─ ⠋ scout (Do not use tools.)");
 		expect(lines.join("\n")).not.toContain("coordinator-summary");
+	});
+
+	it("truncates long objectives to a compact one-liner", () => {
+		const longObjective = "a".repeat(100);
+		const lines = renderWidgetLines(
+			[
+				makeRun(
+					[{ taskId: "t1", agent: "scout", objective: longObjective }],
+					{ t1: { state: "running" } },
+				),
+			],
+			{ frame: 0, width: 200 },
+		);
+		expect(lines[1]).toBe(`└─ ⠋ scout (${  "a".repeat(63)}…)`);
 	});
 
 	it("caps at 12 lines and reports hidden agents", () => {
@@ -372,10 +386,8 @@ describe("renderWidgetLines", () => {
 			),
 		];
 		const text = renderWidgetLines(runs, { frame: 0, width: 80 }).join("\n");
-		expect(text).toContain("├─ ⠋ worker");
-		expect(text).toContain("└─ ✓ scout");
-		expect(text).not.toContain("worker a");
-		expect(text).not.toContain("scout b");
+		expect(text).toContain("├─ ⠋ worker (a)");
+		expect(text).toContain("└─ ✓ scout (b)");
 		expect(text).not.toContain("Run 2");
 	});
 
@@ -391,7 +403,7 @@ describe("renderWidgetLines", () => {
 		expect(lines[0]).toBe("[accent:● Agents]");
 		expect(lines[1]).toContain("[accent:⠋]");
 		expect(lines[1]).toContain("[bold:scout]");
-		expect(lines[1]).not.toContain("Find docs");
+		expect(lines[1]).toContain("[muted:Find docs]");
 	});
 
 	it("wraps live-widget stats onto a continuation line at narrow widths", () => {
@@ -409,7 +421,7 @@ describe("renderWidgetLines", () => {
 			),
 		];
 		const lines = renderWidgetLines(runs, { frame: 0, width: 45 });
-		expect(lines).toContain("└─ ⠋ scout");
+		expect(lines).toContain("└─ ⠋ scout (Find docs)");
 		expect(lines).toContain("   3 turns · 5 tool uses · 12.4k token (8%)");
 	});
 

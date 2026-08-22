@@ -387,7 +387,16 @@ export function createArtifactStore(
 			for (const entry of entries) {
 				if (!isShortId(entry)) continue;
 				const info = await lstat(join(subagentsRoot, entry));
-				if (info.isSymbolicLink() || !info.isDirectory()) continue;
+				if (info.isSymbolicLink()) {
+					throw new Error(
+						`refusing to follow symlink in scan: ${join(subagentsRoot, entry)}`,
+					);
+				}
+				if (!info.isDirectory()) {
+					throw new Error(
+						`unexpected non-directory in scan: ${join(subagentsRoot, entry)}`,
+					);
+				}
 				const manifest = await readJsonSecure<AgentManifest>(
 					join(subagentsRoot, entry, STATUS_FILE),
 				);
@@ -403,6 +412,9 @@ export function createArtifactStore(
 		},
 
 		async writeStatus(update: StatusUpdate): Promise<AgentManifest> {
+			if (!isShortId(update.agentId)) {
+				throw new Error(`invalid agent id for writeStatus: ${String(update.agentId)}`);
+			}
 			const existing = await readJsonSecure<AgentManifest>(
 				statusPath(update.agentId),
 			);
@@ -424,6 +436,9 @@ export function createArtifactStore(
 		},
 
 		async publishTerminal(agentId: string, result: TerminalResult): Promise<void> {
+			if (!isShortId(agentId)) {
+				throw new Error(`invalid agent id for publishTerminal: ${String(agentId)}`);
+			}
 			const existing = await readJsonSecure<AgentManifest>(
 				statusPath(agentId),
 			);

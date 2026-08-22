@@ -18,7 +18,7 @@
 // mutation of its own beyond the injected collision checks.
 
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
 
 import { isShortId } from "./types.ts";
@@ -175,6 +175,18 @@ export interface ResolveParentIdentityOptions {
 	 * existence check; callers may layer tmux evidence here.
 	 */
 	collisionFor?: (id: string) => boolean | Promise<boolean>;
+	/**
+	 * Canonicalize a path (resolve symlinks, `..`, and repeated separators)
+	 * before deriving the project slug. Defaults to a safe `fs.realpath`
+	 * wrapper: when canonicalization fails — for example the working directory
+	 * does not exist yet — the input is returned unchanged so a missing cwd
+	 * never blocks identity resolution.
+	 *
+	 * Injectable so the canonicalization step can be exercised deterministically
+	 * without a live symlink on disk. When overridden, callers are responsible
+	 * for a correct canonicalization.
+	 */
+	canonicalize?: (path: string) => Promise<string>;
 }
 
 /**
@@ -196,7 +208,18 @@ export async function resolveParentIdentity(
 	options: ResolveParentIdentityOptions,
 ): Promise<ParentIdentity> {
 	const tmpRoot = options.tmpRoot ?? DEFAULT_TMP_ROOT;
-	const slugValue = options.projectSlug ?? projectSlug(options.cwd);
+	// Derive the slug from a *canonical* working directory so symlinks and
+	// `..` cannot redirect the artifact root off its expected location.
+	// `projectSlug` stays a pure helper; canonicalization happens here at the
+	// call boundary where the filesystem dependency belongs.
+	const canonicalize = options.canonicalize ?? safeCanonicalize;
+	let slugSource: string;
+	try {
+		slugSource = await canonicalize(options.cwd);
+	} catch {
+		slugSource = options.cwd;
+	}
+	const slugValue = options.projectSlug ?? projectSlug(slugSource);
 	const randomBytes = options.randomBytes ?? nodeRandomBytes;
 	const allocate = options.allocateShortId ?? allocateShortId;
 
@@ -235,6 +258,22 @@ export async function resolveParentIdentity(
 	const artifactRoot = join(tmpRoot, slugValue, tmuxSession);
 
 	return Object.freeze({ id, tmuxSession, tmpRoot, projectSlug: slugValue, artifactRoot });
+}
+
+/**
+ * Canonicalize a path by resolving symlinks, `..`, and repeated separators.
+ *
+ * This is the default {@link ResolveParentIdentityOptions.canonicalize} used
+ * by {@link resolveParentIdentity}. It never throws: when `fs.realpath` fails
+ * — for example the working directory does not exist yet — the input is
+ * returned unchanged so a missing cwd never blocks identity resolution.
+ */
+async function safeCanonicalize(path: string): Promise<string> {
+	try {
+		return await realpath(path);
+	} catch {
+		return path;
+	}
 }
 
 /**

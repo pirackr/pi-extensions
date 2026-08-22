@@ -193,6 +193,38 @@ describe("resolveParentIdentity", () => {
 		expect(identity.id).toMatch(/^[a-z0-9]{4}$/);
 		expect(identity.id).not.toBe("NOT_AN_ID");
 	});
+
+	it("derives the project slug from the canonical cwd, not the raw cwd", async () => {
+		// An injected canonicalizer stands in for a real symlink resolution: the
+		// raw cwd must never reach projectSlug; only the canonical path may.
+		const identity = await resolveParentIdentity(
+			baseOptions({
+				cwd: "/home/a/project",
+				tmuxCurrentSession: () => null,
+				readSessionId: () => "a7k2",
+				canonicalize: async (p) => p.replace("/home/a/project", "/canonical/project"),
+			}),
+		);
+		const canonical = projectSlug("/canonical/project");
+		expect(identity.projectSlug).toBe(canonical);
+		expect(identity.projectSlug).not.toBe(projectSlug("/home/a/project"));
+	});
+
+	it("canonicalization failure falls back to the raw cwd", async () => {
+		const identity = await resolveParentIdentity(
+			baseOptions({
+				tmuxCurrentSession: () => null,
+				readSessionId: () => "a7k2",
+				canonicalize: async () => {
+					throw new Error("boom");
+				},
+				collisionFor: async () => false,
+			}),
+		);
+		expect(identity.projectSlug).toBe(
+			projectSlug(resolve("/tmp/CoolProject")),
+		);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -534,5 +566,95 @@ describe("ArtifactStore cancellation and delivery", () => {
 	it("returns null when reading a missing delivery record", async () => {
 		await store.enqueue(makeManifest("4vnr", 1, "queued", 1), {});
 		expect(await store.readDelivery("4vnr")).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// ArtifactStore — agent id boundary enforcement (fix round 1, Finding 1)
+//
+// publishTerminal and writeStatus must reject non-short ids so a caller cannot
+// derive a path that escapes the subagents/<id> boundary.
+// ---------------------------------------------------------------------------
+
+describe("ArtifactStore id boundary enforcement", () => {
+	beforeEach(async () => {
+		const identity: ParentIdentity = {
+			id: "a7k2",
+			tmuxSession: "pi-a7k2",
+			tmpRoot: root,
+			projectSlug: "coolproject",
+			artifactRoot: join(root, "coolproject", "pi-a7k2"),
+		};
+		store = createArtifactStore(identity);
+		await store.initializeParent();
+	});
+
+	it("rejects a traversal agentId in writeStatus", async () => {
+		const base = makeManifest("q9xm", 1, "queued", 0);
+		await expect(
+			store.writeStatus({ ...base, agentId: "../evil" }),
+		).rejects.toThrow(/invalid agent id/i);
+	});
+
+	it("rejects a traversal agentId in publishTerminal", async () => {
+		await store.enqueue(makeManifest("q9xm", 1, "queued", 0), {});
+		const result: TerminalResult = {
+			agentId: "q9xm",
+			state: "succeeded",
+			output: "done",
+			usage: { totalTokens: 1, toolUses: 0, durationMs: 10 },
+			finishedAt: 5,
+			terminalReason: null,
+		};
+		await expect(store.publishTerminal("../evil", result)).rejects.toThrow(
+			/invalid agent id/i,
+		);
+	});
+
+	it("rejects a non-short agentId in publishTerminal before touching disk", async () => {
+		// No task exists; the guard must reject before the 'no status' check.
+		await expect(
+			store.publishTerminal("notanid", {
+				agentId: "notanid",
+				state: "failed",
+				output: "x",
+				usage: { totalTokens: 1, toolUses: 0, durationMs: 1 },
+				finishedAt: 1,
+				terminalReason: "x",
+			}),
+		).rejects.toThrow(/invalid agent id/i);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// ArtifactStore.scan — reject symlinked / unexpected entries (fix round 1, Finding 2)
+// ---------------------------------------------------------------------------
+
+describe("ArtifactStore scan rejects non-directory entries", () => {
+	beforeEach(async () => {
+		const identity: ParentIdentity = {
+			id: "a7k2",
+			tmuxSession: "pi-a7k2",
+			tmpRoot: root,
+			projectSlug: "coolproject",
+			artifactRoot: join(root, "coolproject", "pi-a7k2"),
+		};
+		store = createArtifactStore(identity);
+		await store.initializeParent();
+	});
+
+	it("rejects a symlinked subagent entry (does not follow it)", async () => {
+		await mkdir(join(store.artifactRoot, "subagents"), { recursive: true });
+		const link = join(store.artifactRoot, "subagents", "q9xm");
+		await symlink("/etc", link);
+		await expect(store.scan()).rejects.toThrow(/symlink/i);
+	});
+
+	it("rejects a regular file masquerading as a subagent id", async () => {
+		await mkdir(join(store.artifactRoot, "subagents"), { recursive: true });
+		await writeFile(join(store.artifactRoot, "subagents", "q9xm"), "{}", {
+			mode: 0o600,
+		});
+		await expect(store.scan()).rejects.toThrow(/non-directory/i);
 	});
 });

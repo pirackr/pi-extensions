@@ -803,30 +803,6 @@ export function renderPaneTitle(
 	return parts.join(" · ");
 }
 
-export function renderNotification(task: WidgetTask): string[] {
-	const icon = statusIcon(task.state as any, 0);
-	const label = task.objective ?? task.taskId;
-	const outcome =
-		task.state === "succeeded"
-			? "completed"
-			: task.state === "cancelled"
-				? "stopped"
-				: task.state === "timed_out"
-					? "timed out"
-					: "failed";
-	const lines = [`${icon} ${label} ${outcome}`];
-	const stats = renderStatsRow(task);
-	if (stats) lines.push(stats);
-	if (task.result) {
-		lines.push(`${ACTIVITY_GLYPH} ${truncateVisibleWidth(task.result, 120)}`);
-	} else if (task.errorMessage) {
-		lines.push(
-			`${ACTIVITY_GLYPH} ${truncateVisibleWidth(task.errorMessage, 120)}`,
-		);
-	}
-	return lines;
-}
-
 /**
  * Render a per-task section heading for result blocks.
  *

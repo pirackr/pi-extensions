@@ -45,7 +45,6 @@ import {
 	renderWidgetLines,
 	renderWindowTitle,
 	renderPaneTitle,
-	renderNotification,
 	renderSectionHeading,
 	renderTaskRow,
 	toWidgetTask,
@@ -79,7 +78,6 @@ export {
 	renderWidgetLines,
 	renderWindowTitle,
 	renderPaneTitle,
-	renderNotification,
 	renderSectionHeading,
 	renderTaskRow,
 	toWidgetTask,
@@ -766,44 +764,6 @@ export async function validateAndExportSummaryResults(
 // Default export — register the run_subagents tool
 // ---------------------------------------------------------------------------
 
-type Notifier = (message: string, type?: "info" | "warning" | "error") => void;
-
-const pendingNotifications: {
-	text: string;
-	type: "info" | "error";
-	cost: number;
-}[] = [];
-
-/** Queue a terminal-task toast; flushed later by flushPendingNotifications. */
-function queueTerminalNotification(
-	text: string,
-	type: "info" | "error",
-	cost = 0,
-): void {
-	pendingNotifications.push({ text, type, cost });
-}
-
-/**
- * Flush queued completion toasts as ONE combined message. Called when the
- * last active run finishes (widgetRuns empty): pi's TUI coalesces
- * back-to-back `info` toasts (showStatus replaces the previous status line),
- * so per-run toasts emitted while sibling runs are still going overwrite each
- * other and earlier agents' results are lost.
- */
-function flushPendingNotifications(notify: Notifier | undefined): void {
-	if (!notify || pendingNotifications.length === 0) return;
-	const batch = pendingNotifications.splice(0);
-	const totalCost = batch.reduce((sum, n) => sum + n.cost, 0);
-	const parts = batch.map((n) => n.text);
-	// Batch total on top so multi-agent fan-outs don't have to be added up.
-	if (batch.length > 1 && totalCost > 0) {
-		parts.unshift(`${batch.length} agents · ${formatCost(totalCost)}`);
-	}
-	const combined = parts.join("\n\n──────────\n\n");
-	const level = batch.some((n) => n.type === "error") ? "error" : "info";
-	notify(combined, level);
-}
-
 export default function (pi: ExtensionAPI) {
 	const { config, profiles, userConfigPath } =
 		loadSubagentConfiguration(extensionDir);
@@ -1071,8 +1031,6 @@ export default function (pi: ExtensionAPI) {
 				statuses: Object.fromEntries(statuses.map((s) => [s.taskId, s] as const)),
 			});
 
-			// Track which task IDs have already been notified (Task 8)
-			const notifiedTaskIds = new Set<string>();
 			let keepArtifacts = true;
 			let launchedPaneIds: string[] = [];
 			const tmuxExec: TmuxExecutor = (args) => runCommand("tmux", args);
@@ -1345,31 +1303,6 @@ export default function (pi: ExtensionAPI) {
 					if (stateChanged) {
 						lastProgress = progress;
 						emitUpdate();
-
-						// Emit notifications on terminal state transitions (Task 8)
-						for (let index = 0; index < statuses.length; index++) {
-							const status = statuses[index];
-							if (
-								TERMINAL_STATES.has(status.state) &&
-								!notifiedTaskIds.has(status.taskId)
-							) {
-								notifiedTaskIds.add(status.taskId);
-								const notified = toWidgetTask(status as TaskStatusLike);
-								const objective = objectives[status.taskId];
-								if (objective) notified.objective = objective;
-								if (ctx.mode === "tui" && ctx.ui?.notify) {
-									const type =
-										status.state === "succeeded" || status.state === "cancelled"
-											? ("info" as const)
-											: ("error" as const);
-									queueTerminalNotification(
-										renderNotification(notified).join("\n"),
-										type,
-										costTotalOf(status.usage?.cost),
-									);
-								}
-							}
-						}
 					}
 
 					// Best-effort window title rename on state change or ≥5s (Task 7)
@@ -1516,9 +1449,6 @@ export default function (pi: ExtensionAPI) {
 				if (finishedRun) finishedRuns.push(finishedRun);
 
 				if (widgetRuns.size === 0) {
-					// All runs done: flush queued completion toasts as one combined
-					// message so pi's toast coalescing can't drop earlier agents.
-					flushPendingNotifications(ctx.ui?.notify);
 					// Widget and footer intentionally stay visible with final state;
 					// dismissed by pi.on("input") below or when a new run starts.
 					// Restore window name when no more runs (Task 7)

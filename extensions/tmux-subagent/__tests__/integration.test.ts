@@ -520,51 +520,6 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		}
 	});
 
-	it("emits exactly one notification per terminal task with the right type", async () => {
-		// One task per call: two concurrent single-task runs. Toasts are held
-		// until the LAST run finishes, then flushed as ONE combined message
-		// (pi's TUI would otherwise coalesce/overwrite back-to-back toasts).
-		statuses[statusPath(1, "task-1")] = statusJson("task-1", "running");
-		statuses[statusPath(2, "task-1")] = statusJson("task-1", "running");
-		const exec1 = tool.execute(
-			"call-1",
-			{ tasks: [{ agent: "worker", objective: "Do A" }] },
-			new AbortController().signal,
-			(u: any) => updates.push(u),
-			ctx,
-		);
-		await settle(10);
-		const exec2 = tool.execute(
-			"call-2",
-			{ tasks: [{ agent: "worker", objective: "Do B" }] },
-			new AbortController().signal,
-			(u: any) => updates.push(u),
-			ctx,
-		);
-		// Let both runs register their widget entries before either finishes,
-		// otherwise the first run's cleanup would see an empty registry and
-		// flush early.
-		await settle(20);
-		statuses[statusPath(1, "task-1")] = statusJson("task-1", "failed");
-		statuses[statusPath(2, "task-1")] = statusJson("task-1", "succeeded");
-		await settle(300);
-		await exec1;
-		await exec2;
-
-		const notifies = ctx.ui.notify.mock.calls;
-		// Combined into a single toast by the notify debounce queue.
-		expect(notifies).toHaveLength(1);
-		const [combinedText, combinedType] = notifies[0];
-		expect(combinedType).toBe("error"); // batch contains a failure
-		expect(combinedText).toContain("✗");
-		expect(combinedText).toContain("✓");
-		expect(combinedText).toContain("Do A");
-		expect(combinedText).toContain("Do B");
-		expect(combinedText).toContain("boom");
-		// The aggregate window title flags the failure.
-		expect(renames().some((r) => r.includes("✗"))).toBe(true);
-	});
-
 	it("rejects multi-task batches and points at parallel single-task calls", async () => {
 		await expect(
 			tool.execute(
@@ -603,9 +558,6 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		const text = result.content[0].text;
 		expect(text).toContain("boom-error");
 		expect(text).toContain("=== ✗ worker · task-1 · failed");
-		const notifies = ctx.ui.notify.mock.calls;
-		expect(notifies).toHaveLength(1);
-		expect(notifies[0][1]).toBe("error");
 	});
 
 	it("summary mode keeps the coordinator envelope intact below the new heading", async () => {

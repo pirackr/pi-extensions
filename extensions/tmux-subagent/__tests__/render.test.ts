@@ -3,7 +3,6 @@ import {
 	renderTaskRow,
 	renderPaneTitle,
 	renderSectionHeading,
-	renderNotification,
 	formatCost,
 	costTotalOf,
 	agentColorKey,
@@ -186,11 +185,6 @@ describe("cost in rendered surfaces (#1)", () => {
 		},
 		});
 		expect(heading).toContain("· ~$0.0042 ===");
-	});
-
-	it("notifications surface the estimate via stats row", () => {
-		const lines = renderNotification(makeTask({ cost: 1.24 }));
-		expect(lines.join("\n")).toContain("~$1.24");
 	});
 });
 

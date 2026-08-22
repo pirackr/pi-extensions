@@ -13,7 +13,6 @@ import {
 	renderWidgetLines,
 	renderWindowTitle,
 	renderPaneTitle,
-	renderNotification,
 	renderSectionHeading,
 	renderSummaryResults,
 	statusIcon,
@@ -540,44 +539,6 @@ describe("renderPaneTitle", () => {
 			frame: 2,
 		});
 		expect(line).toBe("⠹ worker · 3 turns");
-	});
-});
-
-// ---------------------------------------------------------------------------
-// renderNotification
-// ---------------------------------------------------------------------------
-
-describe("renderNotification", () => {
-	const base = {
-		taskId: "t1",
-		agent: "scout",
-		state: "succeeded",
-		model: "test",
-		objective: "Find relevant docs",
-		turns: 3,
-		tools: 5,
-		tokenCount: 12400,
-		percent: 8,
-		elapsed: "12.3s",
-	};
-
-	it("renders a Claude-style completion title", () => {
-		const lines = renderNotification({ ...base } as any);
-		expect(lines[0]).toBe("✓ Find relevant docs completed");
-	});
-
-	it("labels failures", () => {
-		const lines = renderNotification(
-			{ ...base, state: "failed" } as any,
-		);
-		expect(lines[0]).toBe("✗ Find relevant docs failed");
-	});
-
-	it("falls back to taskId when objective is absent", () => {
-		const lines = renderNotification(
-			{ ...base, objective: undefined } as any,
-		);
-		expect(lines[0]).toBe("✓ t1 completed");
 	});
 });
 

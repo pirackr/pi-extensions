@@ -1,0 +1,288 @@
+// Durable public contracts for the `subagent` extension.
+//
+// This module freezes the type/state surface that every later task
+// (storage, scheduler, runner, manager, UI, registration) consumes. It is
+// intentionally dependency-free and fully JSON-serializable so that manifests,
+// profile snapshots, and delivery records can be written to durable storage
+// and later reconciled without importing any runtime dependency.
+//
+// It owns nothing research-specific: profiles are owner-neutral snapshots and
+// are contributed by generic providers (including research) through
+// {@link ProfileContribution}.
+
+/**
+ * Lifecycle state of a single subagent task.
+ *
+ * The only legal edges between these states are enforced by
+ * {@link assertTransition}; see the state machine in the design spec:
+ *
+ * ```
+ * queued → starting → running → succeeded
+ *                             → failed
+ *                             → timed_out
+ *                             → cancelled
+ *                             → interrupted
+ * queued → cancelled
+ * ```
+ */
+export type TaskStatus =
+	| "queued"
+	| "starting"
+	| "running"
+	| "succeeded"
+	| "failed"
+	| "timed_out"
+	| "cancelled"
+	| "interrupted";
+
+/** Tool access level, shared with the config/type surface. */
+export type AgentAccess = "read" | "shell" | "write";
+
+/**
+ * A resolved profile snapshot captured at enqueue time.
+ *
+ * Snapshotting at enqueue means later configuration or profile edits never
+ * mutate queued or running work. It is owner-neutral (no research imports) and
+ * fully serializable so it can live inside a durable manifest.
+ */
+export interface ResolvedProfile {
+	readonly name: string;
+	readonly description: string;
+	readonly model: string;
+	readonly thinking: string;
+	readonly tools: string[];
+	readonly access: AgentAccess;
+	readonly timeoutSeconds: number;
+	readonly systemPrompt: string;
+	readonly source: string;
+}
+
+/**
+ * A generic, owner-contributed profile descriptor. Other extensions (including
+ * research) append already-resolved descriptors with an owner ID through this
+ * contract; the subagent extension never interprets the owner.
+ */
+export interface ProfileContribution {
+	readonly owner: string;
+	readonly profile: ResolvedProfile;
+}
+
+/**
+ * The normalized input contract for the `Agent` tool.
+ *
+ * `description` is a short UI label (never the whole prompt), `prompt` is the
+ * complete task contract, `subagent_type` selects a configured profile, and
+ * `run_in_background` defaults to `true`.
+ */
+export interface AgentRequest {
+	readonly description: string;
+	readonly prompt: string;
+	readonly subagent_type: string;
+	readonly run_in_background: boolean;
+}
+
+/**
+ * Coerce a loose caller-supplied request into a strict, frozen
+ * {@link AgentRequest}.
+ *
+ * Required string fields are validated; `run_in_background` defaults to `true`
+ * when omitted or `null`. This is the single source of truth for background
+ * defaulting and must not be duplicated elsewhere.
+ *
+ * @throws when any required field is missing or not a non-empty string, or when
+ *   `run_in_background` is present but not a boolean.
+ */
+export function normalizeAgentRequest(
+	input: unknown,
+): AgentRequest {
+	if (typeof input !== "object" || input === null) {
+		throw new Error("agent request must be an object");
+	}
+
+	const raw = input as Record<string, unknown>;
+
+	if (typeof raw.description !== "string" || raw.description.length === 0) {
+		throw new Error("description is required and must be a non-empty string");
+	}
+	if (typeof raw.prompt !== "string" || raw.prompt.length === 0) {
+		throw new Error("prompt is required and must be a non-empty string");
+	}
+	if (
+		typeof raw.subagent_type !== "string" ||
+		raw.subagent_type.length === 0
+	) {
+		throw new Error(
+			"subagent_type is required and must be a non-empty string",
+		);
+	}
+
+	const runInBackground = normalizeRunInBackground(raw.run_in_background);
+
+	return Object.freeze({
+		description: raw.description,
+		prompt: raw.prompt,
+		subagent_type: raw.subagent_type,
+		run_in_background: runInBackground,
+	});
+}
+
+function normalizeRunInBackground(value: unknown): boolean {
+	if (value === undefined || value === null) {
+		return true;
+	}
+	if (typeof value !== "boolean") {
+		throw new Error("run_in_background must be a boolean");
+	}
+	return value;
+}
+
+/**
+ * Returns `true` only for a four-character, lowercase, collision-free
+ * identifier such as `a7k2` or `q9xm` (lowercase `a-z0-9`).
+ */
+export function isShortId(value: unknown): value is string {
+	return typeof value === "string" && /^[a-z0-9]{4}$/.test(value);
+}
+
+/**
+ * Legal lifecycle edges keyed by source state. The runner is the sole writer of
+ * terminal states; the manager may write `interrupted` only after reconciling a
+ * nonterminal task.
+ */
+const ALLOWED_TRANSITIONS: Partial<Record<TaskStatus, readonly TaskStatus[]>> =
+{
+	queued: ["starting", "cancelled"],
+	starting: ["running"],
+	running: ["succeeded", "failed", "timed_out", "cancelled", "interrupted"],
+};
+
+/**
+ * Throw unless `from → to` is an allowed lifecycle edge. Terminal states accept
+ * no outgoing transition, so any edge out of them throws.
+ *
+ * @throws `illegal state transition: <from> → <to>` for forbidden edges.
+ */
+export function assertTransition(from: TaskStatus, to: TaskStatus): void {
+	const allowed = ALLOWED_TRANSITIONS[from];
+	if (allowed === undefined || !allowed.includes(to)) {
+		throw new Error(`illegal state transition: ${from} → ${to}`);
+	}
+}
+
+/** Usage and cost collected at settlement, matching the notification schema. */
+export interface Usage {
+	readonly totalTokens: number;
+	readonly toolUses: number;
+	readonly durationMs: number;
+}
+
+/**
+ * The final captured output of a settled task. Published before the terminal
+ * `status.json`, making terminal status the commit marker.
+ */
+export interface TerminalResult {
+	readonly agentId: string;
+	readonly state: "succeeded" | "failed" | "timed_out" | "cancelled" |
+		"interrupted";
+	readonly output: string;
+	readonly usage: Usage;
+	readonly finishedAt: number;
+	readonly terminalReason: string | null;
+}
+
+/** Durable FIFO queue is the set of task manifests with state `queued`. */
+export type QueueState = "queued";
+
+/** Delivery lifecycle of a group notification (at-most-once dispatch). */
+export type DeliveryState = "pending" | "dispatching" | "delivered" | "consumed";
+
+/**
+ * Independent-of-artifacts delivery tracking. Serialized with result
+ * consumption; `dispatching` is persisted before sending so a crash in the
+ * tiny interval is treated as already-attempted.
+ */
+export interface DeliveryRecord {
+	readonly groupId: string;
+	readonly agentIds: string[];
+	readonly state: DeliveryState;
+	readonly notificationId: string;
+	readonly createdAt: number;
+	readonly dispatchedAt: number | null;
+	readonly consumedAt: number | null;
+}
+
+/**
+ * Durable manifest for a single task. Every field is present at publication;
+ * nullable fields stay `null` until the relevant lifecycle point. The resolved
+ * profile is snapshotted at enqueue and never mutated afterward.
+ */
+export interface AgentManifest {
+	/** Schema version; bump only on breaking durable-shape changes. */
+	readonly schema: number;
+	/** Monotonic revision under a short-lived registry lease. */
+	readonly revision: number;
+	readonly parentId: string;
+	readonly agentId: string;
+	/** Present only for explicitly enabled nested tasks. */
+	readonly parentAgentId: string | null;
+	/** Immutable origin conversation UUID. */
+	readonly origin: string;
+	/** Notification group token, or `null` for foreground tasks. */
+	readonly groupId: string | null;
+	readonly description: string;
+	readonly prompt: string;
+	readonly profile: ResolvedProfile;
+	readonly state: TaskStatus;
+	/** Monotonic FIFO sequence allocated under a registry lease. */
+	readonly sequence: number;
+	readonly queuedAt: number;
+	readonly startedAt: number | null;
+	readonly heartbeatAt: number | null;
+	readonly finishedAt: number | null;
+	readonly runnerPid: number | null;
+	/** Process-start identity of the runner process group. */
+	readonly processStart: string;
+	readonly tmuxSession: string | null;
+	readonly tmuxWindow: string | null;
+	readonly timeoutSeconds: number | null;
+	readonly terminalReason: string | null;
+}
+
+/**
+ * Returned by a background `Agent` call: durable enqueue confirmation plus,
+ * when a window has started, the tmux target and artifact path.
+ */
+export interface AgentReceipt {
+	readonly agentId: string;
+	readonly state: TaskStatus;
+	readonly tmuxSession: string | null;
+	readonly tmuxWindow: string | null;
+	readonly attachCommand: string | null;
+	readonly artifactDir: string | null;
+}
+
+/**
+ * Returned by `get_subagent_result`. Terminal results carry the complete
+ * captured output; non-terminal results carry live activity, elapsed time, and
+ * usage. `notFound` scopes the result to the current parent registry.
+ */
+export interface ResultResponse {
+	readonly agentId: string;
+	readonly state: TaskStatus;
+	readonly result: TerminalResult | null;
+	readonly activity: string | null;
+	readonly elapsedMs: number | null;
+	readonly usage: Usage | null;
+	readonly tmuxTarget: string | null;
+	readonly artifactDir: string | null;
+	readonly consumed: boolean;
+	readonly notFound: boolean;
+}
+
+/** Returned by `stop_subagent`. */
+export interface StopResponse {
+	readonly agentId: string;
+	readonly state: TaskStatus;
+	readonly stopped: boolean;
+	readonly message: string;
+}

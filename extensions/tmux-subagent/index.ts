@@ -22,7 +22,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	InputEvent,
+	InputEventResult,
+} from "@earendil-works/pi-coding-agent";
 import {
 	buildWindowName,
 	cancelPanes,
@@ -1570,7 +1575,17 @@ export default function (pi: ExtensionAPI) {
 	});
 	// Keep the finished-agents widget visible until the user sends their next
 	// message — completion summaries must not flash and vanish (UX fix).
-	pi.on("input", (_event, ctx) => {
+	// Cast to an explicit call signature: some type-checking programs resolve
+	// a stale ambient declaration of ExtensionAPI that predates the "input"
+	// event overload, even though the runtime always supports it.
+	const onInput = pi.on as (
+		event: "input",
+		handler: (
+			event: InputEvent,
+			ctx: ExtensionContext,
+		) => void | InputEventResult | Promise<void | InputEventResult>,
+	) => void;
+	onInput("input", (_event, ctx) => {
 		dismissFinishedWidget(ctx);
 		return { action: "continue" };
 	});

@@ -68,6 +68,74 @@ export interface ProfileContribution {
 }
 
 /**
+ * Durable, JSON-serializable metadata returned by
+ * {@link ProfilePolicyAdapter.reserve}. The scheduler/persistence layer writes
+ * this to disk so the same reservation can be released idempotently after a
+ * crash; it is intentionally owner-neutral and research-free.
+ */
+export interface ProfileReservation {
+	/** Owner that acquired the reservation. */
+	readonly owner: string;
+	/** Reserved profile name. */
+	readonly profile: string;
+	/** Idempotency token; repeated reservations for the same owner+profile match. */
+	readonly token: string;
+	/** Epoch milliseconds the reservation was first acquired. */
+	readonly acquiredAt: number;
+}
+
+/**
+ * Generic, owner-neutral terminal context handed to
+ * {@link ProfilePolicyAdapter.settle}. It carries only enough information for
+ * an owner to release its reservation, retain artifacts, and export results
+ * idempotently — never research-specific data. Owners interpret it through
+ * their own {@link ProfilePolicyAdapter}; the subagent extension does not.
+ */
+export interface ProfileSettlement {
+	/** Owner that holds the reservation. */
+	readonly owner: string;
+	/** Reserved profile name the settlement resolves. */
+	readonly profile: string;
+	/** Settled task identifier. */
+	readonly agentId: string;
+	/** Terminal lifecycle state. */
+	readonly state: TerminalResult["state"];
+	/** Human-readable terminal reason, or `null`. */
+	readonly terminalReason: string | null;
+}
+
+/**
+ * Owner-neutral concurrency/reservation policy contract.
+ *
+ * This is the shared durable type that Task 1 freezes and Task 4 instantiates:
+ * `types.ts` owns the contract, the configuration layer builds in-memory
+ * adapters, and later tasks consume it. The generic subagent extension never
+ * interprets an owner's policy — it only calls {@link reserve} at enqueue and
+ * {@link settle} at settlement, both of which are idempotent.
+ */
+export interface ProfilePolicyAdapter {
+	/**
+	 * Acquire a concurrency reservation for `profile`, owned by `owner`.
+	 *
+	 * Resolves to durable, JSON-serializable reservation metadata the
+	 * persistence layer can write to disk. Idempotent for the same
+	 * `(owner, profile)`: re-serving an existing reservation must not count
+	 * concurrency twice.
+	 */
+	reserve(owner: string, profile: string): Promise<ProfileReservation>;
+
+	/**
+	 * Release the reservation and — when the owner's policy requires it —
+	 * retain and export the settled artifacts.
+	 *
+	 * Receives only generic {@link ProfileSettlement}; the owner never sees
+	 * research-specific data here. Idempotent: a settlement that has already
+	 * been applied is a no-op on a second call.
+	 */
+	settle(settlement: ProfileSettlement): Promise<void>;
+}
+
+/**
  * The normalized input contract for the `Agent` tool.
  *
  * `description` is a short UI label (never the whole prompt), `prompt` is the
@@ -219,6 +287,12 @@ export interface DeliveryRecord {
 export interface AgentManifest {
 	/** Schema version; bump only on breaking durable-shape changes. */
 	readonly schema: number;
+	/**
+	 * Monotonic-or-random generation token distinguishing successive durable
+	 * publishes of this record (see spec security requirements). Required so
+	 * stale reclamation and generation checks converge on one winner.
+	 */
+	readonly generation: string;
 	/** Monotonic revision under a short-lived registry lease. */
 	readonly revision: number;
 	readonly parentId: string;

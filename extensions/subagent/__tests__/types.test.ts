@@ -3,6 +3,9 @@ import {
 	AgentRequest,
 	AgentManifest,
 	ProfileContribution,
+	ProfilePolicyAdapter,
+	ProfileReservation,
+	ProfileSettlement,
 	ResolvedProfile,
 	TaskStatus,
 	TerminalResult,
@@ -226,6 +229,7 @@ const SAMPLE_PROFILE: ResolvedProfile = {
 
 const SAMPLE_MANIFEST: AgentManifest = {
 	schema: 1,
+	generation: "g1a2b3c4",
 	revision: 1,
 	parentId: "a7k2",
 	agentId: "q9xm",
@@ -274,7 +278,7 @@ describe("ProfileContribution", () => {
 
 describe("AgentManifest required identity fields", () => {
 	it("always carries schema version, revision, and process-start identity", () => {
-		const { schema, revision, processStart, parentId, agentId } =
+		const { schema, generation, revision, processStart, parentId, agentId } =
 			SAMPLE_MANIFEST;
 		expect(schema).toBeTypeOf("number");
 		expect(revision).toBeTypeOf("number");
@@ -282,20 +286,110 @@ describe("AgentManifest required identity fields", () => {
 		expect(processStart.length).toBeGreaterThan(0);
 		expect(parentId).toBeTypeOf("string");
 		expect(agentId).toBeTypeOf("string");
+		// generation is a required serializable token present in the record.
+		expect(generation).toBeTypeOf("string");
+		expect(generation.length).toBeGreaterThan(0);
 	});
 
-	it("round-trips through JSON intact", () => {
+	it("keeps generation intact across a JSON round-trip", () => {
 		const round = JSON.parse(
 			JSON.stringify(SAMPLE_MANIFEST),
 		) as AgentManifest;
 		expect(round).toEqual(SAMPLE_MANIFEST);
-		expect(round.profile).toEqual(SAMPLE_PROFILE);
+		expect(round.generation).toBe(SAMPLE_MANIFEST.generation);
 	});
 });
 
 // ---------------------------------------------------------------------------
 // Downstream contract shapes are present and structurally valid
 // ---------------------------------------------------------------------------
+
+const SAMPLE_RESERVATION: ProfileReservation = {
+	owner: "research",
+	profile: "briefing",
+	token: "tok-99zz",
+	acquiredAt: 1_700_000_000_000,
+};
+
+// A minimal in-memory adapter mirroring the documented idempotent contract.
+class TestProfilePolicyAdapter implements ProfilePolicyAdapter {
+	private held = new Map<string, ProfileReservation>();
+	private settled = new Map<string, ProfileSettlement>();
+
+	async reserve(owner: string, profile: string): Promise<ProfileReservation> {
+		const key = `${owner}::${profile}`;
+		const existing = this.held.get(key);
+		if (existing) return existing; // idempotent: no double count
+		const reservation: ProfileReservation = {
+			owner,
+			profile,
+			token: `tok-${owner}-${profile}`,
+			acquiredAt: Date.now(),
+		};
+		this.held.set(key, reservation);
+		return reservation;
+	}
+
+	async settle(settlement: ProfileSettlement): Promise<void> {
+		const key = `${settlement.owner}::${settlement.profile}`;
+		if (this.settled.has(key)) return; // idempotent: already applied
+		this.settled.set(key, settlement);
+	}
+}
+
+describe("ProfilePolicyAdapter", () => {
+	it("reserve returns durable, JSON-serializable reservation metadata", async () => {
+		const adapter = new TestProfilePolicyAdapter();
+		const reservation = await adapter.reserve("research", "briefing");
+		expect(reservation.owner).toBe("research");
+		expect(reservation.profile).toBe("briefing");
+		expect(typeof reservation.token).toBe("string");
+		expect(reservation.acquiredAt).toBeTypeOf("number");
+		expect(JSON.parse(JSON.stringify(reservation))).toEqual(reservation);
+	});
+
+	it("reserve is idempotent for the same owner+profile (no double count)", async () => {
+		const adapter = new TestProfilePolicyAdapter();
+		const a = await adapter.reserve("research", "briefing");
+		const b = await adapter.reserve("research", "briefing");
+		expect(b).toEqual(a);
+	});
+
+	it("settle receives generic terminal context and is idempotent", async () => {
+		const adapter = new TestProfilePolicyAdapter();
+		await adapter.reserve("research", "briefing");
+		const settlement: ProfileSettlement = {
+			owner: "research",
+			profile: "briefing",
+			agentId: "q9xm",
+			state: "succeeded",
+			terminalReason: null,
+		};
+		await expect(adapter.settle(settlement)).resolves.toBeUndefined();
+		// a second settle on the same reservation is a no-op
+		await expect(adapter.settle(settlement)).resolves.toBeUndefined();
+	});
+
+	it("reserve metadata and settlement are fully JSON-serializable", () => {
+		expect(JSON.parse(JSON.stringify(SAMPLE_RESERVATION))).toEqual(
+			SAMPLE_RESERVATION,
+		);
+		const settlement: ProfileSettlement = {
+			owner: "research",
+			profile: "briefing",
+			agentId: "q9xm",
+			state: "failed",
+			terminalReason: "timed_out",
+		};
+		expect(JSON.parse(JSON.stringify(settlement))).toEqual(settlement);
+	});
+
+	it("exposes reserve and settle as the async policy contract", () => {
+		const adapter: ProfilePolicyAdapter = new TestProfilePolicyAdapter();
+		expect(typeof adapter.reserve).toBe("function");
+		expect(typeof adapter.settle).toBe("function");
+	});
+});
 
 describe("downstream contract shapes", () => {
 	it("TerminalResult is a plain serializable object", () => {

@@ -565,7 +565,7 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		expect(renames().some((r) => r.includes("✗"))).toBe(true);
 	});
 
-	it("rejects multi-task batches and instructs separate calls", async () => {
+	it("rejects multi-task batches and points at parallel single-task calls", async () => {
 		await expect(
 			tool.execute(
 				"call-1",
@@ -579,7 +579,7 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 				(u: any) => updates.push(u),
 				ctx,
 			),
-		).rejects.toThrow(/exactly ONE task per call/);
+		).rejects.toThrow(/exactly ONE task per call[\s\S]*multiple run_subagents tool calls/);
 	});
 
 	it("attaches the stderr tail to failed tasks and surfaces it in the result", async () => {

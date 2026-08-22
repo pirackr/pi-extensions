@@ -876,7 +876,7 @@ export default function (pi: ExtensionAPI) {
 	const Params = Type.Object({
 		tasks: Type.Array(TaskItemSchema, {
 			description:
-				"Exactly ONE task for this call. To run multiple subagents, issue multiple run_subagents tool calls in the same block — they execute concurrently and each renders as its own transcript entry.",
+				"Exactly ONE task for this call. To run several agents concurrently, issue multiple run_subagents tool calls in the same block — they execute concurrently and each renders as its own transcript entry.",
 		}),
 		timeout_seconds: Type.Optional(
 			Type.Number({
@@ -900,10 +900,9 @@ export default function (pi: ExtensionAPI) {
 		name: "run_subagents",
 		label: "Tmux Subagents",
 		description:
-			"Run one independently scoped Pi agent in a visible tmux window. " +
-			"To run multiple subagents, issue multiple run_subagents tool calls in the same block — they execute concurrently and each renders as its own transcript entry. " +
+			"Run one independently scoped Pi agent in a visible tmux window. ONE task per call — to run several agents concurrently, issue multiple run_subagents tool calls in the same block; they execute in parallel and each renders as its own transcript entry. " +
 			"The tool owns process isolation, timeouts, cancellation, status capture, and cleanup; chaining remains parent-driven. " +
-			`Configured profiles: ${profileSummary}. User configuration: ${userConfigPath}. For research loops: pass return_mode: "summary" with retain_artifacts: "always" to keep the coordinator context thin — the tool returns digests plus artifact paths, and full outputs stay on disk.`,
+			`Configured profiles: ${profileSummary}. User configuration: ${userConfigPath}. Trusted projects may override models and runtime settings via .pi/tmux-subagent/config.json. For research loops: pass return_mode: "summary" with retain_artifacts: "always" to keep the coordinator context thin — the tool returns digests plus artifact paths, and full outputs stay on disk.`,
 		parameters: Params,
 
 		...createToolRenderers(),
@@ -940,7 +939,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const retainArtifacts =
-				typedParams.retain_artifacts ?? config.retainArtifacts;
+				typedParams.retain_artifacts ?? activeConfig.retainArtifacts;
 			if (!["never", "on_failure", "always"].includes(retainArtifacts)) {
 				throw new Error(
 					'retain_artifacts must be "never", "on_failure", or "always".',

@@ -683,14 +683,14 @@ describe("loadGenericProfilesFromDir", () => {
 
 	it("returns [] for a missing directory", () => {
 		mockExistsSync.mockReturnValue(false);
-		expect(loadGenericProfilesFromDir("/nope", "bundled", {}, {})).toEqual([]);
+		expect(loadGenericProfilesFromDir("/nope", "bundled", {}, {}, 300)).toEqual([]);
 	});
 
 	it("throws for a non-directory path", () => {
 		mockExistsSync.mockReturnValue(true);
 		mockStatSync.mockReturnValue({ isDirectory: () => false } as fs.Stats);
 		expect(() =>
-			loadGenericProfilesFromDir("/file", "bundled", {}, {}),
+			loadGenericProfilesFromDir("/file", "bundled", {}, {}, 300),
 		).toThrow("subagent profile path is not a directory");
 	});
 
@@ -716,6 +716,7 @@ describe("loadGenericProfilesFromDir", () => {
 			"bundled",
 			{ strong: "qwen-strong" },
 			{ read: "read", edit: "write" },
+			300,
 		);
 		expect(result).toHaveLength(1);
 		expect(result[0]).toMatchObject({
@@ -747,6 +748,7 @@ describe("loadGenericProfilesFromDir", () => {
 			"bundled",
 			{},
 			{ read: "read" },
+			300,
 		);
 		expect(result[0].access).toBe("read");
 	});
@@ -769,7 +771,7 @@ describe("loadGenericProfilesFromDir", () => {
 			body: "Prompt.",
 		});
 		expect(() =>
-			loadGenericProfilesFromDir("/agents", "bundled", {}, { edit: "write" }),
+			loadGenericProfilesFromDir("/agents", "bundled", {}, { edit: "write" }, 300),
 		).toThrow("declares access read, but tools require at least write");
 	});
 
@@ -794,6 +796,7 @@ describe("loadGenericProfilesFromDir", () => {
 			"bundled",
 			{},
 			{ read: "read" },
+			300,
 		);
 		expect(result[0].model).toBe("nope");
 	});
@@ -815,7 +818,7 @@ describe("loadGenericProfilesFromDir", () => {
 			body: "Prompt.",
 		});
 		expect(() =>
-			loadGenericProfilesFromDir("/agents", "bundled", {}, { read: "read" }),
+			loadGenericProfilesFromDir("/agents", "bundled", {}, { read: "read" }, 300),
 		).toThrow("unavailable child tools: nope");
 	});
 
@@ -836,7 +839,7 @@ describe("loadGenericProfilesFromDir", () => {
 			body: "Prompt.",
 		});
 		expect(() =>
-			loadGenericProfilesFromDir("/agents", "bundled", {}, { read: "read" }),
+			loadGenericProfilesFromDir("/agents", "bundled", {}, { read: "read" }, 300),
 		).toThrow('Duplicate subagent profile "dup"');
 	});
 });
@@ -1115,6 +1118,76 @@ describe("discoverProfiles", () => {
 		expect(result.profiles.map((p) => p.name)).toEqual(["custom"]);
 		expect(result.profiles[0].source).toBe("custom");
 	});
+
+	// --- timeout snapshot integrity (Fix Round 1) ---------------------------
+
+	function mockGenericWorker() {
+		mockExistsSync.mockImplementation((p: fs.PathLike) =>
+			String(p).includes("/subagents"),
+		);
+		mockStatSync.mockReturnValue({ isDirectory: () => true } as fs.Stats);
+		mockReaddirSync.mockReturnValue([mockDirent("worker.md")]);
+		mockReadFileSync.mockReturnValue(
+			"---\nname: worker\ndescription: A worker agent\nmodel: gpt\ntools: read\n---\n\nYou are a worker.",
+		);
+		mockParseFrontmatter.mockReturnValue({
+			frontmatter: {
+				name: "worker",
+				description: "A worker agent",
+				model: "gpt",
+				tools: "read",
+			},
+			body: "You are a worker.",
+		});
+	}
+
+	it("resolves an omitted generic timeoutSeconds against the loaded config default", () => {
+		mockGenericWorker();
+
+		const loaded = makeLoaded({ config: { defaultTimeoutSeconds: 420 } });
+		const h = createHarness();
+		const result = discoverProfiles(h.pi, loaded, CONTEXT);
+		const worker = result.profiles.find((p) => p.name === "worker")!;
+		// Concrete now — never null — captured from THIS discovery call's config.
+		expect(worker.timeoutSeconds).toBe(420);
+	});
+
+	it("does not mutate an already-discovered generic profile when the config default changes", () => {
+		mockGenericWorker();
+
+		const loaded = makeLoaded({ config: { defaultTimeoutSeconds: 420 } });
+		const h = createHarness();
+		const first = discoverProfiles(h.pi, loaded, CONTEXT);
+		// A later edit to the loaded config must not retro-mutate the snapshot.
+		loaded.config.defaultTimeoutSeconds = 1200;
+		const second = discoverProfiles(h.pi, loaded, CONTEXT);
+
+		expect(first.profiles[0].timeoutSeconds).toBe(420);
+		expect(second.profiles[0].timeoutSeconds).toBe(1200);
+	});
+
+	it("fails closed on an external contribution whose timeoutSeconds is null", () => {
+		const h = createHarness();
+		h.register((env) =>
+		env.contributions.push({
+			owner: "research",
+			profile: {
+				name: "scout",
+				description: "scout",
+				model: "strong",
+				thinking: "high",
+				tools: ["read"],
+				access: "read",
+				timeoutSeconds: null,
+				systemPrompt: "scout",
+				source: "research",
+			},
+		}),
+	);
+	expect(() => discoverProfiles(h.pi, makeLoaded(), CONTEXT)).toThrow(
+		/timeoutSeconds must be an integer/
+	);
+});
 });
 
 function harnessForNoExternal() {

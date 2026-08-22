@@ -576,13 +576,19 @@ function requiredString(
  *
  * @throws on a missing directory (returns `[]`), a non-directory path, a
  *   malformed profile, an invalid model alias, unavailable tools, an access
- *   below the tools’ minimum requirement, or duplicate names.
+ *   below the tools' minimum requirement, or duplicate names.
+ *
+ * An omitted `timeoutSeconds` frontmatter value is resolved against the
+ * `defaultTimeoutSeconds` supplied by the {@link SubagentConfiguration} used for
+ * this exact discovery call, so the resolved snapshot is concrete and later
+ * config edits cannot mutate it.
  */
 export function loadGenericProfilesFromDir(
 	dir: string,
 	source: ResolvedProfile["source"],
 	models: Record<string, string>,
 	toolAccess: Record<string, AgentAccess>,
+	defaultTimeoutSeconds: number,
 ): ResolvedProfile[] {
 	if (!fs.existsSync(dir)) return [];
 	const stat = fs.statSync(dir);
@@ -655,7 +661,7 @@ export function loadGenericProfilesFromDir(
 			);
 		}
 
-		let timeoutSeconds: number | undefined;
+		let timeoutSeconds: number;
 		if (frontmatter.timeoutSeconds !== undefined) {
 			timeoutSeconds = Number(frontmatter.timeoutSeconds);
 			if (
@@ -667,6 +673,11 @@ export function loadGenericProfilesFromDir(
 					`${where} timeoutSeconds must be an integer between 10 and 1800.`,
 				);
 			}
+		} else {
+			// Omitted frontmatter timeout resolves against the concrete default of
+			// the configuration used for this discovery call, keeping the snapshot
+			// immutable against later config edits (never a mutable reference).
+			timeoutSeconds = defaultTimeoutSeconds;
 		}
 
 		const concreteModel = Object.hasOwn(models, modelSetting)
@@ -680,7 +691,7 @@ export function loadGenericProfilesFromDir(
 			thinking: typeof thinking === "string" ? thinking : "off",
 			tools: [...new Set(tools)],
 			access,
-			timeoutSeconds: timeoutSeconds ?? null,
+			timeoutSeconds,
 			systemPrompt: body.trim(),
 			source,
 		});
@@ -738,19 +749,26 @@ export function discoverProfiles(
 	loaded: LoadedSubagentConfiguration,
 	_context: DiscoverProfilesContext,
 ): DiscoveredProfiles {
-	// 1. Generic `.md` sources, concatenated in load order.
+	// 1. Generic `.md` sources, concatenated in load order. Each is resolved
+	//    against the concrete `defaultTimeoutSeconds` of this loaded config so a
+	//    generic profile that omits its own timeout still captures a snapshot
+	//    value — the current default of this exact discovery call, which later
+	//    config edits cannot mutate.
+	const defaultTimeoutSeconds = loaded.config.defaultTimeoutSeconds;
 	const generic: ResolvedProfile[] = [
 		...loadGenericProfilesFromDir(
 			loaded.subagentsDir,
 			"bundled",
 			loaded.config.models,
 			loaded.config.toolAccess,
+			defaultTimeoutSeconds,
 		),
 		...loadGenericProfilesFromDir(
 			loaded.userAgentsDir,
 			"user",
 			loaded.config.models,
 			loaded.config.toolAccess,
+			defaultTimeoutSeconds,
 		),
 		...loaded.config.agentDirs.flatMap((dir) =>
 			loadGenericProfilesFromDir(
@@ -758,6 +776,7 @@ export function discoverProfiles(
 				"custom",
 				loaded.config.models,
 				loaded.config.toolAccess,
+				defaultTimeoutSeconds,
 			),
 		),
 	];
@@ -786,6 +805,15 @@ export function discoverProfiles(
 	for (const profile of genericByName.values())
 		nameOwner.set(profile.name, GENERIC_OWNER);
 	for (const contribution of externalByKey.values()) {
+		// External contributions are already-resolved snapshots: fail closed if a
+		// malformed owner left `timeoutSeconds` absent/null/invalid instead of a
+		// concrete integer, rather than filling in a generic default across
+		// owner boundaries.
+		normalizeScalarNumber(
+			contribution.profile.timeoutSeconds,
+			`external profile "${contribution.profile.name}" timeoutSeconds`,
+			{ min: 10, max: 1800 },
+		);
 		const name = contribution.profile.name;
 		const existing = nameOwner.get(name);
 		if (existing !== undefined && existing !== contribution.owner) {

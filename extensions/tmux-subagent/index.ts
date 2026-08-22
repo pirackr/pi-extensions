@@ -875,17 +875,33 @@ export default function (pi: ExtensionAPI) {
 				return_mode?: "full" | "summary";
 			};
 			const returnMode = (typedParams.return_mode ?? "full") as "full" | "summary";
+			// Project-level override (.pi/tmux-subagent/config.json): when the
+			// project is trusted, re-resolve config + profiles with the project
+			// layer applied (highest precedence) so models, childExtensions,
+			// tool access etc. can be customized per-project.
+			let activeConfig = config;
+			let activeProfiles = profiles;
+			let activeProfileMap = profileMap;
+			if (ctx && typeof ctx.isProjectTrusted === "function") {
+				if (ctx.isProjectTrusted()) {
+					const layered = loadSubagentConfiguration(extensionDir, {
+						projectRoot: ctx.cwd,
+						projectTrusted: true,
+					});
+					activeConfig = layered.config;
+					activeProfiles = layered.profiles;
+					activeProfileMap = new Map(
+						activeProfiles.map((profile) => [profile.name, profile]),
+					);
+				}
+			}
 			if (typedParams.tasks.length === 0) {
 				throw new Error("Provide at least one task.");
 			}
 			if (typedParams.tasks.length > 1) {
 				throw new Error(
-					"run_subagents accepts exactly ONE task per call. " +
-						"To run multiple subagents, issue multiple run_subagents tool calls in the same block — they execute concurrently and each renders as its own transcript entry.",
+					`run_subagents accepts exactly ONE task per call; got ${typedParams.tasks.length}. To run several agents concurrently, re-issue this as multiple run_subagents tool calls in the SAME block — they execute concurrently and each renders as its own transcript entry.`,
 				);
-			}
-			if (typedParams.tasks.length > config.maxTasks) {
-				throw new Error(`At most ${config.maxTasks} task allowed.`);
 			}
 
 			const timeoutOverride = typedParams.timeout_seconds;
@@ -908,7 +924,7 @@ export default function (pi: ExtensionAPI) {
 
 			await runCommand("tmux", ["-V"]);
 			await fs.promises.access(runnerPath, fs.constants.R_OK);
-			for (const childExtension of config.childExtensions) {
+			for (const childExtension of activeConfig.childExtensions) {
 				await fs.promises.access(childExtension, fs.constants.R_OK).catch(() => {
 					throw new Error(`Configured child extension not found: ${childExtension}`);
 				});
@@ -916,10 +932,10 @@ export default function (pi: ExtensionAPI) {
 
 			const prepared = await Promise.all(
 				typedParams.tasks.map(async (task: TaskItem, index: number) => {
-					const profile = profileMap.get(task.agent);
+					const profile = activeProfileMap.get(task.agent);
 					if (!profile)
 						throw new Error(
-							`Unknown agent "${task.agent}". Available agents: ${profiles.map((item) => item.name).join(", ")}.`,
+							`Unknown agent "${task.agent}". Available agents: ${activeProfiles.map((item) => item.name).join(", ")}.`,
 						);
 					const cwdSetting = task.cwd ?? ".";
 					const cwd =
@@ -932,7 +948,9 @@ export default function (pi: ExtensionAPI) {
 					if (!stat.isDirectory())
 						throw new Error(`Task working directory is not a directory: ${cwd}`);
 					const timeoutSeconds =
-						timeoutOverride ?? profile.timeoutSeconds ?? config.defaultTimeoutSeconds;
+						timeoutOverride ??
+						profile.timeoutSeconds ??
+						activeConfig.defaultTimeoutSeconds;
 					return {
 						task,
 						profile,
@@ -1136,12 +1154,12 @@ export default function (pi: ExtensionAPI) {
 						statusPath: path.join(runDir, "status", `${item.taskId}.json`),
 						transcriptPath: path.join(transcriptDir, `${item.taskId}.log`),
 						pi: piInvocation,
-						childExtensions: config.childExtensions,
-						loadContextFiles: config.loadContextFiles,
+						childExtensions: activeConfig.childExtensions,
+						loadContextFiles: activeConfig.loadContextFiles,
 						webSearchMaxLookups:
-							item.task.webSearchMaxLookups ?? config.webSearchMaxLookups,
+							item.task.webSearchMaxLookups ?? activeConfig.webSearchMaxLookups,
 						webSearchMaxFetches:
-							item.task.webSearchMaxFetches ?? config.webSearchMaxFetches,
+							item.task.webSearchMaxFetches ?? activeConfig.webSearchMaxFetches,
 					};
 					requests.push(request);
 					const requestPath = path.join(runDir, "request", `${item.taskId}.json`);

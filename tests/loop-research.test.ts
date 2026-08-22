@@ -80,6 +80,9 @@ function fakeModelRegistry() {
 		{ id: "local/fast", name: "fast", provider: "local", reasoning: false, input: ["text"] },
 		{ id: "local/eval", name: "eval", provider: "local", reasoning: true, input: ["text"] },
 		{ id: "local/light", name: "light", provider: "local", reasoning: false, input: ["text"] },
+		// Concrete targets of the packaged tmux-subagent aliases (config/tmux-subagent.json).
+		{ id: "opencode-zen/x-preview-f-free", name: "x-preview-f-free", provider: "opencode-zen", reasoning: false, input: ["text"] },
+		{ id: "opencode-zen/mimo-v2.5-free", name: "mimo-v2.5-free", provider: "opencode-zen", reasoning: false, input: ["text"] },
 	];
 	return {
 		getAll: () => models,

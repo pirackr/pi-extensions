@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 /**
  * Minimal research-agent shape (inlined from the research config so
@@ -56,6 +56,19 @@ export interface SubagentConfiguration {
 	webSearchMaxLookups: number;
 	/** Default hard cap on fetch_web calls per subagent process (overridable per-task). 0/unset = unlimited. */
 	webSearchMaxFetches: number;
+}
+
+/**
+ * Optional project-layer options for loadSubagentConfiguration.
+ *
+ * When `projectTrusted` is true and `projectRoot` is set, the project layer
+ * at `<projectRoot>/.pi/tmux-subagent/config.json` is loaded and merged with
+ * the highest precedence (packaged < user < project). Untrusted projects
+ * never contribute a layer.
+ */
+export interface ProjectLayerOptions {
+	projectRoot?: string;
+	projectTrusted?: boolean;
 }
 
 interface RawConfiguration {
@@ -377,10 +390,14 @@ export function loadProfilesFromDir(
 	return profiles;
 }
 
-export function loadSubagentConfiguration(extensionDir: string): {
+export function loadSubagentConfiguration(
+	extensionDir: string,
+	options: ProjectLayerOptions = {},
+): {
 	config: SubagentConfiguration;
 	profiles: AgentProfile[];
 	userConfigPath: string;
+	projectConfigPath: string | null;
 } {
 	const packageRoot = path.resolve(extensionDir, "../..");
 	const packageConfigPath = path.join(
@@ -390,50 +407,94 @@ export function loadSubagentConfiguration(extensionDir: string): {
 	);
 	const userRoot = path.join(getAgentDir(), "tmux-subagent");
 	const userConfigPath = path.join(userRoot, "config.json");
+	// Project layer (optional): <projectRoot>/.pi/tmux-subagent/config.json —
+	// highest precedence, only when the project is trusted.
+	const projectConfigPath =
+		options.projectTrusted && options.projectRoot
+			? path.join(
+					options.projectRoot,
+					CONFIG_DIR_NAME,
+					"tmux-subagent",
+					"config.json",
+				)
+			: null;
 	const bundled = readConfiguration(packageConfigPath, true) || {};
 	const user = readConfiguration(userConfigPath, false);
+	const project = projectConfigPath
+		? readConfiguration(projectConfigPath, false)
+		: null;
 	const packageConfigDir = path.dirname(packageConfigPath);
 	const userConfigDir = path.dirname(userConfigPath);
+	const projectConfigDir = projectConfigPath
+		? path.dirname(projectConfigPath)
+		: null;
 
 	const config: SubagentConfiguration = {
 		models: Object.assign(
 			Object.create(null),
 			normalizeModels(bundled.models, "bundled models"),
 			normalizeModels(user?.models, "user models"),
+			normalizeModels(project?.models, "project models"),
 		),
 		childExtensions:
-			user?.childExtensions !== undefined
-				? normalizePaths(user.childExtensions, userConfigDir, "childExtensions")
-				: normalizePaths(
-						bundled.childExtensions,
-						packageConfigDir,
+			project?.childExtensions !== undefined
+				? normalizePaths(
+						project.childExtensions,
+						projectConfigDir!,
 						"childExtensions",
-					),
+					)
+				: user?.childExtensions !== undefined
+					? normalizePaths(
+							user.childExtensions,
+							userConfigDir,
+							"childExtensions",
+						)
+					: normalizePaths(
+							bundled.childExtensions,
+							packageConfigDir,
+							"childExtensions",
+						),
 		toolAccess: mergeToolAccess(
 			BUILTIN_TOOL_ACCESS,
 			normalizeToolAccess(bundled.toolAccess),
 			normalizeToolAccess(user?.toolAccess),
+			normalizeToolAccess(project?.toolAccess),
 		),
 		agentDirs: [
 			...normalizePaths(bundled.agentDirs, packageConfigDir, "agentDirs"),
 			...normalizePaths(user?.agentDirs, userConfigDir, "agentDirs"),
+			...normalizePaths(
+				project?.agentDirs,
+				projectConfigDir ?? ".",
+				"agentDirs",
+			),
 		],
-		loadContextFiles: (user?.loadContextFiles ??
+		loadContextFiles: (project?.loadContextFiles ??
+			user?.loadContextFiles ??
 			bundled.loadContextFiles ??
 			true) as boolean,
-		maxTasks: (user?.maxTasks ?? bundled.maxTasks ?? 4) as number,
-		defaultTimeoutSeconds: (user?.defaultTimeoutSeconds ??
+		maxTasks: (project?.maxTasks ??
+			user?.maxTasks ??
+			bundled.maxTasks ??
+			4) as number,
+		defaultTimeoutSeconds: (project?.defaultTimeoutSeconds ??
+			user?.defaultTimeoutSeconds ??
 			bundled.defaultTimeoutSeconds ??
 			300) as number,
-		retainArtifacts: (user?.retainArtifacts ??
+		retainArtifacts: (project?.retainArtifacts ??
+			user?.retainArtifacts ??
 			bundled.retainArtifacts ??
 			"on_failure") as SubagentConfiguration["retainArtifacts"],
 		webSearchMaxLookups: normalizeWebSearchBudget(
-			user?.webSearchMaxLookups ?? bundled.webSearchMaxLookups,
+			project?.webSearchMaxLookups ??
+				user?.webSearchMaxLookups ??
+				bundled.webSearchMaxLookups,
 			"webSearchMaxLookups",
 		),
 		webSearchMaxFetches: normalizeWebSearchBudget(
-			user?.webSearchMaxFetches ?? bundled.webSearchMaxFetches,
+			project?.webSearchMaxFetches ??
+				user?.webSearchMaxFetches ??
+				bundled.webSearchMaxFetches,
 			"webSearchMaxFetches",
 		),
 	};
@@ -473,7 +534,12 @@ export function loadSubagentConfiguration(extensionDir: string): {
 	if (profileMap.size === 0)
 		throw new Error("No tmux-subagent profiles were discovered.");
 
-	return { config, profiles: [...profileMap.values()], userConfigPath };
+	return {
+		config,
+		profiles: [...profileMap.values()],
+		userConfigPath,
+		projectConfigPath,
+	};
 }
 
 /**

@@ -460,6 +460,12 @@ Wrap up this turn: summarize progress, write partial findings to disk if the pro
 
 	private syncLoopTools(pi: ExtensionAPI): void {
 		const active = new Set(pi.getActiveTools());
+		const isActiveResearch =
+			this.loop?.status === "active" && this.loop?.commandName === "research";
+		// research_checkpoint is part of the /research program protocol —
+		// expose it only while a user-started research run is active.
+		if (isActiveResearch) active.add("research_checkpoint");
+		else active.delete("research_checkpoint");
 		if (this.loop?.status === "active") active.add("complete_loop");
 		else active.delete("complete_loop");
 		pi.setActiveTools(Array.from(active));

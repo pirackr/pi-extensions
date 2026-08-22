@@ -97,7 +97,7 @@ export function registerLoopCommand(
 				opts.isResearch &&
 				RESEARCH_SUBCOMMANDS.has(trimmed.split(/\s+/)[0])
 			) {
-				await routeResearchWorkspaceCommand(trimmed, ctx, engine, opts);
+				await routeResearchWorkspaceCommand(trimmed, ctx, engine, opts, pi);
 				return;
 			}
 
@@ -349,6 +349,7 @@ async function routeResearchWorkspaceCommand(
 	ctx: ExtensionCommandContext,
 	engine: LoopEngine,
 	opts: LoopCommandOptions,
+	pi: ExtensionAPI,
 ): Promise<void> {
 	const projectRoot = ctx.cwd;
 	const transitionsPath = path.join(projectRoot, "transitions.json");
@@ -516,6 +517,19 @@ async function routeResearchWorkspaceCommand(
 					`Resumed ${path.basename(entry.path)} — lease acquired, lifecycle active.`,
 					"info",
 				);
+				// The workspace is resumed — but a loop engine paused at session
+				// start (or by a prior pause) must be re-activated too, or the
+				// autonomous loop can never continue. Only re-activate when the
+				// resumed workspace IS the active loop's workspace — never a
+				// different retained run, and only after this explicit user
+				// invocation of /research resume.
+				if (
+					engine.state?.commandName === "research" &&
+					engine.state?.workingDir === entry.path
+				) {
+					engine.resumeState(Date.now());
+					engine.persist(pi, ctx);
+				}
 			} catch (err) {
 				ctx.ui.notify(
 					`Cannot resume ${path.basename(entry.path)}: ${err instanceof Error ? err.message : String(err)}`,

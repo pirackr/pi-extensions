@@ -36,6 +36,18 @@ The pattern here is that an extension and a skill of the same name are two halve
 
 When adding a feature, decide which half it needs. Guidance-only additions (`customize-pi`, `subagent`, `handoff`, `grill-me`) are skills with no extension.
 
+## Research invocation guard
+
+Research only ever starts or resumes on explicit user invocation — never by the model or by session-restart hooks:
+
+- `/research` (start/resume/loop) are user-typed slash commands; `skills/research/SKILL.md` has `disable-model-invocation: true`.
+- `research_checkpoint` is only **exposed** while a user-started research loop is active (`syncLoopTools` in `extensions/loop/engine.ts` / `index.ts`) and **refuses to execute** otherwise (`commandName !== "research"` guard in the tool's execute).
+- `session_start` pauses any restored active loop for any reason and tells the user to type `/research resume`; it also pauses the retained workspace lifecycle so the resume path is resumable. A restored loop never auto-continues and never queues a continuation.
+- The only way back is the user-typed `/research resume`: it resumes the workspace *and* re-activates the loop engine (`engine.resumeState` + `engine.persist`), which re-exposes the research tools.
+- `routeResearchWorkspaceCommand` takes `pi` so the resume path can persist the re-activated loop state — don't drop that parameter.
+
+Invariant tests live in `tests/research-invocation-guard.test.ts` (restore → paused/no-tools/no-continuation, explicit resume → active/tools/continuation, checkpoint refuses outside a run).
+
 ## web-search extension
 
 Direct API calls — no `open-websearch`, no `npx`, no daemon. Architecture:

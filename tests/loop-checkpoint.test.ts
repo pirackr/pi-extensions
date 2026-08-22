@@ -257,6 +257,7 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 	});
 
 	it("rejects unknown profiles with isError", async () => {
+		await startResearch("unknown profile test");
 		const tool = mock.tools.research_checkpoint;
 		const result = await tool.execute(
 			"test-call",
@@ -269,7 +270,7 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 		expect(result.content?.[0]?.text).toContain('Unknown profile "bogus"');
 	});
 
-	it("is happy without an active loop (reported fallback, no hint)", async () => {
+	it("refuses without an active research loop (invocation guard)", async () => {
 		// Explicitly clear any loop state left by earlier tests.
 		await mock.commands.research.handler("clear", mockCtx(cwd));
 		const result = await checkpoint({
@@ -277,8 +278,8 @@ describe("research_checkpoint counts real sources from notes.md (integration)", 
 			round: 1,
 			totalSources: 5,
 		});
-		expect(result.text).toContain("min sources: 5/15");
-		expect(result.text).not.toContain("pass the real count");
+		expect(result.isError).toBe(true);
+		expect(result.text).toContain("No active research run");
 	});
 
 	// ---- Task 4: score validation and override-aware checkpoint ----

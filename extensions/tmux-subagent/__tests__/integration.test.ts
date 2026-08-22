@@ -499,7 +499,9 @@ describe("run_subagents live UI wiring (Tasks 6-9)", () => {
 		const borderStyles = () =>
 			tmuxArgs().filter((a) => a[0] === "select-pane" && a[1] === "-P");
 		expect(borderStyles()).toHaveLength(1);
-		expect(borderStyles()[0].join(" ")).toMatch(/^select-pane -P -t \S+ fg=colour\d+$/);
+		expect(borderStyles()[0].join(" ")).toMatch(
+			/^select-pane -P -t \S+ fg=colour\d+$/,
+		);
 		expect(panePushes()).toHaveLength(1);
 		expect(panePushes()[0]).toContain("worker");
 

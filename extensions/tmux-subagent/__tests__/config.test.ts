@@ -23,6 +23,7 @@ vi.mock("node:fs", async () => {
 
 // Mock the pi-coding-agent module before importing config
 vi.mock("@earendil-works/pi-coding-agent", () => ({
+	CONFIG_DIR_NAME: ".pi",
 	getAgentDir: vi.fn().mockReturnValue("/mock/agent/dir"),
 	parseFrontmatter: vi.fn(),
 }));
@@ -807,6 +808,174 @@ describe("loadSubagentConfiguration", () => {
 
 		const result = loadSubagentConfiguration("/ext/tmux-subagent");
 		expect(result.config.maxTasks).toBe(8);
+	});
+
+	it("applies the project layer with highest precedence when trusted", () => {
+		mockReadFileSync.mockImplementation((filePath: fs.PathOrFileDescriptor) => {
+			const p = String(filePath);
+			if (p.includes("tmux-subagent.json")) {
+				return JSON.stringify({
+					maxTasks: 2,
+					models: { strong: "bundled-model", eval: "bundled-eval" },
+				});
+			}
+			if (p.includes("research.json")) {
+				return JSON.stringify({ roles: {} });
+			}
+			if (p.includes("/.pi/tmux-subagent/config.json")) {
+				return JSON.stringify({
+					maxTasks: 6,
+					models: { strong: "project-model" },
+				});
+			}
+			if (p.includes("config.json")) {
+				return JSON.stringify({ maxTasks: 4, models: { eval: "user-eval" } });
+			}
+			if (p.includes(".md")) {
+				return "---\nname: worker\ndescription: Test\nmodel: strong\ntools: read\n---\n\nPrompt.";
+			}
+			return "";
+		});
+
+		mockExistsSync.mockImplementation((filePath: fs.PathLike) => {
+			const p = String(filePath);
+			return (
+				p.includes("subagents") ||
+				p.includes("tmux-subagent.json") ||
+				p.includes("config.json")
+			);
+		});
+
+		mockStatSync.mockReturnValue({ isDirectory: () => true } as fs.Stats);
+
+		mockReaddirSync.mockReturnValue([mockDirent("worker.md")]);
+
+		mockParseFrontmatter.mockReturnValue({
+			frontmatter: {
+				name: "worker",
+				description: "Test",
+				model: "strong",
+				tools: "read",
+			},
+			body: "Prompt.",
+		});
+
+		const result = loadSubagentConfiguration("/ext/tmux-subagent", {
+			projectRoot: "/mock/project",
+			projectTrusted: true,
+		});
+
+		expect(result.projectConfigPath).toBe(
+			path.join("/mock/project", ".pi", "tmux-subagent", "config.json"),
+		);
+		// Scalars: project > user > bundled.
+		expect(result.config.maxTasks).toBe(6);
+		// Models merge per-key: strong from project, eval from user.
+		expect(result.config.models.strong).toBe("project-model");
+		expect(result.config.models.eval).toBe("user-eval");
+		// Profiles resolve through the merged alias map.
+		expect(result.profiles[0].model).toBe("project-model");
+	});
+
+	it("ignores the project layer when the project is untrusted", () => {
+		let readProjectConfig = false;
+		mockReadFileSync.mockImplementation((filePath: fs.PathOrFileDescriptor) => {
+			const p = String(filePath);
+			if (p.includes("/.pi/tmux-subagent/config.json")) {
+				readProjectConfig = true;
+			}
+			if (p.includes("tmux-subagent.json")) {
+				return JSON.stringify({ maxTasks: 2 });
+			}
+			if (p.includes("research.json")) {
+				return JSON.stringify({ roles: {} });
+			}
+			if (p.includes(".md")) {
+				return "---\nname: worker\ndescription: Test\nmodel: gpt-4o\ntools: read\n---\n\nPrompt.";
+			}
+			const err = new Error("ENOENT") as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
+		});
+
+		mockExistsSync.mockImplementation((filePath: fs.PathLike) => {
+			return String(filePath).includes("subagents");
+		});
+
+		mockStatSync.mockReturnValue({ isDirectory: () => true } as fs.Stats);
+
+		mockReaddirSync.mockReturnValue([mockDirent("worker.md")]);
+
+		mockParseFrontmatter.mockReturnValue({
+			frontmatter: {
+				name: "worker",
+				description: "Test",
+				model: "gpt-4o",
+				tools: "read",
+			},
+			body: "Prompt.",
+		});
+
+		const result = loadSubagentConfiguration("/ext/tmux-subagent", {
+			projectRoot: "/mock/project",
+			projectTrusted: false,
+		});
+
+		expect(readProjectConfig).toBe(false);
+		expect(result.projectConfigPath).toBeNull();
+		expect(result.config.maxTasks).toBe(2);
+	});
+
+	it("tolerates a missing project layer file", () => {
+		mockReadFileSync.mockImplementation((filePath: fs.PathOrFileDescriptor) => {
+			const p = String(filePath);
+			if (p === "/mock/project/.pi/tmux-subagent/config.json") {
+				const err = new Error("ENOENT") as NodeJS.ErrnoException;
+				err.code = "ENOENT";
+				throw err;
+			}
+			if (p.includes("tmux-subagent.json")) {
+				return JSON.stringify({ maxTasks: 3 });
+			}
+			if (p.includes("research.json")) {
+				return JSON.stringify({ roles: {} });
+			}
+			if (p.includes(".md")) {
+				return "---\nname: worker\ndescription: Test\nmodel: gpt-4o\ntools: read\n---\n\nPrompt.";
+			}
+			const err = new Error("ENOENT") as NodeJS.ErrnoException;
+			err.code = "ENOENT";
+			throw err;
+		});
+
+		mockExistsSync.mockImplementation((filePath: fs.PathLike) => {
+			const p = String(filePath);
+			return p.includes("subagents") || p.includes("tmux-subagent.json");
+		});
+
+		mockStatSync.mockReturnValue({ isDirectory: () => true } as fs.Stats);
+
+		mockReaddirSync.mockReturnValue([mockDirent("worker.md")]);
+
+		mockParseFrontmatter.mockReturnValue({
+			frontmatter: {
+				name: "worker",
+				description: "Test",
+				model: "gpt-4o",
+				tools: "read",
+			},
+			body: "Prompt.",
+		});
+
+		const result = loadSubagentConfiguration("/ext/tmux-subagent", {
+			projectRoot: "/mock/project",
+			projectTrusted: true,
+		});
+
+		expect(result.projectConfigPath).toBe(
+			path.join("/mock/project", ".pi", "tmux-subagent", "config.json"),
+		);
+		expect(result.config.maxTasks).toBe(3);
 	});
 });
 

@@ -346,7 +346,10 @@ declare module "@earendil-works/pi-coding-agent" {
 			handler: (
 				event: SessionBeforeCompactEvent,
 				ctx: ExtensionContext,
-			) => void | SessionBeforeCompactResult | Promise<void | SessionBeforeCompactResult>,
+			) =>
+				| void
+				| SessionBeforeCompactResult
+				| Promise<void | SessionBeforeCompactResult>,
 		): void;
 		on(
 			event: "session_compact",

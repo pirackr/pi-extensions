@@ -13,6 +13,9 @@
 //   - OPENCODE_API_KEY=public          -> same anonymous mode
 //   - OPENCODE_API_KEY=<real key>      -> all Zen models (free + paid)
 //
+// Models are built dynamically from the live Zen API (GET /zen/v1/models) combined
+// with models.dev metadata — new models appear automatically without code changes.
+// A static catalog is kept as fallback when live endpoints are unreachable.
 // Only models served over the OpenAI-compatible /chat/completions endpoint are
 // registered (that covers every free model and the DeepSeek/MiniMax/GLM/Kimi
 // families). Claude/GPT/Gemini lines need other streaming APIs and are omitted.
@@ -30,6 +33,18 @@ const OPENCODE_UA = "opencode/latest/1.3.15/cli";
 // Static catalog (fallback when the live endpoints are unreachable). Context
 // windows/max tokens are from models.dev / the official Zen docs where known.
 // `visible` is refined at load time by GET /zen/v1/models + models.dev status/cost.
+//
+// The DeepSeek-family models are served by DeepSeek's own upstream ("Console"),
+// whose thinking-mode API requires `reasoning_content` to be echoed back on
+// assistant messages in tool-call conversations — otherwise it 400s with "The
+// `reasoning_content` in the thinking mode must be passed back to the API".
+// pi-ai only auto-enables that behavior for providers it can identify as DeepSeek
+// (provider id "deepseek" or a deepseek.com baseUrl) — this extension is neither,
+// so the flag must be set explicitly per model.
+export const deepseekCompat = {
+	requiresReasoningContentOnAssistantMessages: true,
+} as const;
+
 export const staticModels: ProviderModelConfig[] = [
 	// --- free tier -------------------------------------------------------
 	{
@@ -49,6 +64,7 @@ export const staticModels: ProviderModelConfig[] = [
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 1048576,
 		maxTokens: 131072,
+		compat: deepseekCompat,
 	},
 	{
 		id: "hy3-free",
@@ -113,6 +129,7 @@ export const staticModels: ProviderModelConfig[] = [
 		cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
 		contextWindow: 1048576,
 		maxTokens: 128000,
+		compat: deepseekCompat,
 	},
 	{
 		id: "deepseek-v4-flash",
@@ -122,6 +139,7 @@ export const staticModels: ProviderModelConfig[] = [
 		cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
 		contextWindow: 1048576,
 		maxTokens: 128000,
+		compat: deepseekCompat,
 	},
 	{
 		id: "minimax-m3",
@@ -189,6 +207,16 @@ export const staticModels: ProviderModelConfig[] = [
 ];
 
 interface ModelsDevModelInfo {
+	name?: string | null;
+	reasoning?: boolean | null;
+	modalities?: {
+		input?: string[] | null;
+		output?: string[] | null;
+	} | null;
+	limit?: {
+		context?: number | null;
+		output?: number | null;
+	} | null;
 	status?: string | null;
 	cost?: {
 		input?: number | null;
@@ -276,31 +304,81 @@ export async function fetchModelsDevInfo(): Promise<
 }
 
 /**
- * Compute the provider model list:
- * - visibleIds (live /zen/v1/models) narrows the static catalog when available
- * - models.dev status === "deprecated" removes dead models
- * - anonymous/public mode keeps only free models (models.dev cost.input === 0;
- *   falls back to the static catalog's own zero-cost entries offline)
+ * Build a ProviderModelConfig from models.dev metadata.
+ * Returns undefined when the model isn't in models.dev.
+ */
+export function buildModelFromModelsDev(
+	id: string,
+	info: ModelsDevModelInfo | undefined,
+): ProviderModelConfig | undefined {
+	if (!info) return undefined;
+	const model: ProviderModelConfig = {
+		id,
+		name: info.name ?? id,
+		reasoning: info.reasoning ?? false,
+		input: (info.modalities?.input as ProviderModelConfig["input"]) ?? ["text"],
+		contextWindow: info.limit?.context ?? 128000,
+		maxTokens: info.limit?.output ?? 8192,
+		cost: {
+			input: info.cost?.input ?? 0,
+			output: info.cost?.output ?? 0,
+			cacheRead: info.cost?.cache_read ?? 0,
+			cacheWrite: info.cost?.cache_write ?? 0,
+		},
+	};
+	if (id.startsWith("deepseek-")) {
+		model.compat = deepseekCompat;
+	}
+	return model;
+}
+
+/**
+ * Build the provider model list dynamically:
+ * - When both Zen IDs and models.dev are available: build from Zen ∩ models.dev
+ * - When Zen IDs are unavailable: fall back to staticModels filtered by models.dev
+ * - When models.dev is unavailable: fall back to staticModels filtered by Zen IDs
+ * - When neither is available: return staticModels (anonymous mode filters later)
+ * - deprecated models are always dropped
+ * - anonymous/public mode keeps only free models (cost.input === 0)
  */
 export function getVisibleModels(
 	visibleIds?: Set<string>,
 	modelsDevInfo?: Record<string, ModelsDevModelInfo>,
 	anonymousMode = false,
 ): ProviderModelConfig[] {
-	let models = visibleIds
-		? staticModels.filter((m) => visibleIds.has(m.id))
-		: [...staticModels];
-	if (modelsDevInfo) {
-		models = models.filter(
+	let models: ProviderModelConfig[];
+
+	if (visibleIds && modelsDevInfo) {
+		// Dynamic: build from Zen IDs + models.dev metadata
+		models = [];
+		for (const id of visibleIds) {
+			const info = modelsDevInfo[id];
+			if (!info || info.status === "deprecated") continue;
+			const built = buildModelFromModelsDev(id, info);
+			if (built) models.push(built);
+		}
+	} else if (modelsDevInfo) {
+		// Zen unavailable: filter staticModels by models.dev
+		models = staticModels.filter(
 			(m) => modelsDevInfo[m.id]?.status !== "deprecated",
 		);
-		if (anonymousMode) {
-			models = models.filter((m) => isFreeModel(modelsDevInfo[m.id]));
-		}
-	} else if (anonymousMode) {
-		models = models.filter((m) => m.cost?.input === 0);
+	} else if (visibleIds) {
+		// models.dev unavailable: filter staticModels by Zen IDs
+		models = staticModels.filter((m) => visibleIds.has(m.id));
+	} else {
+		// Both unavailable: use static catalog as-is
+		models = [...staticModels];
 	}
-	return models.map((m) => ({ ...m, cost: { ...m.cost! } }));
+
+	if (anonymousMode) {
+		if (modelsDevInfo) {
+			models = models.filter((m) => isFreeModel(modelsDevInfo[m.id]));
+		} else {
+			models = models.filter((m) => m.cost?.input === 0);
+		}
+	}
+
+	return models;
 }
 
 export default async function (pi: ExtensionAPI): Promise<void> {

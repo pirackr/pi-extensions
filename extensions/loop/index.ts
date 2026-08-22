@@ -21,7 +21,8 @@ import {
 	parseScoreTable,
 	computeEvidenceDigest,
 } from "../research/checkpoint.ts";
-import { LoopEngine, LoopEngineOptions } from "./engine.ts";
+import { pauseLifecycle } from "../research/lifecycle.ts";
+import { LoopEngine } from "./engine.ts";
 import { registerLoopCommand } from "./command.ts";
 import {
 	prepareAndActivateResearch,
@@ -58,19 +59,10 @@ import { evaluateCheckpoint } from "../research/checkpoint.ts";
 import { runVerification } from "../research/verification.ts";
 import type { ProviderDescriptor } from "../subagent-dispatch/contract.ts";
 import type { ResolvedResearchConfig } from "../research/config.ts";
-import {
-	type LoopState,
-	type LoopStatus,
-	LoopUsage,
-	normalizeState,
-	addCoordinatorUsage,
-	addNestedUsage,
-} from "./state.ts";
+import { type LoopState, type LoopStatus, normalizeState } from "./state.ts";
 import { makeGenericPolicy } from "./completion.ts";
 import { programBlockFor, truncate } from "./program.ts";
 
-const CUSTOM_TYPE = "pi-loop";
-const EVENT_TYPE = "pi-loop-event";
 const DEFAULT_MAX_ROUNDS = 10;
 
 // Bundled research program — the default program for /research. Resolved
@@ -148,7 +140,8 @@ function makeCompleteLoopExecute(pi: ExtensionAPI, engine: LoopEngine) {
 				content: [
 					{
 						type: "text",
-						text: "Stale complete_loop call: the loop's guard rotated (paused/resumed) since this turn started. Re-audit the current loop state before completing.",
+						text:
+							"Stale complete_loop call: the loop's guard rotated (paused/resumed) since this turn started. Re-audit the current loop state before completing.",
 					},
 				],
 				isError: true,
@@ -165,7 +158,8 @@ function makeCompleteLoopExecute(pi: ExtensionAPI, engine: LoopEngine) {
 					content: [
 						{
 							type: "text",
-							text: "No research workspace (workingDir) — cannot enforce completion gates.",
+							text:
+								"No research workspace (workingDir) — cannot enforce completion gates.",
 						},
 					],
 					isError: true,
@@ -267,6 +261,21 @@ function makeResearchCheckpointExecute(
 			totalSources?: number;
 			contradictions?: string[];
 		};
+		// Only meaningful inside an active /research run (the loop wires
+		// workingDir). Guard at execution too, so a stray call outside a
+		// user-started research loop can never drive research behavior.
+		if (engine.state?.commandName !== "research") {
+			return {
+				content: [
+					{
+						type: "text",
+						text:
+							"No active research run — research_checkpoint is only usable during a /research run the user started.",
+					},
+				],
+				isError: true,
+			};
+		}
 		const profile = p.profile ?? "standard";
 		const profileCfg = researchConfig?.profiles[profile];
 		if (!profileCfg) {
@@ -501,7 +510,7 @@ export default function piLoop(pi: ExtensionAPI) {
 	// --- Create the generic loop engine -----------------------------------
 	const engine = new LoopEngine({
 		completionPolicy: makeGenericPolicy(),
-		onStateChange: async (state) => {
+		onStateChange: async (_state) => {
 			// onStateChange is called via engine.persist() which appends the
 			// entry. This hook exists for future use (e.g. metrics, logging).
 		},
@@ -589,7 +598,7 @@ export default function piLoop(pi: ExtensionAPI) {
 		name: "research_checkpoint",
 		label: "Research Checkpoint",
 		description:
-			"MANDATORY after each search round. Returns CONTINUE or PROCEED based on code-enforced thresholds for the active profile. Call every round with current round number and total unique sources.",
+			"MANDATORY after each search round of an active /research run. Returns CONTINUE or PROCEED based on code-enforced thresholds for the active profile. Only callable while a user-started /research run is active — never call it (or run research-style loops) outside one. Call every round with current round number and total unique sources.",
 		promptSnippet:
 			"Call research_checkpoint every round to check if you have enough coverage",
 		promptGuidelines: [
@@ -619,34 +628,49 @@ export default function piLoop(pi: ExtensionAPI) {
 
 	// --- Event handlers --------------------------------------------------
 
-	let continuationTurnPending = false;
-
-	pi.on("session_start", (event, ctx) => {
+	pi.on("session_start", (_event, ctx) => {
 		let restored = engine.latestState(ctx);
 		if (restored) restored = normalizeState(restored);
 		engine.state = restored;
-		continuationTurnPending = false;
 		syncLoopTools(pi, engine);
 		updateStatus(ctx, engine);
-		const reason = (event as { reason?: string }).reason;
-		if (restored?.status === "active" && reason === "reload") {
+		if (restored?.status === "active") {
+			// Never auto-continue a restored loop across session boundaries —
+			// research must not resume (web searches, subagent dispatches,
+			// token spend) without an explicit user invocation. The run stays
+			// paused until the user runs /<command> resume (or clears it).
 			engine.state = {
 				...restored,
 				status: "paused" as LoopStatus,
 				updatedAt: Date.now(),
 			};
 			engine.persist(pi, ctx);
+			// Keep the retained workspace lifecycle in sync so /research resume
+			// (the explicit user-invoked path) sees a resumable state. Best
+			// effort — the loop pause above always blocks continuations.
+			if (restored.commandName === "research" && restored.workingDir) {
+				const ws: Workspace = {
+					path: restored.workingDir,
+					projectRoot: path.dirname(restored.workingDir),
+					mission: restored.mission,
+					runId: restored.id ?? "",
+					transitionId: "",
+				};
+				try {
+					pauseLifecycle(
+						ws,
+						"paused at session start — research requires explicit /research resume",
+					);
+				} catch {
+					// Lifecycle not pausable (e.g. already complete) — the loop
+					// pause still blocks continuations; status/clear still work.
+				}
+			}
 			ctx.ui.notify(
-				`⏸ Loop paused after reload: ${truncate(restored.mission)}\n/${restored.commandName} resume to continue · /${restored.commandName} clear to stop`,
+				`⏸ Loop paused: ${truncate(restored.mission)}\n/${restored.commandName} resume to continue · /${restored.commandName} clear to remove`,
 				"info",
 			);
 			return;
-		}
-		if (restored?.status === "active") {
-			ctx.ui.notify(
-				`⏳ Loop restored: ${truncate(restored.mission)}\n/${restored.commandName} pause to stop continuation · /${restored.commandName} clear to remove`,
-				"info",
-			);
 		}
 	});
 
@@ -675,6 +699,13 @@ function updateStatus(ctx: ExtensionContext, engine: LoopEngine): void {
 
 function syncLoopTools(pi: ExtensionAPI, engine: LoopEngine): void {
 	const active = new Set(pi.getActiveTools());
+	const isActiveResearch =
+		engine.state?.status === "active" && engine.state?.commandName === "research";
+	// research_checkpoint is part of the /research program protocol — expose
+	// it only while a user-started research run is actually active, never
+	// as a standalone tool the model could reach for on its own.
+	if (isActiveResearch) active.add("research_checkpoint");
+	else active.delete("research_checkpoint");
 	if (engine.state?.status === "active") active.add("complete_loop");
 	else active.delete("complete_loop");
 	pi.setActiveTools(Array.from(active));
@@ -749,10 +780,15 @@ function researchRequiredTools(config: ResolvedResearchConfig): string[] {
 
 /**
  * Research role aliases (strong/eval/light) → concrete model names, from the
- * packaged tmux-subagent models map. Best-effort: falls back to matching the
- * alias directly against Pi's model names/ids.
+ * packaged tmux-subagent models map, merged with the trusted project override
+ * (<cwd>/.pi/tmux-subagent/config.json) when present. Best-effort: falls back
+ * to matching the alias directly against Pi's model names/ids.
  */
-function researchModelAliases(): Record<string, string> {
+function researchModelAliases(ctx?: {
+	cwd?: string;
+	isProjectTrusted?: () => boolean;
+}): Record<string, string> {
+	let aliases: Record<string, string> = {};
 	try {
 		const configPath = path.resolve(
 			path.dirname(fileURLToPath(import.meta.url)),
@@ -761,20 +797,38 @@ function researchModelAliases(): Record<string, string> {
 		const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
 			models?: Record<string, string>;
 		};
-		return raw.models ?? {};
+		aliases = { ...(raw.models ?? {}) };
 	} catch {
-		return {};
+		// No packaged alias map — the project layer (if any) still applies.
 	}
+	if (ctx?.isProjectTrusted?.() && ctx.cwd) {
+		try {
+			const projectConfigPath = path.join(
+				ctx.cwd,
+				".pi",
+				"tmux-subagent",
+				"config.json",
+			);
+			const raw = JSON.parse(fs.readFileSync(projectConfigPath, "utf8")) as {
+				models?: Record<string, string>;
+			};
+			aliases = { ...aliases, ...(raw.models ?? {}) };
+		} catch {
+			// No project layer (or unreadable) — packaged aliases stand.
+		}
+	}
+	return aliases;
 }
 
 /**
  * Model registry view over Pi's live model registry. Roles reference model
  * aliases (strong/eval/light); the view resolves them against model name or
- * id (and against the packaged tmux-subagent alias map when available).
+ * id (and against the tmux-subagent alias map — packaged plus any trusted
+ * project override — when available).
  */
 function buildModelView(ctx: ExtensionContext): ModelRegistryView {
 	const all = ctx.modelRegistry.getAll();
-	const aliases = researchModelAliases();
+	const aliases = researchModelAliases(ctx);
 	const match = (m: (typeof all)[number], name: string): boolean =>
 		m.name === name || m.id === name || m.id.endsWith(`/${name}`);
 	const find = (name: string) => {

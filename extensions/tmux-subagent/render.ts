@@ -595,9 +595,8 @@ export function renderTaskRow(
 	// Agent name carries the identity color (badge-like); state coloring
 	// stays on the icon so identity and status never read as each other.
 	const boldName = theme?.bold ? theme.bold(task.agent) : task.agent;
-	const agent = task.agentColor && theme
-		? theme.fg(task.agentColor, boldName)
-		: boldName;
+	const agent =
+		task.agentColor && theme ? theme.fg(task.agentColor, boldName) : boldName;
 	const objective = task.objective
 		? ` (${theme ? theme.fg("muted", task.objective) : task.objective})`
 		: "";

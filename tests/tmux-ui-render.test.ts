@@ -201,9 +201,9 @@ describe("renderStatsRow", () => {
 	});
 
 	it("omits zero-valued tool and token segments", () => {
-		expect(
-			renderStatsRow({ ...base, tools: 0, tokenCount: 0 } as any),
-		).toBe("3 turns · 12.3s");
+		expect(renderStatsRow({ ...base, tools: 0, tokenCount: 0 } as any)).toBe(
+			"3 turns · 12.3s",
+		);
 	});
 
 	it("omits (NN%) when percent is null", () => {
@@ -213,9 +213,9 @@ describe("renderStatsRow", () => {
 	});
 
 	it("groups compaction count with context utilization", () => {
-		expect(
-			renderStatsRow({ ...base, compactionCount: 1 } as any),
-		).toBe("3 turns · 5 tool uses · 12.4k token (8% · ⇊1) · 12.3s");
+		expect(renderStatsRow({ ...base, compactionCount: 1 } as any)).toBe(
+			"3 turns · 5 tool uses · 12.4k token (8% · ⇊1) · 12.3s",
+		);
 	});
 });
 
@@ -271,10 +271,9 @@ describe("renderTaskRow", () => {
 
 	it("truncates activity at 60 chars", () => {
 		const longActivity = "x".repeat(70);
-		const lines = renderTaskRow(
-			{ ...base, activity: longActivity } as any,
-			{ frame: 2 },
-		);
+		const lines = renderTaskRow({ ...base, activity: longActivity } as any, {
+			frame: 2,
+		});
 		expect(lines[1].length).toBeLessThanOrEqual(60);
 		expect(lines[1].startsWith("⎿ ")).toBe(true);
 	});
@@ -288,10 +287,10 @@ describe("renderTaskRow", () => {
 		const theme = {
 			fg: (color: string, text: string) => `[${color}:${text}]`,
 		};
-		const lines = renderTaskRow(
-			{ ...base, state: "succeeded" } as any,
-			{ frame: 0, theme },
-		);
+		const lines = renderTaskRow({ ...base, state: "succeeded" } as any, {
+			frame: 0,
+			theme,
+		});
 		expect(lines[0]).toContain("[success:✓]");
 	});
 
@@ -299,10 +298,10 @@ describe("renderTaskRow", () => {
 		const theme = {
 			fg: (color: string, text: string) => `[${color}:${text}]`,
 		};
-		const lines = renderTaskRow(
-			{ ...base, state: "cancelled" } as any,
-			{ frame: 0, theme },
-		);
+		const lines = renderTaskRow({ ...base, state: "cancelled" } as any, {
+			frame: 0,
+			theme,
+		});
 		expect(lines[0]).toContain("[dim:■]");
 	});
 });
@@ -346,14 +345,13 @@ describe("renderWidgetLines", () => {
 		const longObjective = "a".repeat(100);
 		const lines = renderWidgetLines(
 			[
-				makeRun(
-					[{ taskId: "t1", agent: "scout", objective: longObjective }],
-					{ t1: { state: "running" } },
-				),
+				makeRun([{ taskId: "t1", agent: "scout", objective: longObjective }], {
+					t1: { state: "running" },
+				}),
 			],
 			{ frame: 0, width: 200 },
 		);
-		expect(lines[1]).toBe(`└─ ⠋ scout (${  "a".repeat(63)}…)`);
+		expect(lines[1]).toBe(`└─ ⠋ scout (${"a".repeat(63)}…)`);
 	});
 
 	it("caps at 12 lines and reports hidden agents", () => {
@@ -375,14 +373,12 @@ describe("renderWidgetLines", () => {
 
 	it("flattens concurrent runs into one agent tree", () => {
 		const runs = [
-			makeRun(
-				[{ taskId: "t1", agent: "worker", objective: "a" }],
-				{ t1: { state: "running" } },
-			),
-			makeRun(
-				[{ taskId: "t2", agent: "scout", objective: "b" }],
-				{ t2: { state: "succeeded" } },
-			),
+			makeRun([{ taskId: "t1", agent: "worker", objective: "a" }], {
+				t1: { state: "running" },
+			}),
+			makeRun([{ taskId: "t2", agent: "scout", objective: "b" }], {
+				t2: { state: "succeeded" },
+			}),
 		];
 		const text = renderWidgetLines(runs, { frame: 0, width: 80 }).join("\n");
 		expect(text).toContain("├─ ⠋ worker (a)");
@@ -396,7 +392,11 @@ describe("renderWidgetLines", () => {
 			bold: (text: string) => `[bold:${text}]`,
 		};
 		const lines = renderWidgetLines(
-			[makeRun([{ taskId: "t1", agent: "scout", objective: "Find docs" }], { t1: { state: "running" } })],
+			[
+				makeRun([{ taskId: "t1", agent: "scout", objective: "Find docs" }], {
+					t1: { state: "running" },
+				}),
+			],
 			{ frame: 0, theme, width: 120 },
 		);
 		expect(lines[0]).toBe("[accent:● Agents]");
@@ -407,17 +407,14 @@ describe("renderWidgetLines", () => {
 
 	it("wraps live-widget stats onto a continuation line at narrow widths", () => {
 		const runs = [
-			makeRun(
-				[{ taskId: "t1", agent: "scout", objective: "Find docs" }],
-				{
-					t1: {
-						state: "running",
-						usage: { turns: 3, totalTokens: 12400 },
-						toolUses: 5,
-						contextUsage: { percent: 8 },
-					},
+			makeRun([{ taskId: "t1", agent: "scout", objective: "Find docs" }], {
+				t1: {
+					state: "running",
+					usage: { turns: 3, totalTokens: 12400 },
+					toolUses: 5,
+					contextUsage: { percent: 8 },
 				},
-			),
+			}),
 		];
 		const lines = renderWidgetLines(runs, { frame: 0, width: 45 });
 		expect(lines).toContain("└─ ⠋ scout (Find docs)");
@@ -431,7 +428,8 @@ describe("renderWidgetLines", () => {
 					{
 						taskId: "t1",
 						agent: "scout",
-						objective: "Find relevant documentation for the project architecture and deployment pipeline",
+						objective:
+							"Find relevant documentation for the project architecture and deployment pipeline",
 					},
 				],
 				{ t1: { state: "running" } },
@@ -599,13 +597,14 @@ describe("truncateVisibleWidth", () => {
 // ---------------------------------------------------------------------------
 
 describe("renderSummaryResults envelope", () => {
-	const makeStatus = (overrides: Record<string, unknown> = {}) => ({
-		taskId: "task-1",
-		agent: "scout_research",
-		state: "succeeded",
-		model: "test-model",
-		...overrides,
-	}) as any;
+	const makeStatus = (overrides: Record<string, unknown> = {}) =>
+		({
+			taskId: "task-1",
+			agent: "scout_research",
+			state: "succeeded",
+			model: "test-model",
+			...overrides,
+		}) as any;
 
 	it("envelope text stays byte-identical", () => {
 		const status = makeStatus({

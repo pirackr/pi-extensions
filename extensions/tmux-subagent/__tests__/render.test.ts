@@ -112,9 +112,7 @@ describe("per-agent identity colors (#6)", () => {
 	it("ansi and theme-key palettes stay index-aligned", () => {
 		const idx = agentColorIndex("reviewer");
 		expect(agentColorKey("reviewer")).toBe(AGENT_COLOR_KEYS[idx]);
-		expect(agentAnsiColor("reviewer")).toEqual(
-			agentAnsiColor("reviewer"),
-		);
+		expect(agentAnsiColor("reviewer")).toEqual(agentAnsiColor("reviewer"));
 	});
 
 	it("colors the agent name in themed rows, not plain ones", () => {
@@ -173,16 +171,16 @@ describe("cost in rendered surfaces (#1)", () => {
 			taskId: "task-2",
 			model: "",
 			usage: {
-			turns: 3,
-			totalTokens: 5000,
-			cost: {
-				input: 3000,
-				output: 2000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				total: 0.0042,
+				turns: 3,
+				totalTokens: 5000,
+				cost: {
+					input: 3000,
+					output: 2000,
+					cacheRead: 0,
+					cacheWrite: 0,
+					total: 0.0042,
+				},
 			},
-		},
 		});
 		expect(heading).toContain("· ~$0.0042 ===");
 	});

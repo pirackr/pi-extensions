@@ -49,9 +49,23 @@ Bundled defaults live in `config/tmux-subagent.json` and `subagents/*.md`. Overr
 
 - User configuration: `$PI_AGENT_DIR/tmux-subagent/config.json` (normally `~/.pi/agent/tmux-subagent/config.json`)
 - User profiles: `$PI_AGENT_DIR/tmux-subagent/agents/*.md` (normally `~/.pi/agent/tmux-subagent/agents/*.md`)
-- Additional profile directories: `agentDirs` in user configuration
+- Project configuration: `<project>/.pi/tmux-subagent/config.json` — trusted projects only; highest precedence
+- Additional profile directories: `agentDirs` in user or project configuration
 
-Configuration values override bundled values. User profiles override bundled profiles with the same `name`. Run `/reload` after changing configuration or profiles.
+Configuration values override bundled values (project > user > bundled). User profiles override bundled profiles with the same `name`. Run `/reload` after changing configuration or profiles.
+
+The project layer is the way to give a single project different subagent models without touching global config — e.g. re-alias research models for one repo:
+
+```json
+{
+  "models": {
+    "strong": "x-preview-f-free",
+    "eval": "mimo-v2.5-free"
+  }
+}
+```
+
+It only applies when the project is trusted (`ctx.isProjectTrusted()`), and is resolved at each dispatch, so no reload is needed mid-session.
 
 Example configuration:
 

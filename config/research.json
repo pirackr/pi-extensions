@@ -87,7 +87,7 @@
     "fetcher": {
       "description": "Deep read of URLs — extracts full content, summarizes key findings, flags credibility issues",
       "model": "strong",
-      "thinking": "minimal",
+      "thinking": "low",
       "tools": ["read", "web_lookup", "fetch_web"],
       "access": "read",
       "timeoutSeconds": 720,
@@ -177,7 +177,7 @@
     "contradiction_resolver": {
       "description": "Investigate and resolve contradictions between sources — returns resolution or flags as unresolved",
       "model": "light",
-      "thinking": "medium",
+      "thinking": "low",
       "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
       "access": "read",
       "timeoutSeconds": 960,

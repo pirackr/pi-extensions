@@ -1,13 +1,14 @@
 {
   "models": {
-    "strong": "Qwen3.6-35B-A3B-MTP-GGUF",
-    "eval": "gemma-4-26B-A4B-it-GGUF-UD-Q4_K_XL",
-    "light": "gpt-oss-20b-GGUF-Q4_K_M",
+    "strong": "x-preview-f-free",
+    "eval": "mimo-v2.5-free",
+    "light": "x-preview-f-free",
     "fast": "XYZAILab_XYZ-Aquila-mini-GGUF-Q4_K_M",
     "kat": "lemonade_KAT-Coder-Q4-GGUF"
   },
   "childExtensions": [
-    "../extensions/web-search/index.ts"
+    "../extensions/web-search/index.ts",
+    "../extensions/opencode-zen/index.ts"
   ],
   "toolAccess": {
     "web_lookup": "read",

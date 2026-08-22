@@ -63,6 +63,44 @@ describe("formatCost (#1)", () => {
 	});
 });
 
+describe("renderTaskRow outcome line", () => {
+	it("succeeded rows keep their result visible under the agent row", () => {
+		const lines = renderTaskRow(
+			makeTask({ state: "succeeded", result: "Report written to report.md" }),
+			{ frame: 0 },
+		);
+		expect(lines.some((l) => l.includes("⎿ Report written to report.md"))).toBe(
+			true,
+		);
+	});
+
+	it("failed rows keep their error message visible", () => {
+		const lines = renderTaskRow(
+			makeTask({ state: "failed", errorMessage: "Connection timeout" }),
+			{ frame: 0 },
+		);
+		expect(lines.some((l) => l.includes("⎿ Connection timeout"))).toBe(true);
+	});
+
+	it("active rows prefer live activity over stale results", () => {
+		const lines = renderTaskRow(
+			makeTask({
+				state: "running",
+				activity: "Reading files",
+				result: "stale",
+			}),
+			{ frame: 0 },
+		);
+		expect(lines.some((l) => l.includes("⎿ Reading files"))).toBe(true);
+		expect(lines.some((l) => l.includes("stale"))).toBe(false);
+	});
+
+	it("terminal rows without an outcome render no message line", () => {
+		const lines = renderTaskRow(makeTask({ state: "succeeded" }), { frame: 0 });
+		expect(lines.every((l) => !l.startsWith("⎿ "))).toBe(true);
+	});
+});
+
 describe("per-agent identity colors (#6)", () => {
 	it("maps names to palette keys deterministically", () => {
 		for (const name of ["worker", "reviewer", "tester", "scout", "fetcher"]) {

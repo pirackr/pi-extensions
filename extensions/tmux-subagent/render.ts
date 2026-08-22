@@ -619,9 +619,15 @@ export function renderTaskRow(
 	const lines = statsDoNotFit
 		? [header, ...wrapStats(task, width, theme)]
 		: [`${header}${stats ? ` ${divider} ${stats}` : ""}`];
-	if (isActiveState(task.state) && task.activity) {
-		const activity = `${ACTIVITY_GLYPH} ${truncateActivity(task.activity)}`;
-		lines.push(theme ? theme.fg("dim", activity) : activity);
+	// Live activity while active; a persistent outcome line once terminal —
+	// the message under an agent row used to vanish the instant the task
+	// finished, leaving completed agents with no visible result.
+	const rowMessage = isActiveState(task.state)
+		? task.activity
+		: task.result || task.errorMessage;
+	if (rowMessage) {
+		const line = `${ACTIVITY_GLYPH} ${truncateActivity(rowMessage)}`;
+		lines.push(theme ? theme.fg("dim", line) : line);
 	}
 	return lines;
 }

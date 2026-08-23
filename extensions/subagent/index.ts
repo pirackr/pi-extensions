@@ -106,6 +106,16 @@ export interface InstallSubagentOptions {
 	readonly env?: Environment;
 }
 
+/** Narrow production seams used by the real-tmux acceptance driver. */
+export interface ProductionRuntimeOptions {
+	/** Real in normal use; injectable so acceptance can use real tmux with isolated state. */
+	readonly tmuxExec?: TmuxExecFile;
+	/** Defaults to `/tmp`; acceptance supplies a private temporary root. */
+	readonly tmpRoot?: string;
+	/** Pi RPC executable passed verbatim to the durable runner. */
+	readonly pi?: { readonly command: string; readonly args: readonly string[] };
+}
+
 const AgentParameters = Type.Object(
 	{
 		description: Type.String({
@@ -574,8 +584,11 @@ function deferredSchedulerFactory(): {
 	};
 }
 
-async function tmuxSession(exec: TmuxExecFile): Promise<string | null> {
-	if (!process.env.TMUX) return null;
+async function tmuxSession(
+	exec: TmuxExecFile,
+	env: Environment = process.env,
+): Promise<string | null> {
+	if (!env.TMUX) return null;
 	try {
 		const result = await exec(["display-message", "-p", "#S"]);
 		return result.stdout.trim() || null;
@@ -596,9 +609,11 @@ async function pathExists(path: string): Promise<boolean> {
 /** Build the real parent or nested-producer runtime from existing subsystems. */
 export async function createProductionRuntime(
 	factory: RuntimeFactoryContext,
+	options?: ProductionRuntimeOptions,
 ): Promise<ExtensionRuntime> {
 	const { context, env, pi } = factory;
-	const tmuxExec = nodeTmuxExecutor();
+	const tmuxExec = options?.tmuxExec ?? nodeTmuxExecutor();
+	const tmpRoot = options?.tmpRoot ?? "/tmp";
 	let identity;
 	let mode: ExtensionRuntime["mode"];
 	let currentAgentId: string | undefined;
@@ -618,14 +633,15 @@ export async function createProductionRuntime(
 	} else {
 		const canonicalCwd = await realpath(context.cwd).catch(() => context.cwd);
 		const slug = projectSlug(canonicalCwd);
-		const current = await tmuxSession(tmuxExec);
+		const current = await tmuxSession(tmuxExec, env);
 		identity = await resolveParentIdentity({
 			cwd: canonicalCwd,
 			projectSlug: slug,
+			tmpRoot,
 			tmuxCurrentSession: () => current,
 			readSessionId: () => env.PI_SESSION_ID ?? null,
 			collisionFor: async (id) => {
-				if (await pathExists(join("/tmp", slug, `pi-${id}`))) return true;
+				if (await pathExists(join(tmpRoot, slug, `pi-${id}`))) return true;
 				try {
 					await tmuxExec(["has-session", "-t", `pi-${id}`]);
 					return true;
@@ -660,7 +676,9 @@ export async function createProductionRuntime(
 		mode,
 		currentAgentId,
 		runnerScriptPath: join(EXTENSION_DIR, "runner.mjs"),
-		pi: piInvocation(),
+		pi: options?.pi
+			? { command: options.pi.command, args: [...options.pi.args] }
+			: piInvocation(),
 		resolveCall: async (call) => resolvedCall(pi, factory.getContext(), call),
 		createScheduler: mode === "manager" ? deferred.create : undefined,
 		acquireManagerLease: async (path, leaseOwner, signal, deps, options) => {

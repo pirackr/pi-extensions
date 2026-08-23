@@ -215,7 +215,7 @@ export async function runTaskMode(requestPath, deps = {}) {
 		events: path.join(taskDirectory, "events.jsonl"),
 		stderr: path.join(taskDirectory, "stderr.log"),
 		transcript: path.join(taskDirectory, "transcript.log"),
-		cancel: path.join(taskDirectory, "control", "cancel.json"),
+		cancel: path.join(taskDirectory, "control", "cancel"),
 	};
 	for (const log of [files.events, files.stderr, files.transcript]) ensureLog(log);
 

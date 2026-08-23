@@ -1007,7 +1007,7 @@ describe("9. atomic cancellation marker", () => {
 		await drain();
 
 		fs.writeFileSync(
-			path.join(dir, "control", "cancel.json"),
+			path.join(dir, "control", "cancel"),
 			JSON.stringify({ agentId: "q9xm", requestedAt: 1 }),
 		);
 
@@ -1025,7 +1025,7 @@ describe("9. atomic cancellation marker", () => {
 
 		expect(readResult(dir).state).toBe("cancelled");
 		expect(
-			fs.existsSync(path.join(dir, "control", "cancel.json")),
+			fs.existsSync(path.join(dir, "control", "cancel")),
 		).toBe(true);
 	});
 });

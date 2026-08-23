@@ -1,3 +1,7 @@
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
@@ -7,6 +11,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 }));
 
 import {
+	createProductionRuntime,
 	installSubagentExtension,
 	type ExtensionRuntime,
 	type RuntimeFactoryContext,
@@ -259,6 +264,60 @@ async function emit(
 }
 
 describe("Task 12 extension integration", () => {
+	it("exposes an injectable production-runtime seam for live fake-Pi acceptance", () => {
+		expect(createProductionRuntime.length).toBe(2);
+	});
+
+	it("re-adopts the same durable parent and tmux session after a parent reload", async () => {
+		const root = await mkdtemp(join(tmpdir(), "subagent-reload-"));
+		const cwd = join(root, "project");
+		await mkdir(cwd);
+		let sessionExists = false;
+		const commands: string[][] = [];
+		const tmuxExec = vi.fn(async (args: string[]) => {
+			commands.push([...args]);
+			if (args[0] === "has-session") {
+				if (!sessionExists) throw new Error("missing session");
+				return { stdout: "", stderr: "" };
+			}
+			if (args[0] === "new-session") sessionExists = true;
+			return {
+				stdout: args[0] === "list-windows" ? "main\n" : "",
+				stderr: "",
+			};
+		});
+		const context = { ...fakeContext("rpc", "origin-reload"), cwd };
+		const pi = {
+			events: { emit: vi.fn(), on: vi.fn() },
+		} as never;
+		const make = () => createProductionRuntime({
+			pi,
+			context: context as never,
+			nested: false,
+			env: { PI_SESSION_ID: "r001" },
+			getContext: () => context as never,
+			onTasksChanged: async () => undefined,
+		}, {
+			tmpRoot: root,
+			tmuxExec,
+			pi: { command: process.execPath, args: ["fake-pi.mjs"] },
+		});
+		try {
+			const first = await make();
+			await first.initialize({ cwd, origin: "origin-reload" });
+			await first.shutdown();
+
+			const second = await make();
+			await second.initialize({ cwd, origin: "origin-reload" });
+			await second.shutdown();
+
+			expect(commands.filter((args) => args[0] === "new-session")).toHaveLength(1);
+			expect(commands.filter((args) => args[0] === "has-session")).toHaveLength(2);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	it("registers exactly the public tools, /agents, notification renderer, and lifecycle handlers", () => {
 		const h = harness();
 		expect([...h.tools.keys()]).toEqual([

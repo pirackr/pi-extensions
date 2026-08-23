@@ -548,13 +548,21 @@ function resolvedCall(
 		cwd: call.cwd,
 		projectTrusted: context.isProjectTrusted(),
 	});
+	const adapterEnvelope: {
+		contributions: Array<{ owner: string; adapter: ProfilePolicyAdapter }>;
+	} = { contributions: [] };
+	pi.events.emit("subagent:register-policy-adapters", adapterEnvelope);
+	const policyAdapters: Record<string, ProfilePolicyAdapter> = Object.create(null);
+	for (const contribution of adapterEnvelope.contributions) {
+		if (!policyAdapters[contribution.owner]) {
+			policyAdapters[contribution.owner] = contribution.adapter;
+		}
+	}
 	return {
 		config: childConfig(loaded.config),
 		profiles: discovered.profiles,
 		contributions: discovered.contributions,
-		policyAdapters: Object.create(null) as Readonly<
-			Record<string, ProfilePolicyAdapter>
-		>,
+		policyAdapters,
 	};
 }
 

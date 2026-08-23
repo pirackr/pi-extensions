@@ -20,6 +20,20 @@ export interface RunManifest {
 	createdAt: number;
 	/** SHA-256 hex digest of initial snapshot content, or null. */
 	snapshotSha256: string | null;
+	/**
+	 * Frozen activation-time run contract snapshot ({@link ResolvedRunContract}).
+	 * Persisted so resume can reuse the exact contract without re-resolving
+	 * roles or re-reading mutable prompt sources. Optional for backward
+	 * compatibility with manifests written before snapshots were persisted.
+	 */
+	resolvedContract?: unknown;
+	/**
+	 * Frozen activation-time policy configuration snapshot
+	 * ({@link FrozenConfig}). Persisted so resume can claim policy using the
+	 * identical snapshot activation published. Optional for backward
+	 * compatibility.
+	 */
+	frozenConfig?: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -35,6 +49,12 @@ function snapshotSha256(content: string | undefined): string | null {
 	return createHash("sha256").update(content).digest("hex");
 }
 
+function cloneSnapshot<T>(value: T | undefined): T | undefined {
+	return value === undefined
+		? undefined
+		: JSON.parse(JSON.stringify(value)) as T;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -45,10 +65,17 @@ function snapshotSha256(content: string | undefined): string | null {
  *
  * Manifest paths always name the eventual final workspace, never a hidden
  * staging path.  Throws if the manifest already exists (immutable contract).
+ *
+ * The frozen activation-time run contract ({@link resolvedContract}) and the
+ * frozen policy configuration ({@link frozenConfig}) are persisted alongside
+ * the run identity so resume can reuse the exact activation-time snapshots
+ * instead of re-resolving roles or re-reading mutable prompt sources.
  */
 export function createRunManifest(
 	ws: Workspace,
 	snapshotContent?: string,
+	resolvedContract?: unknown,
+	frozenConfig?: unknown,
 ): RunManifest {
 	const manifestPath = manifestFilePath(ws);
 
@@ -64,6 +91,8 @@ export function createRunManifest(
 		manifestPath,
 		createdAt: Date.now(),
 		snapshotSha256: snapshotSha256(snapshotContent),
+		resolvedContract: cloneSnapshot(resolvedContract),
+		frozenConfig: cloneSnapshot(frozenConfig),
 	};
 
 	fs.writeFileSync(

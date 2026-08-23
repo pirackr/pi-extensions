@@ -36,10 +36,10 @@ import {
 } from "../extensions/research/resume.ts";
 import { validateStartupContract } from "../extensions/research/startup.ts";
 import type { ResolvedResearchConfig } from "../extensions/research/config.ts";
-import type {
-	ModelRegistryView,
-	ProviderRegistryView,
-} from "../extensions/research/startup.ts";
+import type { ModelRegistryView } from "../extensions/research/startup.ts";
+
+const SCOUT_PROMPT = path.resolve("skills/research/agents/scout.md");
+const JUDGE_PROMPT = path.resolve("skills/research/agents/judge.md");
 
 // ===========================================================================
 // Helpers
@@ -86,13 +86,20 @@ function buildWorkspace(
 		"utf-8",
 	);
 
-	createRunManifest({
+	const workspace = {
 		path: wsPath,
 		projectRoot: tmpDir,
 		mission,
 		runId,
 		transitionId: "tr-1",
-	} as any);
+	} as any;
+	const snapshots = activationSnapshots(workspace);
+	createRunManifest(
+		workspace,
+		undefined,
+		snapshots.contract,
+		snapshots.frozenConfig,
+	);
 
 	const snapshot = createLifecycleSnapshot(lifecycleState, "test-setup");
 	persistLifecycle(
@@ -154,7 +161,7 @@ function baseConfig(): ResolvedResearchConfig {
 				tools: ["web_lookup", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 1800,
-				promptPath: "/fake/scout.md",
+				promptPath: SCOUT_PROMPT,
 				resultFormat: "markdown",
 				totalDispatch: 30,
 				concurrentDispatch: 8,
@@ -169,7 +176,7 @@ function baseConfig(): ResolvedResearchConfig {
 				tools: ["read"],
 				access: "read",
 				timeoutSeconds: 1200,
-				promptPath: "/fake/judge.md",
+				promptPath: JUDGE_PROMPT,
 				resultFormat: "markdown",
 				totalDispatch: 10,
 				concurrentDispatch: 1,
@@ -183,26 +190,101 @@ function baseConfig(): ResolvedResearchConfig {
 	};
 }
 
+function activationSnapshots(workspace: {
+	path: string;
+	projectRoot: string;
+	mission: string;
+	runId: string;
+	transitionId: string;
+}) {
+	const config = baseConfig();
+	const concrete = { scout: "strong-1", judge: "eval-1" } as const;
+	const modelNames = { scout: "strong", judge: "eval" } as const;
+	const resolvedProfiles = Object.fromEntries(
+		Object.entries(config.roles).map(([name, role]) => [
+			name,
+			{
+				name,
+				description: role.description,
+				model: concrete[name as keyof typeof concrete],
+				thinking: role.thinking,
+				tools: [...role.tools],
+				access: role.access,
+				systemPrompt: fs.readFileSync(role.promptPath, "utf-8"),
+				timeoutSeconds: role.timeoutSeconds,
+			},
+		]),
+	);
+	const resolvedModels = Object.fromEntries(
+		Object.keys(config.roles).map((name) => [
+			name,
+			{
+				id: concrete[name as keyof typeof concrete],
+				name: modelNames[name as keyof typeof modelNames],
+				provider: "anthropic",
+				capabilities: [],
+			},
+		]),
+	);
+	const hardCeilings = {
+		maxConcurrentAttempts: 9,
+		maxAttemptsPerTask: 30,
+		hardTimeoutSeconds: 1800,
+	};
+	return {
+		contract: {
+			runId: workspace.runId,
+			transitionId: workspace.transitionId,
+			mission: workspace.mission,
+			profile: config.defaultProfile,
+			programPath: config.defaultProgram,
+			profileConfig: config.profiles.standard,
+			defaults: config.defaults,
+			resolvedProfiles,
+			resolvedModels,
+			hardCeilings,
+		},
+		frozenConfig: {
+			roles: Object.fromEntries(
+				Object.entries(config.roles).map(([name, role]) => [
+					name,
+					{
+						...role,
+						name,
+						model: concrete[name as keyof typeof concrete],
+					},
+				]),
+			),
+			hardTimeoutSeconds: hardCeilings.hardTimeoutSeconds,
+		},
+	};
+}
+
 function fakeModelRegistry(
 	overrides: Record<
 		string,
 		{ id: string; name: string; provider: string; capabilities?: string[] }
 	> = {},
 ): ModelRegistryView {
-	const models = { ...overrides };
+	const models = Object.values(overrides);
+	const find = (name: string) =>
+		models.find((model) =>
+			model.id === name || model.name === name || model.id.endsWith(`/${name}`)
+		);
 	return {
 		get(name: string) {
-			return models[name] ? { ...models[name] } : undefined;
+			const model = find(name);
+			return model ? { ...model, capabilities: [...(model.capabilities ?? [])] } : undefined;
 		},
 		has(name: string) {
-			return name in models;
+			return find(name) !== undefined;
 		},
 	};
 }
 
 function fakeProviderRegistry(
 	descs: { id: string; adapterVersion: string; capabilities: string[] }[] = [],
-): ProviderRegistryView {
+) {
 	const map = new Map<string, (typeof descs)[number]>();
 	for (const d of descs) {
 		map.set(d.id, d);
@@ -999,7 +1081,7 @@ describe("validateFrozenCapabilities", () => {
 			},
 		]);
 
-		const contract = await validateStartupContract(config, models, providers);
+		const contract = await validateStartupContract(config, models);
 		// validateFrozenCapabilities checks if modelEntry.id is still in registry
 		// The contract stores resolvedModels keyed by role name with the model entry
 		// models.get(modelEntry.id) = models.get("strong-1") which returns undefined

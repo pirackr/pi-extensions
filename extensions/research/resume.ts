@@ -18,15 +18,13 @@ import * as path from "node:path";
 import type { Workspace } from "./workspace.ts";
 import type { RunState } from "./state.ts";
 import { readRunState, acquireLease } from "./state.ts";
-import { readManifest, type RunManifest } from "./manifest.ts";
+import type { RunManifest } from "./manifest.ts";
 import type { ResolvedResearchConfig } from "./config.ts";
 import type {
   ModelRegistryView,
-  ProviderRegistryView,
   ResolvedRunContract,
 } from "./startup.ts";
-import type { FrozenConfig } from "./policy.ts";
-import { validateStartupContract } from "./startup.ts";
+import { ResearchPolicy, type FrozenConfig } from "./policy.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,7 +33,6 @@ import { validateStartupContract } from "./startup.ts";
 export interface ResumeDependencies {
   config: ResolvedResearchConfig;
   getModels: () => ModelRegistryView;
-  getProviders: () => ProviderRegistryView;
 }
 
 export type ResumeResult = {
@@ -43,6 +40,8 @@ export type ResumeResult = {
   workspace: Workspace;
   runState: RunState;
   manifest: RunManifest;
+  contract: ResolvedRunContract;
+  frozenConfig: FrozenConfig;
   lifecycleReason: string;
 } | {
   success: false;
@@ -128,7 +127,14 @@ export async function resumeWorkspace(
     };
   }
 
-  let manifest: { runId: string; mission: string; workspace: string; snapshotSha256?: string | null };
+  let manifest: {
+    runId: string;
+    mission: string;
+    workspace: string;
+    snapshotSha256?: string | null;
+    resolvedContract?: unknown;
+    frozenConfig?: unknown;
+  };
   try {
     manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as any;
   } catch {
@@ -195,44 +201,80 @@ export async function resumeWorkspace(
     };
   }
 
-  // Step 4: Validate provider/adapter compatibility
-  // Re-validate the contract using the same config — models and providers
-  // must still be available in the registry
+  // Restore the canonical retained identity before handing the workspace to
+  // the active policy adapter. Retained workspaces live under <root>/.research.
+  workspace.projectRoot = path.basename(path.dirname(workspacePath)) === ".research"
+    ? path.dirname(path.dirname(workspacePath))
+    : path.dirname(workspacePath);
+  workspace.mission = manifest.mission;
+  workspace.runId = state.runId;
+
+  // Step 4: Load the activation-time frozen snapshots. Resume reuses the exact
+  // ResolvedRunContract and FrozenConfig persisted with the immutable run
+  // manifest — it MUST NOT call validateStartupContract (that would reread
+  // mutable role prompts and re-resolve models) and MUST NOT rebuild the
+  // policy snapshot from the mutable source config. If the required snapshots
+  // are absent or malformed, resume fails closed.
+  const frozenContract = manifest.resolvedContract;
+  const frozenPolicy = manifest.frozenConfig;
+  if (
+    !isResolvedContractSnapshot(frozenContract) ||
+    !isFrozenConfigSnapshot(frozenPolicy)
+  ) {
+    return {
+      success: false,
+      error:
+        "Required activation-time snapshots are absent or malformed " +
+        "(resolvedContract/frozenConfig).",
+      reason: "snapshot_invalid",
+    };
+  }
+
+  if (
+    frozenContract.runId !== state.runId ||
+    frozenContract.mission !== manifest.mission
+  ) {
+    return {
+      success: false,
+      error: "Activation-time contract identity does not match the retained run.",
+      reason: "snapshot_invalid",
+    };
+  }
+
+  const contract = deepFreeze(
+    cloneSnapshot(frozenContract),
+  ) as unknown as ResolvedRunContract;
+  const frozenConfig = deepFreeze(
+    cloneSnapshot(frozenPolicy),
+  ) as unknown as FrozenConfig;
+
   try {
-    await validateStartupContract(
-      deps.config,
-      deps.getModels(),
-      deps.getProviders(),
+    // Constructor validation checks the complete frozen role policy shape
+    // without reserving, mutating state, or reading prompt sources.
+    new ResearchPolicy(
+      workspace,
+      frozenConfig,
+      frozenConfig.hardTimeoutSeconds,
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("provider") || msg.includes("Provider") || msg.includes("capability")) {
+    return {
+      success: false,
+      error: `Frozen policy snapshot is malformed: ${err instanceof Error ? err.message : String(err)}`,
+      reason: "snapshot_invalid",
+    };
+  }
+
+  // Integrity check only: every already-resolved concrete profile model must
+  // still exist. Aliases and mutable config are deliberately ignored.
+  const models = deps.getModels();
+  for (const [roleName, profile] of Object.entries(contract.resolvedProfiles)) {
+    if (!models.get(profile.model)) {
       return {
         success: false,
-        error: `Provider/adapter incompatible: ${msg}`,
-        reason: "provider_incompatible",
-      };
-    }
-    if (msg.includes("capability")) {
-      return {
-        success: false,
-        error: `Capabilities mismatch: ${msg}`,
-        reason: "capabilities_mismatch",
-      };
-    }
-    if (msg.includes("model") || msg.includes("Model") || msg.includes("ModelRegistryView")) {
-      return {
-        success: false,
-        error: `Models changed: ${msg}`,
+        error: `Model '${profile.model}' (role '${roleName}') no longer exists in the registry`,
         reason: "models_changed",
       };
     }
-    // Other validation failure
-    return {
-      success: false,
-      error: `Startup validation failed: ${msg}`,
-      reason: "provider_incompatible",
-    };
   }
 
   // Step 5: Validate ownership (lease check)
@@ -304,6 +346,8 @@ export async function resumeWorkspace(
     workspace,
     runState: state,
     manifest: manifest as any,
+    contract,
+    frozenConfig,
     lifecycleReason: `Resumed from ${lifecycle.current}: ${lifecycle.history[lifecycle.history.length - 1]?.to ?? "unknown"}`,
   };
 }
@@ -318,7 +362,6 @@ export function validateFrozenCapabilities(
   deps: ResumeDependencies,
 ): string | null {
   const models = deps.getModels();
-  const providers = deps.getProviders();
 
   // Check each resolved model is still valid
   for (const [roleName, modelEntry] of Object.entries(contract.resolvedModels)) {
@@ -334,4 +377,98 @@ export function validateFrozenCapabilities(
   }
 
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Activation-time snapshot validators (fail-closed shape checks)
+// ---------------------------------------------------------------------------
+
+/** Structural check for a persisted {@link ResolvedRunContract} snapshot. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: string[]): boolean {
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length &&
+    actual.every((key, index) => key === [...expected].sort()[index]);
+}
+
+function cloneSnapshot<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      deepFreeze(nested);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
+
+/** Fail-closed structural check for a persisted ResolvedRunContract snapshot. */
+function isResolvedContractSnapshot(value: unknown): value is ResolvedRunContract {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    "runId", "transitionId", "mission", "profile", "programPath",
+    "profileConfig", "defaults", "resolvedProfiles", "resolvedModels",
+    "hardCeilings",
+  ])) return false;
+  if (
+    typeof value.runId !== "string" ||
+    typeof value.transitionId !== "string" ||
+    typeof value.mission !== "string" ||
+    typeof value.profile !== "string" ||
+    typeof value.programPath !== "string" ||
+    !isRecord(value.profileConfig) ||
+    !isRecord(value.defaults) ||
+    !isRecord(value.hardCeilings) ||
+    !isRecord(value.resolvedProfiles) ||
+    !isRecord(value.resolvedModels)
+  ) return false;
+
+  const profiles = value.resolvedProfiles;
+  const models = value.resolvedModels;
+  const names = Object.keys(profiles);
+  if (names.length === 0 || names.sort().join("\0") !== Object.keys(models).sort().join("\0")) {
+    return false;
+  }
+  for (const name of names) {
+    const profile = profiles[name];
+    const model = models[name];
+    if (
+      !isRecord(profile) ||
+      !hasExactKeys(profile, [
+        "name", "description", "model", "thinking", "tools", "access",
+        "systemPrompt", "timeoutSeconds",
+      ]) ||
+      profile.name !== name ||
+      typeof profile.description !== "string" ||
+      typeof profile.model !== "string" ||
+      typeof profile.thinking !== "string" ||
+      !Array.isArray(profile.tools) ||
+      !profile.tools.every((tool) => typeof tool === "string") ||
+      (profile.access !== "read" && profile.access !== "write") ||
+      typeof profile.systemPrompt !== "string" ||
+      !profile.systemPrompt.trim() ||
+      typeof profile.timeoutSeconds !== "number" ||
+      !isRecord(model) ||
+      typeof model.id !== "string" ||
+      typeof model.name !== "string" ||
+      typeof model.provider !== "string" ||
+      !Array.isArray(model.capabilities) ||
+      !model.capabilities.every((capability) => typeof capability === "string")
+    ) return false;
+  }
+  return true;
+}
+
+/** Structural check; complete role validation runs via ResearchPolicy. */
+function isFrozenConfigSnapshot(value: unknown): value is FrozenConfig {
+  return isRecord(value) &&
+    isRecord(value.roles) &&
+    Object.keys(value.roles).length > 0 &&
+    typeof value.hardTimeoutSeconds === "number" &&
+    Number.isFinite(value.hardTimeoutSeconds);
 }

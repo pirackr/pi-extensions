@@ -70,19 +70,13 @@ function mockCtx(cwd: string, confirmResponse = true) {
 }
 
 /**
- * Fake Pi model registry with the research role aliases (strong/eval/light)
- * plus one registered provider id. Backs the ModelRegistryView/ProviderRegistryView
- * injected into prepareAndActivateResearch by loop/index.ts.
+ * Fake Pi model registry with the concrete targets of research-owned aliases.
  */
 function fakeModelRegistry() {
 	const models = [
-		{ id: "local/strong", name: "strong", provider: "local", reasoning: true, input: ["text"] },
-		{ id: "local/fast", name: "fast", provider: "local", reasoning: false, input: ["text"] },
-		{ id: "local/eval", name: "eval", provider: "local", reasoning: true, input: ["text"] },
-		{ id: "local/light", name: "light", provider: "local", reasoning: false, input: ["text"] },
-		// Concrete targets of the packaged tmux-subagent aliases (config/tmux-subagent.json).
-		{ id: "opencode-zen/x-preview-f-free", name: "x-preview-f-free", provider: "opencode-zen", reasoning: false, input: ["text"] },
-		{ id: "opencode-zen/mimo-v2.5-free", name: "mimo-v2.5-free", provider: "opencode-zen", reasoning: false, input: ["text"] },
+		{ id: "opencode-zen/x-preview-f-free", name: "x-preview-f-free", provider: "opencode-zen", reasoning: true, input: ["text"] },
+		{ id: "local/XYZAILab_XYZ-Aquila-mini-GGUF-Q4_K_M", name: "XYZAILab_XYZ-Aquila-mini-GGUF-Q4_K_M", provider: "local", reasoning: false, input: ["text"] },
+		{ id: "opencode-zen/mimo-v2.5-free", name: "mimo-v2.5-free", provider: "opencode-zen", reasoning: true, input: ["text"] },
 	];
 	return {
 		getAll: () => models,

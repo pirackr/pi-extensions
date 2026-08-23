@@ -14,14 +14,10 @@ import type { ResolvedResearchConfig } from "../extensions/research/config.ts";
 import type { WorkspaceClaim, StagedRun, Workspace } from "../extensions/research/workspace.ts";
 import type { RunState, RunLease } from "../extensions/research/state.ts";
 import type { RunManifest } from "../extensions/research/manifest.ts";
-import type {
-	ProviderDescriptor,
-} from "../extensions/subagent-dispatch/contract.ts";
 import {
 	validateStartupContract,
 	prepareAndActivateResearch,
 	type ModelRegistryView,
-	type ProviderRegistryView,
 	type ResolvedRunContract,
 	type ResearchStartRequest,
 	type StartupDependencies,
@@ -33,6 +29,11 @@ import { ResearchPolicy, type FrozenConfig } from "../extensions/research/policy
 import { registerLoopCommand } from "../extensions/loop/command.ts";
 import { LoopEngine } from "../extensions/loop/engine.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+// Provider-free startup reads complete role prompts. Reuse the packaged,
+// read-only research prompts instead of creating repository test artifacts.
+const SCOUT_PROMPT = path.resolve("skills/research/agents/scout.md");
+const JUDGE_PROMPT = path.resolve("skills/research/agents/judge.md");
 
 // ---------------------------------------------------------------------------
 // Helpers — test double factories
@@ -78,7 +79,7 @@ function baseConfig(): ResolvedResearchConfig {
 				tools: ["web_lookup", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 1800,
-				promptPath: "/fake/scout.md",
+				promptPath: SCOUT_PROMPT,
 				resultFormat: "markdown",
 				totalDispatch: 30,
 				concurrentDispatch: 8,
@@ -93,7 +94,7 @@ function baseConfig(): ResolvedResearchConfig {
 				tools: ["read"],
 				access: "read",
 				timeoutSeconds: 1200,
-				promptPath: "/fake/judge.md",
+				promptPath: JUDGE_PROMPT,
 				resultFormat: "markdown",
 				totalDispatch: 10,
 				concurrentDispatch: 1,
@@ -121,26 +122,6 @@ function fakeModelRegistry(
 	};
 }
 
-function fakeProviderRegistry(
-	descs: ProviderDescriptor[] = [],
-): ProviderRegistryView {
-	const map = new Map<string, ProviderDescriptor>();
-	for (const d of descs) {
-		map.set(d.id, d);
-	}
-	return {
-		get(id: string) {
-			return map.get(id);
-		},
-		has(id: string) {
-			return map.has(id);
-		},
-		getAll() {
-			return Array.from(map.values());
-		},
-	};
-}
-
 function fakeWorkspace(
 	projectRoot: string,
 	mission: string,
@@ -163,75 +144,28 @@ function fakeWorkspace(
 // Step 1: Negotiation tests — validateStartupContract
 // ===========================================================================
 
-describe("validateStartupContract — negotiation", () => {
+describe("validateStartupContract — role resolution and validation", () => {
 	it("throws on unresolved model name in a role", async () => {
 		const config = baseConfig();
 		config.roles.scout.model = "nonexistent-model";
 		const models = fakeModelRegistry({ eval: { id: "eval-1", name: "eval", provider: "anthropic", capabilities: [] } });
-		const providers = fakeProviderRegistry([]);
-		await expect(validateStartupContract(config, models, providers)).rejects.toThrow(
+		await expect(validateStartupContract(config, models)).rejects.toThrow(
 			"model 'nonexistent-model' not found",
 		);
 	});
 
-	it("throws on missing child extension in provider registry", async () => {
+	it("throws when a read role declares a write-capable tool", async () => {
 		const config = baseConfig();
-		config.childExtensions = ["child-ext-not-found"];
-		const models = fakeModelRegistry({ strong: { id: "s1", name: "strong", provider: "a", capabilities: [] }, eval: { id: "e1", name: "eval", provider: "a", capabilities: [] } });
-		const providers = fakeProviderRegistry([
-			{ id: "child-ext-found", adapterVersion: "1.0", capabilities: ["local"] },
-		]);
-		await expect(validateStartupContract(config, models, providers)).rejects.toThrow(
-			"Required child extension 'child-ext-not-found' not found",
-		);
+		config.roles.scout.tools = ["read", "write"];
+		config.roles.scout.access = "read" as const;
+		const models = fakeModelRegistry({
+			strong: { id: "strong-1", name: "strong", provider: "anthropic", capabilities: ["web_lookup", "fetch_web"] },
+			eval: { id: "eval-1", name: "eval", provider: "anthropic", capabilities: ["read"] },
+		});
+		await expect(validateStartupContract(config, models)).rejects.toThrow(/write|access/i);
 	});
 
-	it("throws on missing provider when selected explicitly", async () => {
-		const config = baseConfig();
-		config.defaultProvider = "nonexistent-provider";
-		const models = fakeModelRegistry({ strong: { id: "s1", name: "strong", provider: "a", capabilities: [] }, eval: { id: "e1", name: "eval", provider: "a", capabilities: [] } });
-		const providers = fakeProviderRegistry([
-			{ id: "existing-provider", adapterVersion: "1.0", capabilities: ["local"] },
-		]);
-		await expect(validateStartupContract(config, models, providers)).rejects.toThrow(
-			'Provider "nonexistent-provider" not found',
-		);
-	});
-
-	it("handles duplicate provider registration (fake keeps last)", async () => {
-		const config = baseConfig();
-		config.defaultProvider = "dup";
-		const models = fakeModelRegistry({ strong: { id: "s1", name: "strong", provider: "a", capabilities: [] }, eval: { id: "e1", name: "eval", provider: "a", capabilities: [] } });
-		// Fake registry keeps last registration for duplicate IDs
-		const providers = fakeProviderRegistry([
-			{ id: "dup", adapterVersion: "1.0", capabilities: [] },
-			{ id: "dup", adapterVersion: "1.1", capabilities: ["web_lookup", "fetch_web", "read"] },
-		]);
-		// The contract should succeed with the last-registered descriptor
-		const contract = await validateStartupContract(config, models, providers);
-		expect(contract.providerSelection.resolvedProvider.adapterVersion).toBe("1.1");
-	});
-
-	it("throws when selected provider lacks required capabilities", async () => {
-		const config = baseConfig();
-		config.defaultProvider = "weak-provider";
-		config.roles.scout.tools = ["web_lookup"];
-		config.capabilities["web-search"] = {
-			name: "web-search",
-			paths: ["/fake/web-search.ts"],
-			requiredTools: ["web_lookup"],
-		};
-		config.childExtensions = [];
-		const models = fakeModelRegistry({ strong: { id: "s1", name: "strong", provider: "a", capabilities: [] }, eval: { id: "e1", name: "eval", provider: "a", capabilities: [] } });
-		const providers = fakeProviderRegistry([
-			{ id: "weak-provider", adapterVersion: "1.0", capabilities: ["local"] },
-		]);
-		await expect(validateStartupContract(config, models, providers)).rejects.toThrow(
-			"lacks capabilities",
-		);
-	});
-
-	it("throws on insufficient hard ceilings", async () => {
+	it("throws on insufficient concurrent capacity (hard ceiling)", async () => {
 		const config = baseConfig();
 		config.roles.scout.concurrentDispatch = 0;
 		config.roles.judge.concurrentDispatch = 0;
@@ -239,11 +173,11 @@ describe("validateStartupContract — negotiation", () => {
 		config.roles.judge.tools = [];
 		config.capabilities = {};
 		config.childExtensions = [];
-		const models = fakeModelRegistry({ strong: { id: "s1", name: "strong", provider: "a", capabilities: [] }, eval: { id: "e1", name: "eval", provider: "a", capabilities: [] } });
-		const providers = fakeProviderRegistry([
-			{ id: "local", adapterVersion: "1.0", capabilities: [] },
-		]);
-		await expect(validateStartupContract(config, models, providers)).rejects.toThrow(
+		const models = fakeModelRegistry({
+			strong: { id: "s1", name: "strong", provider: "a", capabilities: [] },
+			eval: { id: "e1", name: "eval", provider: "a", capabilities: [] },
+		});
+		await expect(validateStartupContract(config, models)).rejects.toThrow(
 			"Insufficient concurrent capacity",
 		);
 	});
@@ -254,14 +188,7 @@ describe("validateStartupContract — negotiation", () => {
 			strong: { id: "strong-1", name: "strong", provider: "anthropic", capabilities: ["local", "web-search"] },
 			eval: { id: "eval-1", name: "eval", provider: "anthropic", capabilities: ["local"] },
 		});
-		const providers = fakeProviderRegistry([
-			{
-				id: "local",
-				adapterVersion: "1.0",
-				capabilities: ["web_lookup", "fetch_web", "read", "local"],
-			},
-		]);
-		const contract = await validateStartupContract(config, models, providers);
+		const contract = await validateStartupContract(config, models);
 
 		expect(contract).toBeDefined();
 		expect(contract.profile).toBe("standard");
@@ -269,11 +196,26 @@ describe("validateStartupContract — negotiation", () => {
 		expect(contract.profileConfig.maxRounds).toBe(5);
 		expect(contract.profileConfig.minSources).toBe(30);
 		expect(contract.profileConfig.verification).toEqual(["judge"]);
+		expect(contract.resolvedProfiles.scout).toBeDefined();
+		expect(contract.resolvedProfiles.scout.model).toBe("strong-1");
+		expect(contract.resolvedProfiles.judge.model).toBe("eval-1");
 		expect(contract.resolvedModels.scout).toBeDefined();
 		expect(contract.resolvedModels.scout.id).toBe("strong-1");
-		expect(contract.resolvedModels.judge).toBeDefined();
 		expect(contract.resolvedModels.judge.id).toBe("eval-1");
-		expect(contract.providerSelection.resolvedProvider.id).toBe("local");
+		// Provider negotiation is gone: the frozen contract exposes exactly the
+		// Task 15 keys only, with no provider-negotiation block.
+		expect(Object.keys(contract).sort()).toEqual([
+			"defaults",
+			"hardCeilings",
+			"mission",
+			"profile",
+			"profileConfig",
+			"programPath",
+			"resolvedModels",
+			"resolvedProfiles",
+			"runId",
+			"transitionId",
+		]);
 		expect(contract.hardCeilings.hardTimeoutSeconds).toBe(1800);
 		expect(contract.hardCeilings.maxConcurrentAttempts).toBe(9); // 8 + 1
 		expect(contract.transitionId).toMatch(/^tr-/);
@@ -284,8 +226,7 @@ describe("validateStartupContract — negotiation", () => {
 		const config = baseConfig();
 		config.defaultProfile = "nonexistent-profile";
 		const models = fakeModelRegistry({ strong: { id: "s1", name: "strong", provider: "a", capabilities: [] }, eval: { id: "e1", name: "eval", provider: "a", capabilities: [] } });
-		const providers = fakeProviderRegistry([]);
-		await expect(validateStartupContract(config, models, providers)).rejects.toThrow(
+		await expect(validateStartupContract(config, models)).rejects.toThrow(
 			"Unknown profile",
 		);
 	});
@@ -299,9 +240,8 @@ describe("prepareAndActivateResearch — transaction flow", () => {
 	let tmpDir: string;
 	let config: ResolvedResearchConfig;
 	let models: ModelRegistryView;
-	let providers: ProviderRegistryView;
 
-	function baseDeps(): Omit<StartupDependencies, "getModels" | "getProviders" | "config"> {
+	function baseDeps(): Omit<StartupDependencies, "getModels" | "config"> {
 		const transitionsPath = path.join(tmpDir, ".research", "transitions.json");
 		fs.mkdirSync(path.join(tmpDir, ".research"), { recursive: true });
 		const transitions = new TransitionsFile(transitionsPath);
@@ -421,13 +361,6 @@ describe("prepareAndActivateResearch — transaction flow", () => {
 			strong: { id: "strong-1", name: "strong", provider: "anthropic", capabilities: ["web_lookup", "fetch_web"] },
 			eval: { id: "eval-1", name: "eval", provider: "anthropic", capabilities: ["read"] },
 		});
-		providers = fakeProviderRegistry([
-			{
-				id: "local",
-				adapterVersion: "1.0",
-				capabilities: ["web_lookup", "fetch_web", "read", "local"],
-			},
-		]);
 	});
 
 	afterEach(() => {
@@ -444,7 +377,7 @@ describe("prepareAndActivateResearch — transaction flow", () => {
 			yes: false,
 		};
 		await expect(
-			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models }),
 		).rejects.toThrow("CONTRACT_REQUIRES_CONFIRMATION");
 	});
 
@@ -495,7 +428,7 @@ describe("prepareAndActivateResearch — transaction flow", () => {
 			yes: true,
 		};
 		try {
-			await prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers });
+			await prepareAndActivateResearch(request, { ...deps, config, getModels: () => models });
 			expect.fail("Should have thrown");
 		} catch {
 			// Staging should be cleaned up by the function's catch block
@@ -514,7 +447,7 @@ describe("prepareAndActivateResearch — transaction flow", () => {
 			profileOverride: null,
 			yes: true,
 		};
-		const pointer = await prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers });
+		const pointer = await prepareAndActivateResearch(request, { ...deps, config, getModels: () => models });
 
 		expect(pointer).toBeDefined();
 		expect(pointer.workspace).toBeDefined();
@@ -570,7 +503,7 @@ describe("prepareAndActivateResearch — transaction flow", () => {
 		};
 
 		await expect(
-			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models }),
 		).rejects.toThrow("Commit failed");
 	});
 
@@ -585,7 +518,7 @@ describe("prepareAndActivateResearch — transaction flow", () => {
 		};
 
 		// First activation
-		const pointer1 = await prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers });
+		const pointer1 = await prepareAndActivateResearch(request, { ...deps, config, getModels: () => models });
 		expect(deps.transitions.getTransitions().length).toBe(1);
 
 		// Second activation with same transitionId (should not create duplicate)
@@ -618,7 +551,7 @@ describe("prepareAndActivateResearch — transaction flow", () => {
 		// so the contract will have a new one. The transition file will have 2 entries.
 		// This verifies that the append is idempotent within a single run.
 		try {
-			await prepareAndActivateResearch(request2, { ...deps, config, getModels: () => models, getProviders: () => providers });
+			await prepareAndActivateResearch(request2, { ...deps, config, getModels: () => models });
 		} catch {
 			// Expected — the workspace cleanup from first run might conflict
 		}
@@ -674,7 +607,7 @@ describe("prepareAndActivateResearch — transaction flow", () => {
 			profileOverride: null,
 			yes: true,
 		};
-		const ptr1 = await prepareAndActivateResearch(req1, { ...deps, config, getModels: () => models, getProviders: () => providers });
+		const ptr1 = await prepareAndActivateResearch(req1, { ...deps, config, getModels: () => models });
 
 		// Second activation — should mark first as replaced
 		const req2: ResearchStartRequest = {
@@ -684,7 +617,7 @@ describe("prepareAndActivateResearch — transaction flow", () => {
 			profileOverride: null,
 			yes: true,
 		};
-		const ptr2 = await prepareAndActivateResearch(req2, { ...deps, config, getModels: () => models, getProviders: () => providers });
+		const ptr2 = await prepareAndActivateResearch(req2, { ...deps, config, getModels: () => models });
 
 		const transitions = deps.transitions.getTransitions();
 		expect(transitions.length).toBe(2);
@@ -870,9 +803,8 @@ describe("F9: Mid-flow failure cleanup", () => {
 	let tmpDir: string;
 	let config: ResolvedResearchConfig;
 	let models: ModelRegistryView;
-	let providers: ProviderRegistryView;
 
-	function baseDeps(): Omit<StartupDependencies, "getModels" | "getProviders" | "config"> {
+	function baseDeps(): Omit<StartupDependencies, "getModels" | "config"> {
 		const transitionsPath = path.join(tmpDir, ".research", "transitions.json");
 		fs.mkdirSync(path.join(tmpDir, ".research"), { recursive: true });
 		const transitions = new TransitionsFile(transitionsPath);
@@ -982,13 +914,6 @@ describe("F9: Mid-flow failure cleanup", () => {
 			strong: { id: "strong-1", name: "strong", provider: "anthropic", capabilities: ["web_lookup", "fetch_web"] },
 			eval: { id: "eval-1", name: "eval", provider: "anthropic", capabilities: ["read"] },
 		});
-		providers = fakeProviderRegistry([
-			{
-				id: "local",
-				adapterVersion: "1.0",
-				capabilities: ["web_lookup", "fetch_web", "read", "local"],
-			},
-		]);
 	});
 
 	afterEach(() => {
@@ -1024,7 +949,7 @@ describe("F9: Mid-flow failure cleanup", () => {
 
 		const request = makeRequest("ManifestFailure");
 		await expect(
-			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models }),
 		).rejects.toThrow("Manifest creation failed");
 
 		// Staging should be cleaned up
@@ -1050,7 +975,7 @@ describe("F9: Mid-flow failure cleanup", () => {
 
 		const request = makeRequest("StateFailure");
 		await expect(
-			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models }),
 		).rejects.toThrow("State creation failed");
 
 		expect(stagingPath).toBeDefined();
@@ -1075,7 +1000,7 @@ describe("F9: Mid-flow failure cleanup", () => {
 
 		const request = makeRequest("LeaseFailure");
 		await expect(
-			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models }),
 		).rejects.toThrow("Lease acquisition failed");
 
 		expect(stagingPath).toBeDefined();
@@ -1100,7 +1025,7 @@ describe("F9: Mid-flow failure cleanup", () => {
 
 		const request = makeRequest("GitExcludeFailure");
 		await expect(
-			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models }),
 		).rejects.toThrow("Git exclude failed");
 
 		expect(stagingPath).toBeDefined();
@@ -1125,7 +1050,7 @@ describe("F9: Mid-flow failure cleanup", () => {
 
 		const request = makeRequest("TransitionFailure");
 		await expect(
-			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models }),
 		).rejects.toThrow("Transition append failed");
 
 		expect(stagingPath).toBeDefined();
@@ -1150,7 +1075,7 @@ describe("F9: Mid-flow failure cleanup", () => {
 
 		const request = makeRequest("PointerFailure");
 		await expect(
-			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models }),
 		).rejects.toThrow("Pointer install failed");
 
 		expect(stagingPath).toBeDefined();
@@ -1175,7 +1100,7 @@ describe("F9: Mid-flow failure cleanup", () => {
 
 		const request = makeRequest("PolicyFailure");
 		await expect(
-			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models }),
 		).rejects.toThrow("Policy creation failed");
 
 		expect(stagingPath).toBeDefined();
@@ -1200,7 +1125,7 @@ describe("F9: Mid-flow failure cleanup", () => {
 
 		const request = makeRequest("CheckpointFailure");
 		await expect(
-			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+			prepareAndActivateResearch(request, { ...deps, config, getModels: () => models }),
 		).rejects.toThrow("Checkpoint failed");
 
 		// After staging commit, the staging dir is renamed to final. We verify
@@ -1220,7 +1145,7 @@ describe("F9: Mid-flow failure cleanup", () => {
 			profileOverride: null,
 			yes: true,
 		};
-		const ptr1 = await prepareAndActivateResearch(req1, { ...deps, config, getModels: () => models, getProviders: () => providers });
+		const ptr1 = await prepareAndActivateResearch(req1, { ...deps, config, getModels: () => models });
 		expect(ptr1).toBeDefined();
 
 		// Record the prior run state
@@ -1242,7 +1167,7 @@ describe("F9: Mid-flow failure cleanup", () => {
 			yes: true,
 		};
 		await expect(
-			prepareAndActivateResearch(req2, { ...deps, config, getModels: () => models, getProviders: () => providers }),
+			prepareAndActivateResearch(req2, { ...deps, config, getModels: () => models }),
 		).rejects.toThrow("Manifest creation failed");
 
 		// Verify prior run is untouched
@@ -1269,12 +1194,9 @@ describe("F10: Empty roles edge case", () => {
 			strong: { id: "s1", name: "strong", provider: "a", capabilities: [] },
 			eval: { id: "e1", name: "eval", provider: "a", capabilities: [] },
 		});
-		const providers = fakeProviderRegistry([
-			{ id: "local", adapterVersion: "1.0", capabilities: [] },
-		]);
 
 		// With empty roles, resolvedModels should be empty, no model resolution errors
-		const contract = await validateStartupContract(config, models, providers);
+		const contract = await validateStartupContract(config, models);
 
 		expect(contract).toBeDefined();
 		expect(Object.keys(contract.resolvedModels)).toHaveLength(0);
@@ -1296,11 +1218,8 @@ describe("F10: Empty roles edge case", () => {
 			strong: { id: "s1", name: "strong", provider: "a", capabilities: [] },
 			eval: { id: "e1", name: "eval", provider: "a", capabilities: [] },
 		});
-		const providers = fakeProviderRegistry([
-			{ id: "local", adapterVersion: "1.0", capabilities: [] },
-		]);
 
-		await expect(validateStartupContract(config, models, providers)).rejects.toThrow(
+		await expect(validateStartupContract(config, models)).rejects.toThrow(
 			"Insufficient concurrent capacity",
 		);
 	});
@@ -1316,9 +1235,150 @@ describe("validateStartupContract — edge cases", () => {
 		config.profiles.standard.maxRounds = 2;
 		config.profiles.standard.minRounds = 5;
 		const models = fakeModelRegistry({ strong: { id: "s1", name: "strong", provider: "a", capabilities: [] }, eval: { id: "e1", name: "eval", provider: "a", capabilities: [] } });
-		const providers = fakeProviderRegistry([]);
-		await expect(validateStartupContract(config, models, providers)).rejects.toThrow(
+		await expect(validateStartupContract(config, models)).rejects.toThrow(
 			"minRounds",
 		);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Task 15: provider-free startup contract + research-owned resolved profiles
+//
+// All of these call validateStartupContract with the provider-free
+// (config, models) signature and assert the Task 15 contract shape: each role
+// alias resolves through config.models to a concrete model, prompts are read
+// and frozen, and access/tool conflicts are checked — no provider negotiation.
+// ---------------------------------------------------------------------------
+
+describe("Task 15 — provider-free startup contract and resolvedProfiles", () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = createTempDir();
+	});
+
+	afterEach(() => {
+		cleanup(tmpDir);
+	});
+
+	function task15Config(
+		aliases: Record<string, string>,
+	): ResolvedResearchConfig {
+		const scoutPrompt = path.join(tmpDir, "scout.md");
+		const judgePrompt = path.join(tmpDir, "judge.md");
+		fs.writeFileSync(scoutPrompt, "# Scout\nscout system prompt", "utf-8");
+		fs.writeFileSync(judgePrompt, "# Judge\njudge system prompt", "utf-8");
+		const base = baseConfig();
+		return {
+			...base,
+			models: aliases,
+			roles: {
+				scout: { ...base.roles.scout, promptPath: scoutPrompt },
+				judge: { ...base.roles.judge, promptPath: judgePrompt },
+			},
+		};
+	}
+
+	function task15Models(): ModelRegistryView {
+		return fakeModelRegistry({
+			"strong-1": {
+				id: "strong-1",
+				name: "strong",
+				provider: "anthropic",
+				capabilities: ["web_lookup", "fetch_web"],
+			},
+			"eval-1": {
+				id: "eval-1",
+				name: "eval",
+				provider: "anthropic",
+				capabilities: ["read"],
+			},
+		});
+	}
+
+	it("accepts config + model registry only and returns frozen resolvedProfiles keyed by role", async () => {
+		const config = task15Config({ strong: "strong-1", eval: "eval-1" });
+		const contract = await validateStartupContract(config, task15Models());
+
+		expect(contract.resolvedProfiles).toBeDefined();
+		expect(Object.keys(contract.resolvedProfiles).sort()).toEqual([
+			"judge",
+			"scout",
+		]);
+	});
+
+	it("produces a concrete immutable ResolvedProfile snapshot per role", async () => {
+		const config = task15Config({ strong: "strong-1", eval: "eval-1" });
+		const contract = await validateStartupContract(config, task15Models());
+
+		const scout = contract.resolvedProfiles.scout;
+		expect(scout.name).toBe("scout");
+		expect(scout.description).toBe("Discover sources");
+		expect(scout.thinking).toBe("high");
+		expect(scout.tools).toEqual(["web_lookup", "fetch_web"]);
+		expect(scout.systemPrompt).toBe("# Scout\nscout system prompt");
+		expect(scout.timeoutSeconds).toBe(1800);
+		expect(Object.isFrozen(contract.resolvedProfiles)).toBe(true);
+		expect(Object.isFrozen(scout)).toBe(true);
+		expect(Object.isFrozen(scout.tools)).toBe(true);
+
+		config.roles.scout.tools.push("write");
+		config.models.strong = "changed-after-validation";
+		expect(scout.tools).toEqual(["web_lookup", "fetch_web"]);
+		expect(scout.model).toBe("strong-1");
+	});
+
+	it("resolves each role model alias through config.models to a concrete model", async () => {
+		const config = task15Config({ strong: "strong-1", eval: "eval-1" });
+		// Registry only exposes the concrete model ids; the alias must resolve.
+		const contract = await validateStartupContract(config, task15Models());
+
+		expect(contract.resolvedProfiles.scout.model).toBe("strong-1");
+		expect(contract.resolvedProfiles.judge.model).toBe("eval-1");
+	});
+
+	it("rejects a role whose model alias is unknown in config and registry", async () => {
+		const config = task15Config({});
+		config.roles.scout.model = "ghost";
+		const models = fakeModelRegistry({});
+		await expect(
+			validateStartupContract(config, models),
+		).rejects.toThrow(/alias|model 'ghost'.*not found/i);
+	});
+
+	it("rejects a role whose promptPath is missing or malformed", async () => {
+		const config = task15Config({ strong: "strong-1", eval: "eval-1" });
+		config.roles.scout.promptPath = "/nonexistent/prompt-does-not-exist.md";
+		await expect(
+			validateStartupContract(config, task15Models()),
+		).rejects.toThrow(/prompt/i);
+	});
+
+	it("rejects an access:read role that declares write-capable tools", async () => {
+		const config = task15Config({ strong: "strong-1", eval: "eval-1" });
+		config.roles.scout.tools = ["read", "write"];
+		config.roles.scout.access = "read" as const;
+		await expect(
+			validateStartupContract(config, task15Models()),
+		).rejects.toThrow(/write|access/i);
+	});
+
+	it("returns exactly the Task 15 contract keys (no provider negotiation block)", async () => {
+		const config = task15Config({ strong: "strong-1", eval: "eval-1" });
+		const contract = await validateStartupContract(config, task15Models());
+		// The frozen contract exposes the Task 15 keys only — no provider-
+		// negotiation block.
+		expect(Object.keys(contract).sort()).toEqual([
+			"defaults",
+			"hardCeilings",
+			"mission",
+			"profile",
+			"profileConfig",
+			"programPath",
+			"resolvedModels",
+			"resolvedProfiles",
+			"runId",
+			"transitionId",
+		]);
 	});
 });

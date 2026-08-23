@@ -3341,3 +3341,95 @@ describe("ConfigLayer kind discrimination", () => {
 		expect(result.defaults.maxIterations).toBe(20);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// resolveResearchConfig — Task 15: research-owned `models` alias map
+//
+// These tests fail against the current config (which rejects `models` as an
+// unknown field and never exposes resolved aliases) and assert the Task 15
+// behavior: a validated, layered `models` alias map owned by research config.
+// ---------------------------------------------------------------------------
+
+describe("resolveResearchConfig — models alias map (Task 15)", () => {
+	it("accepts and exposes a validated packaged models alias map", async () => {
+		const { resolveResearchConfig } = await import("../extensions/research/config.ts");
+
+		const layer = {
+			path: "/pkg.json",
+			kind: "packaged" as const,
+			value: {
+				...makeBaseConfig(),
+				models: {
+					strong: "x-preview-f-free",
+					eval: "mimo-v2.5-free",
+					light: "x-preview-f-free",
+					fast: "fast-alias-model",
+				},
+			},
+		};
+
+		const result = resolveResearchConfig([layer]);
+		expect(result.models).toBeDefined();
+		expect(result.models.strong).toBe("x-preview-f-free");
+		expect(result.models.eval).toBe("mimo-v2.5-free");
+	});
+
+	it("lets a trusted user layer override a packaged alias under layering rules", async () => {
+		const { resolveResearchConfig } = await import("../extensions/research/config.ts");
+
+		const layer1 = {
+			path: "/pkg.json",
+			kind: "packaged" as const,
+			value: {
+				...makeBaseConfig(),
+				models: { strong: "pkg-strong", eval: "pkg-eval" },
+			},
+		};
+		const layer2 = {
+			path: "/user.json",
+			kind: "user" as const,
+			value: {
+				models: { strong: "user-strong" },
+			},
+		};
+
+		const result = resolveResearchConfig([layer1, layer2]);
+		expect(result.models.strong).toBe("user-strong");
+		// Unoverridden alias still resolves from the packaged layer.
+		expect(result.models.eval).toBe("pkg-eval");
+	});
+
+	it("rejects a credential field inside the models alias map", async () => {
+		const { resolveResearchConfig } = await import("../extensions/research/config.ts");
+
+		const layer = {
+			path: "/pkg.json",
+			kind: "packaged" as const,
+			value: {
+				...makeBaseConfig(),
+				models: { strong: "x-preview-f-free", token: "sk-live-secret" },
+			},
+		};
+
+		expect(() => resolveResearchConfig([layer])).toThrow("Credential field");
+	});
+
+	it("ships research-owned aliases and the generic subagent child runtime", async () => {
+		const { loadPackagedConfig } = await import("../extensions/research/config.ts");
+		const packaged = loadPackagedConfig();
+
+		expect(Object.keys(packaged.models)).toEqual(
+			expect.arrayContaining(["strong", "eval", "light", "fast"]),
+		);
+		expect(
+			packaged.childExtensions.some((entry) =>
+				entry.endsWith("/extensions/subagent/index.ts"),
+			),
+		).toBe(true);
+		expect(
+			packaged.childExtensions.some((entry) =>
+				entry.endsWith("/extensions/tmux-subagent/index.ts"),
+			),
+		).toBe(false);
+	});
+});

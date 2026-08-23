@@ -150,6 +150,31 @@ describe("registerResearchSubagentIntegration", () => {
 		expect(typeof contributions[0].adapter.reserve).toBe("function");
 		expect(typeof contributions[0].adapter.settle).toBe("function");
 	});
+
+	it("answers later adapter discovery so extension load order cannot lose the active adapter", () => {
+		const workspace = makeFakeWorkspace(tmpDir, "late adapter discovery", "t2");
+		const listeners = new Map<string, Array<(data: { contributions: PolicyAdapterContribution[] }) => void>>();
+		const pi = {
+			events: {
+				on: (channel: string, listener: (data: { contributions: PolicyAdapterContribution[] }) => void) => {
+					listeners.set(channel, [...(listeners.get(channel) ?? []), listener]);
+				},
+				emit: (channel: string, data: { contributions: PolicyAdapterContribution[] }) => {
+					for (const listener of listeners.get(channel) ?? []) listener(data);
+				},
+			},
+		};
+
+		registerResearchSubagentIntegration(pi as never, {
+			workspace,
+			frozenConfig: { roles: { scout: makeRole("scout") }, hardTimeoutSeconds: 1800 },
+		});
+
+		const envelope = { contributions: [] as PolicyAdapterContribution[] };
+		pi.events.emit("subagent:register-policy-adapters", envelope);
+		expect(envelope.contributions).toHaveLength(1);
+		expect(envelope.contributions[0].owner).toBe("research");
+	});
 });
 
 // ===========================================================================

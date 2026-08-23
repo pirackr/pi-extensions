@@ -2,6 +2,12 @@
   "defaultProgram": "skills/research/program.md",
   "defaultProfile": "standard",
   "defaultProvider": null,
+  "models": {
+    "strong": "x-preview-f-free",
+    "eval": "mimo-v2.5-free",
+    "light": "x-preview-f-free",
+    "fast": "XYZAILab_XYZ-Aquila-mini-GGUF-Q4_K_M"
+  },
   "defaults": {
     "maxIterations": 10,
     "maxTokens": 200000,
@@ -196,14 +202,14 @@
       "paths": ["../extensions/web-search/index.ts"],
       "requiredTools": ["web_lookup", "fetch_web"]
     },
-    "tmux-subagent": {
-      "name": "tmux-subagent",
-      "paths": ["../extensions/tmux-subagent/index.ts"],
+    "subagent": {
+      "name": "subagent",
+      "paths": ["../extensions/subagent/index.ts"],
       "requiredTools": ["write", "read"]
     }
   },
   "childExtensions": [
     "../extensions/web-search/index.ts",
-    "../extensions/tmux-subagent/index.ts"
+    "../extensions/subagent/index.ts"
   ]
 }

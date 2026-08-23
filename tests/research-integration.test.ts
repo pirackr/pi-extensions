@@ -67,7 +67,6 @@ import {
 	validateStartupContract,
 	TransitionsFile,
 	type ModelRegistryView,
-	type ProviderRegistryView,
 	type StartupDependencies,
 	type ResearchStartRequest,
 	type ActiveResearchPointer,
@@ -104,6 +103,11 @@ import type {
 	ResolvedAttempt,
 	ProviderDescriptor,
 } from "../extensions/subagent-dispatch/contract.ts";
+
+// Provider-free startup reads complete role prompts. Reuse the packaged,
+// read-only research prompts instead of creating repository test artifacts.
+const SCOUT_PROMPT = path.resolve("skills/research/agents/scout.md");
+const JUDGE_PROMPT = path.resolve("skills/research/agents/judge.md");
 
 // ---------------------------------------------------------------------------
 // Helpers — temp dirs, registries, workspaces, evidence
@@ -157,7 +161,7 @@ function baseConfig(): ResolvedResearchConfig {
 				tools: ["web_lookup", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 1800,
-				promptPath: "/fake/scout.md",
+				promptPath: SCOUT_PROMPT,
 				resultFormat: "markdown",
 				totalDispatch: 30,
 				concurrentDispatch: 8,
@@ -172,7 +176,7 @@ function baseConfig(): ResolvedResearchConfig {
 				tools: ["read"],
 				access: "read",
 				timeoutSeconds: 1200,
-				promptPath: "/fake/judge.md",
+				promptPath: JUDGE_PROMPT,
 				resultFormat: "markdown",
 				totalDispatch: 10,
 				concurrentDispatch: 1,
@@ -192,21 +196,27 @@ function fakeModelRegistry(
 		{ id: string; name: string; provider: string; capabilities?: string[] }
 	> = {},
 ): ModelRegistryView {
-	const models = { ...overrides };
+	const models = Object.values(overrides);
+	const find = (name: string) =>
+		models.find((model) =>
+			model.id === name || model.name === name || model.id.endsWith(`/${name}`)
+		);
 	return {
 		get(name: string) {
-			const m = models[name];
-			return m ? { ...m, capabilities: m.capabilities ?? [] } : undefined;
+			const model = find(name);
+			return model
+				? { ...model, capabilities: [...(model.capabilities ?? [])] }
+				: undefined;
 		},
 		has(name: string) {
-			return name in models;
+			return find(name) !== undefined;
 		},
 	};
 }
 
 function fakeProviderRegistry(
 	descs: ProviderDescriptor[] = [],
-): ProviderRegistryView {
+) {
 	const map = new Map<string, ProviderDescriptor>();
 	for (const d of descs) {
 		map.set(d.id, d);
@@ -241,7 +251,7 @@ function standardModels() {
 	});
 }
 
-function standardProviders(): ProviderRegistryView {
+function standardProviders() {
 	return fakeProviderRegistry([
 		{
 			id: "local",
@@ -272,6 +282,10 @@ function buildWorkspace(
 			createdAt: Date.now(),
 		}),
 	);
+	// Persist the activation-time frozen snapshots (resolvedContract +
+	// frozenConfig) exactly as the startup engine would, so resume reuses the
+	// frozen contract instead of re-resolving roles / re-reading prompts.
+	persistFrozenSnapshots(ws);
 	const init = newRunState(ws);
 	fs.writeFileSync(
 		path.join(ws.path, ".research", "run-state.json"),
@@ -279,6 +293,87 @@ function buildWorkspace(
 		"utf-8",
 	);
 	return ws;
+}
+
+/**
+ * Persist the activation-time frozen snapshots (resolvedContract +
+ * frozenConfig) into a workspace's run.json — mirroring what the startup
+ * engine writes at activation. Resume re-reads these instead of re-resolving
+ * roles or re-reading mutable prompt sources.
+ */
+function persistFrozenSnapshots(ws: Workspace): void {
+	const manifestPath = path.join(ws.path, ".research", "run.json");
+	const manifest = JSON.parse(
+		fs.readFileSync(manifestPath, "utf-8"),
+	) as Record<string, unknown>;
+	manifest.resolvedContract = buildResolvedContract(ws);
+	manifest.frozenConfig = buildFrozenConfigFor(ws);
+	fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
+}
+
+/** Build a Task-15-shaped ResolvedRunContract snapshot for the standard run. */
+function buildResolvedContract(ws: Workspace) {
+	const standardConfig = baseConfig();
+	const roles = [
+		["scout", "strong-1", "strong"] as const,
+		["judge", "eval-1", "eval"] as const,
+	];
+	const resolvedProfiles: Record<string, unknown> = {};
+	const resolvedModels: Record<string, unknown> = {};
+	for (const [roleName, id, name] of roles) {
+		const role = standardConfig.roles[roleName];
+		const systemPrompt =
+			roleName === "scout" ? fs.readFileSync(SCOUT_PROMPT, "utf-8") : fs.readFileSync(JUDGE_PROMPT, "utf-8");
+		resolvedModels[roleName] = {
+			id,
+			name,
+			provider: "anthropic",
+			capabilities: [],
+		};
+		resolvedProfiles[roleName] = {
+			name: roleName,
+			description: role.description,
+			model: id,
+			thinking: role.thinking,
+			tools: [...role.tools],
+			access: role.access,
+			systemPrompt,
+			timeoutSeconds: role.timeoutSeconds,
+		};
+	}
+	return {
+		runId: ws.runId,
+		transitionId: ws.transitionId,
+		mission: ws.mission,
+		profile: "standard",
+		programPath: standardConfig.defaultProgram,
+		profileConfig: standardConfig.profiles.standard,
+		defaults: standardConfig.defaults,
+		resolvedProfiles,
+		resolvedModels,
+		hardCeilings: {
+			maxConcurrentAttempts: 9,
+			maxAttemptsPerTask: 30,
+			hardTimeoutSeconds: 1800,
+		},
+	};
+}
+
+/** Build the frozen policy configuration snapshot for the standard run. */
+function buildFrozenConfigFor(ws: Workspace) {
+	const contract = buildResolvedContract(ws) as Record<string, unknown>;
+	const resolvedModels = contract.resolvedModels as Record<string, { id: string }>;
+	const standardConfig = baseConfig();
+	const roles = Object.fromEntries(
+		Object.entries(standardConfig.roles).map(([name, role]) => [
+			name,
+			{ ...role, name, model: resolvedModels[name]?.id ?? role.model },
+		]),
+	);
+	return {
+		roles,
+		hardTimeoutSeconds: 1800,
+	};
 }
 
 /** Five score rows at 90 — above the packaged 80 threshold. */
@@ -597,7 +692,6 @@ describe("integration — startup and frozen snapshots", () => {
 		return {
 			config: baseConfig(),
 			getModels: () => standardModels(),
-			getProviders: () => standardProviders(),
 			workspace: {
 				acquireWorkspaceClaim,
 				prepareStaging,
@@ -680,9 +774,7 @@ describe("integration — startup and frozen snapshots", () => {
 
 		// Frozen contract
 		expect(pointer.contract.profileConfig.maxRounds).toBe(5);
-		expect(pointer.contract.providerSelection.resolvedProvider.id).toBe(
-			"local",
-		);
+		expect(pointer.contract.resolvedProfiles.scout.model).toBe("strong-1");
 		expect(pointer.contract.runId).toBe(pointer.workspace.runId);
 		expect(pointer.policy.workspace.runId).toBe(pointer.workspace.runId);
 
@@ -709,13 +801,11 @@ describe("integration — startup and frozen snapshots", () => {
 		const contract = await validateStartupContract(
 			config,
 			standardModels(),
-			standardProviders(),
 		);
 		const frozen = JSON.stringify(contract);
 		await validateStartupContract(
 			config,
 			standardModels(),
-			standardProviders(),
 		);
 		expect(JSON.stringify(contract)).toBe(frozen);
 	});
@@ -1365,7 +1455,6 @@ describe("integration — reload, resume, interruption, provider mismatch", () =
 			{
 				config: baseConfig(),
 				getModels: () => standardModels(),
-				getProviders: () => standardProviders(),
 			},
 			"resume-session",
 		);
@@ -1388,7 +1477,7 @@ describe("integration — reload, resume, interruption, provider mismatch", () =
 		}
 	});
 
-	it("rejects resume when the provider is missing (provider mismatch)", async () => {
+	it("rejects resume when a frozen profile model is missing", async () => {
 		const ws = buildWorkspace(tmpDir, "provider mismatch");
 		const snapshot = createLifecycleSnapshot("paused", "test-setup");
 		persistLifecycle(ws, snapshot);
@@ -1396,33 +1485,111 @@ describe("integration — reload, resume, interruption, provider mismatch", () =
 		const result = await resumeWorkspace(ws.path, {
 			config: baseConfig(),
 			getModels: () => fakeModelRegistry({}),
-			getProviders: () => fakeProviderRegistry([]),
 		});
 		expect(result.success).toBe(false);
 		if (!result.success) {
-			expect(["provider_incompatible", "models_changed"]).toContain(
-				result.reason,
-			);
+			expect(result.reason).toBe("models_changed");
 		}
 	});
 
-	it("rejects resume against a provider lacking required capabilities", async () => {
-		const ws = buildWorkspace(tmpDir, "weak provider resume");
+	it("fails closed when the frozen manifest snapshots are absent", async () => {
+		const ws = buildWorkspace(tmpDir, "missing snapshots");
+		// Strip the activation-time snapshots so resume has nothing to reuse.
+		const manifestPath = path.join(ws.path, ".research", "run.json");
+		const manifest = JSON.parse(
+			fs.readFileSync(manifestPath, "utf-8"),
+		) as Record<string, unknown>;
+		delete manifest.resolvedContract;
+		delete manifest.frozenConfig;
+		fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
 		const snapshot = createLifecycleSnapshot("paused", "test-setup");
 		persistLifecycle(ws, snapshot);
 
 		const result = await resumeWorkspace(ws.path, {
 			config: baseConfig(),
 			getModels: () => standardModels(),
-			getProviders: () =>
-				fakeProviderRegistry([
-					{ id: "weak", adapterVersion: "1.0", capabilities: ["local"] },
-				]),
+		});
+		// Resume must fail closed (never re-resolve / reread mutable sources).
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.reason).toBe("snapshot_invalid");
+		}
+	});
+
+	it("fails closed when the frozen manifest snapshot is malformed", async () => {
+		const ws = buildWorkspace(tmpDir, "malformed snapshots");
+		const manifestPath = path.join(ws.path, ".research", "run.json");
+		const manifest = JSON.parse(
+			fs.readFileSync(manifestPath, "utf-8"),
+		) as Record<string, unknown>;
+		manifest.resolvedContract = { nope: true };
+		manifest.frozenConfig = { hardTimeoutSeconds: 1800 };
+		fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
+		const snapshot = createLifecycleSnapshot("paused", "test-setup");
+		persistLifecycle(ws, snapshot);
+
+		const result = await resumeWorkspace(ws.path, {
+			config: baseConfig(),
+			getModels: () => standardModels(),
 		});
 		expect(result.success).toBe(false);
 		if (!result.success) {
-			expect(result.reason).toBe("provider_incompatible");
-			expect(result.error.toLowerCase()).toContain("capabilit");
+			expect(result.reason).toBe("snapshot_invalid");
+		}
+	});
+
+	it("resumes from the activation-time contract without re-reading mutable role prompts", async () => {
+		const ws = buildWorkspace(tmpDir, "prompt frozen resume");
+		const config = baseConfig();
+		config.models = { strong: "strong", eval: "eval" };
+		const contract = await validateStartupContract(
+			config,
+			standardModels(),
+			ws.mission,
+		);
+		contract.runId = ws.runId;
+		contract.mission = ws.mission;
+		const originalPrompt = contract.resolvedProfiles.scout.systemPrompt;
+		const manifestPath = path.join(ws.path, ".research", "run.json");
+		const manifest = JSON.parse(
+			fs.readFileSync(manifestPath, "utf-8"),
+		) as Record<string, unknown>;
+		manifest.resolvedContract = contract;
+		manifest.frozenConfig = {
+			roles: Object.fromEntries(
+				Object.entries(config.roles).map(([name, role]) => [
+					name,
+					{ ...role, name, model: contract.resolvedProfiles[name].model },
+				]),
+			),
+			hardTimeoutSeconds: contract.hardCeilings.hardTimeoutSeconds,
+		};
+		fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
+		const snapshot = createLifecycleSnapshot("paused", "test-setup");
+		persistLifecycle(ws, snapshot);
+
+		config.roles.scout.promptPath = "/nonexistent/role-prompt.md";
+		config.roles.scout.tools = ["write"];
+		config.roles.scout.access = "write";
+		config.models.strong = "changed-after-activation";
+
+		const result = await resumeWorkspace(ws.path, {
+			config,
+			getModels: () => standardModels(),
+		});
+		expect(result.success).toBe(true);
+		if (result.success) {
+			expect(result.contract.resolvedProfiles.scout.systemPrompt).toBe(
+				originalPrompt,
+			);
+			expect(result.contract.resolvedProfiles.scout.tools).toEqual([
+				"web_lookup",
+				"fetch_web",
+			]);
+			expect(Object.isFrozen(result.contract)).toBe(true);
+			expect(Object.isFrozen(result.contract.resolvedProfiles.scout)).toBe(true);
+			expect(Object.isFrozen(result.frozenConfig)).toBe(true);
+			expect(Object.isFrozen(result.frozenConfig.roles.scout)).toBe(true);
 		}
 	});
 
@@ -1433,7 +1600,6 @@ describe("integration — reload, resume, interruption, provider mismatch", () =
 		const result = await resumeWorkspace(ws.path, {
 			config: baseConfig(),
 			getModels: () => standardModels(),
-			getProviders: () => standardProviders(),
 		});
 		expect(result.success).toBe(false);
 		if (!result.success) {
@@ -1777,5 +1943,65 @@ describe("integration — usage totals and replay safety", () => {
 		expect(aggregated).toBe(25);
 		// Reservation rejection prevents the second launch — no ledger entry.
 		expect(readLedger(ws)).toHaveLength(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Task 15: provider-free startup contract end-to-end (real modules)
+//
+// Integration-level assertion that the frozen contract resolves research-owned
+// role snapshots from config.models + the model registry, with no provider
+// negotiation. Fails against the current startup (3rd provider arg required,
+// no resolvedProfiles).
+// ---------------------------------------------------------------------------
+
+describe("integration — Task 15 provider-free resolved profiles", () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = createTempDir();
+	});
+
+	afterEach(() => {
+		cleanup(tmpDir);
+	});
+
+	it("resolves concrete role snapshots (incl. systemPrompt) from config + registry", async () => {
+		const scoutPrompt = path.join(tmpDir, "scout.md");
+		const judgePrompt = path.join(tmpDir, "judge.md");
+		fs.writeFileSync(scoutPrompt, "# Scout\nscout prompt", "utf-8");
+		fs.writeFileSync(judgePrompt, "# Judge\njudge prompt", "utf-8");
+
+		const config = baseConfig();
+		(config as { models?: Record<string, string> }).models = {
+			strong: "strong-1",
+			eval: "eval-1",
+		};
+		config.roles.scout.promptPath = scoutPrompt;
+		config.roles.judge.promptPath = judgePrompt;
+
+		const contract = await validateStartupContract(
+			config,
+			fakeModelRegistry({
+				"strong-1": {
+					id: "strong-1",
+					name: "strong",
+					provider: "anthropic",
+					capabilities: ["web_lookup", "fetch_web"],
+				},
+				"eval-1": {
+					id: "eval-1",
+					name: "eval",
+					provider: "anthropic",
+					capabilities: ["read"],
+				},
+			}),
+		);
+
+		expect(contract.resolvedProfiles.scout.systemPrompt).toBe(
+			"# Scout\nscout prompt",
+		);
+		expect(contract.resolvedProfiles.scout.model).toBe("strong-1");
+		expect(contract.resolvedProfiles.judge.model).toBe("eval-1");
 	});
 });

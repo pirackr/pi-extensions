@@ -64,6 +64,15 @@ function makeMockPi() {
 			if (!handlers[event]) handlers[event] = [];
 			handlers[event].push(handler);
 		},
+		events: {
+			on: (event: string, handler: (...args: unknown[]) => void) => {
+				if (!handlers[event]) handlers[event] = [];
+				handlers[event].push(handler);
+			},
+			emit: (event: string, data: unknown) => {
+				for (const handler of handlers[event] ?? []) handler(data);
+			},
+		},
 		getHandler: (event: string) => handlers[event]?.[0] ?? null,
 		sendMessage: (_msg: unknown, opts?: unknown) => {
 			sendMessages.push(opts);
@@ -93,31 +102,24 @@ function makeMockPi() {
 function fakeModelRegistry() {
 	const models = [
 		{
-			id: "local/strong",
-			name: "strong",
+			id: "local/x-preview-f-free",
+			name: "x-preview-f-free",
 			provider: "local",
 			reasoning: true,
 			input: ["text"],
 		},
 		{
-			id: "local/fast",
-			name: "fast",
+			id: "local/XYZAILab_XYZ-Aquila-mini-GGUF-Q4_K_M",
+			name: "XYZAILab_XYZ-Aquila-mini-GGUF-Q4_K_M",
 			provider: "local",
 			reasoning: false,
 			input: ["text"],
 		},
 		{
-			id: "local/eval",
-			name: "eval",
+			id: "local/mimo-v2.5-free",
+			name: "mimo-v2.5-free",
 			provider: "local",
 			reasoning: true,
-			input: ["text"],
-		},
-		{
-			id: "local/light",
-			name: "light",
-			provider: "local",
-			reasoning: false,
 			input: ["text"],
 		},
 	];

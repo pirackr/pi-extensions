@@ -15,6 +15,7 @@ import piLoop from "../extensions/loop/index.ts";
 import type { Workspace } from "../extensions/research/workspace.ts";
 import { newRunState } from "../extensions/research/state.ts";
 import { createRunManifest } from "../extensions/research/manifest.ts";
+import { loadPackagedConfig } from "../extensions/research/config.ts";
 import {
 	createLifecycleSnapshot,
 	persistLifecycle,
@@ -33,12 +34,24 @@ interface MockCommandDef {
 
 function makeMockPi() {
 	const commands: Record<string, MockCommandDef> = {};
+	const eventListeners = new Map<string, Array<(data: unknown) => void>>();
+	const events = {
+		on: (channel: string, listener: (data: unknown) => void) => {
+			const listeners = eventListeners.get(channel) ?? [];
+			listeners.push(listener);
+			eventListeners.set(channel, listeners);
+		},
+		emit: (channel: string, data: unknown) => {
+			for (const listener of eventListeners.get(channel) ?? []) listener(data);
+		},
+	};
 	const pi = {
 		registerCommand: (cmd: string, def: MockCommandDef) => {
 			commands[cmd] = def;
 		},
 		registerTool: () => {},
 		on: () => {},
+		events,
 		sendMessage: () => {},
 		appendEntry: vi.fn(),
 		getActiveTools: () => [] as string[],
@@ -53,38 +66,29 @@ interface NotifyCall {
 }
 
 /**
- * Fake Pi model registry with the research role aliases (strong/eval/light)
- * plus one registered provider id. Backs the ModelRegistryView/ProviderRegistryView
- * injected into resumeWorkspace via onResumeDeps (loop/index.ts).
+ * Fake Pi model registry with the concrete targets of research-owned aliases.
  */
 function fakeModelRegistry() {
 	const models = [
 		{
-			id: "local/strong",
-			name: "strong",
-			provider: "local",
+			id: "opencode-zen/x-preview-f-free",
+			name: "x-preview-f-free",
+			provider: "opencode-zen",
 			reasoning: true,
 			input: ["text"],
 		},
 		{
-			id: "local/fast",
-			name: "fast",
+			id: "local/XYZAILab_XYZ-Aquila-mini-GGUF-Q4_K_M",
+			name: "XYZAILab_XYZ-Aquila-mini-GGUF-Q4_K_M",
 			provider: "local",
 			reasoning: false,
 			input: ["text"],
 		},
 		{
-			id: "local/eval",
-			name: "eval",
-			provider: "local",
+			id: "opencode-zen/mimo-v2.5-free",
+			name: "mimo-v2.5-free",
+			provider: "opencode-zen",
 			reasoning: true,
-			input: ["text"],
-		},
-		{
-			id: "local/light",
-			name: "light",
-			provider: "local",
-			reasoning: false,
 			input: ["text"],
 		},
 	];
@@ -137,9 +141,73 @@ function buildRetainedWorkspace(
 		JSON.stringify(newRunState(ws), null, 2),
 		"utf-8",
 	);
-	createRunManifest(ws);
+	const snapshots = activationSnapshots(ws);
+	createRunManifest(
+		ws,
+		undefined,
+		snapshots.contract,
+		snapshots.frozenConfig,
+	);
 	persistLifecycle(ws, createLifecycleSnapshot(lifecycleState, "test-setup"));
 	return wsPath;
+}
+
+function activationSnapshots(ws: Workspace) {
+	const config = loadPackagedConfig();
+	const available = fakeModelRegistry().getAll();
+	const resolvedProfiles: Record<string, unknown> = {};
+	const resolvedModels: Record<string, unknown> = {};
+	const frozenRoles: Record<string, unknown> = {};
+	for (const [name, role] of Object.entries(config.roles)) {
+		const target = config.models[role.model] ?? role.model;
+		const model = available.find((entry) =>
+			entry.id === target || entry.name === target || entry.id.endsWith(`/${target}`)
+		);
+		if (!model) throw new Error(`Missing test model fixture for ${target}`);
+		resolvedProfiles[name] = {
+			name,
+			description: role.description,
+			model: model.id,
+			thinking: role.thinking,
+			tools: [...role.tools],
+			access: role.access,
+			systemPrompt: fs.readFileSync(role.promptPath, "utf-8"),
+			timeoutSeconds: role.timeoutSeconds,
+		};
+		resolvedModels[name] = {
+			id: model.id,
+			name: model.name,
+			provider: model.provider,
+			capabilities: [],
+		};
+		frozenRoles[name] = { ...role, name, model: model.id };
+	}
+	const hardCeilings = {
+		maxConcurrentAttempts: Object.values(config.roles)
+			.reduce((sum, role) => sum + role.concurrentDispatch, 0),
+		maxAttemptsPerTask: Math.max(
+			...Object.values(config.roles).map((role) => role.totalDispatch),
+		),
+		hardTimeoutSeconds: 1800,
+	};
+	return {
+		contract: {
+			runId: ws.runId,
+			transitionId: ws.transitionId,
+			mission: ws.mission,
+			profile: config.defaultProfile,
+			programPath: config.defaultProgram,
+			profileConfig: config.profiles[config.defaultProfile],
+			defaults: config.defaults,
+			resolvedProfiles,
+			resolvedModels,
+			hardCeilings,
+		},
+		frozenConfig: {
+			roles: frozenRoles,
+			hardTimeoutSeconds: hardCeilings.hardTimeoutSeconds,
+		},
+	};
 }
 
 function lifecycleCurrent(wsPath: string): string | null {
@@ -326,19 +394,26 @@ describe("/research workspace subcommand routing", () => {
 		);
 	});
 
-	it("/research resume <slug> validates, acquires the lease, and marks active", async () => {
+	it("/research resume <slug> validates, acquires the lease, marks active, and only then activates policy", async () => {
 		const wsPath = buildRetainedWorkspace(
 			cwd,
 			"resumable-run",
 			"Resume me",
 			"paused",
 		);
+		const before = { contributions: [] as Array<{ owner: string }> };
+		mock.pi.events.emit("subagent:register-policy-adapters", before);
+		expect(before.contributions).toHaveLength(0);
+
 		const ctx = mockCtx(cwd);
 		await mock.commands.research.handler("resume resumable-run", ctx);
 		expect(lifecycleCurrent(wsPath)).toBe("active");
 		expect(
 			fs.existsSync(path.join(wsPath, ".research", "run-lease.json")),
 		).toBe(true);
+		const after = { contributions: [] as Array<{ owner: string }> };
+		mock.pi.events.emit("subagent:register-policy-adapters", after);
+		expect(after.contributions.map((entry) => entry.owner)).toContain("research");
 		expect(ctx.getNotifications()[0].message).toContain(
 			"Resumed resumable-run",
 		);

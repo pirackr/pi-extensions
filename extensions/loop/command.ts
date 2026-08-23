@@ -33,6 +33,7 @@ import {
 import {
 	resumeWorkspace,
 	type ResumeDependencies,
+	type ResumeResult,
 } from "../research/resume.ts";
 import type { Workspace } from "../research/workspace.ts";
 
@@ -54,8 +55,13 @@ export interface LoopCommandOptions {
 	config?: unknown; // ResearchConfigShape — kept as unknown to keep this file generic
 	/** Research-only: startup engine handler (prepareAndActivateResearch wiring). */
 	onResearchStart?: ResearchStartHandler;
-	/** Research-only: resume deps factory (config + model/provider views). */
+	/** Research-only: resume deps factory (config + model registry view). */
 	onResumeDeps?: (ctx: ExtensionCommandContext) => ResumeDependencies | null;
+	/** Called only after resume validation, lease acquisition, and activation. */
+	onResearchResumed?: (
+		result: Extract<ResumeResult, { success: true }>,
+		ctx: ExtensionCommandContext,
+	) => void | Promise<void>;
 }
 
 /**
@@ -513,6 +519,7 @@ async function routeResearchWorkspaceCommand(
 					return;
 				}
 				markResumed(result.workspace, "resumed via /research resume");
+				await opts.onResearchResumed?.(result, ctx);
 				ctx.ui.notify(
 					`Resumed ${path.basename(entry.path)} — lease acquired, lifecycle active.`,
 					"info",

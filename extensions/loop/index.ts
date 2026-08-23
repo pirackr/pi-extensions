@@ -30,8 +30,8 @@ import {
 } from "../research/startup.ts";
 import type {
 	ModelRegistryView,
-	ProviderRegistryView,
 	ResearchStartRequest,
+	ResolvedRunContract,
 	StartupDependencies,
 } from "../research/startup.ts";
 import {
@@ -54,11 +54,12 @@ import {
 	finalizeSuccess,
 } from "../research/completion.ts";
 import { createRunManifest } from "../research/manifest.ts";
-import { ResearchPolicy } from "../research/policy.ts";
+import { ResearchPolicy, type FrozenConfig } from "../research/policy.ts";
 import { evaluateCheckpoint } from "../research/checkpoint.ts";
 import { runVerification } from "../research/verification.ts";
-import type { ProviderDescriptor } from "../subagent-dispatch/contract.ts";
+import { registerResearchSubagentIntegration } from "../research/subagent.ts";
 import type { ResolvedResearchConfig } from "../research/config.ts";
+import type { ProfileContribution } from "../subagent/types.ts";
 import { type LoopState, type LoopStatus, normalizeState } from "./state.ts";
 import { makeGenericPolicy } from "./completion.ts";
 import { programBlockFor, truncate } from "./program.ts";
@@ -98,8 +99,87 @@ interface ResearchConfigShape {
 		}
 	>;
 }
-let researchConfig: ResearchConfigShape | null = null;
-let resolvedResearchConfig: ResolvedResearchConfig | null = null;
+
+const researchDiscoveryRegistered = new WeakSet<object>();
+
+function freezeContribution(profile: {
+	name: string;
+	description: string;
+	model: string;
+	thinking: "minimal" | "low" | "medium" | "high";
+	tools: readonly string[];
+	access: "read" | "write";
+	timeoutSeconds: number;
+	systemPrompt: string;
+}): ProfileContribution {
+	return Object.freeze({
+		owner: "research",
+		profile: Object.freeze({
+			...profile,
+			tools: Object.freeze([...profile.tools]) as unknown as string[],
+			source: "research",
+		}),
+	});
+}
+
+function resolveResearchProfiles(
+	config: ResolvedResearchConfig,
+): readonly ProfileContribution[] {
+	return Object.freeze(
+		Object.entries(config.roles).map(([name, role]) => {
+			const systemPrompt = fs.readFileSync(role.promptPath, "utf8");
+			if (!systemPrompt.trim()) {
+				throw new Error(`Research role '${name}' has an empty prompt.`);
+			}
+			return freezeContribution({
+				name,
+				description: role.description,
+				model: config.models[role.model] ?? role.model,
+				thinking: role.thinking,
+				tools: role.tools,
+				access: role.access,
+				timeoutSeconds: role.timeoutSeconds,
+				systemPrompt,
+			});
+		}),
+	);
+}
+
+function contributionsFromContract(
+	contract: ResolvedRunContract,
+): readonly ProfileContribution[] {
+	return Object.freeze(
+		Object.values(contract.resolvedProfiles).map((profile) =>
+			freezeContribution(profile),
+		),
+	);
+}
+
+function registerResearchProfileDiscovery(
+	pi: ExtensionAPI,
+	getContributions: () => readonly ProfileContribution[],
+): void {
+	const events = (pi as ExtensionAPI & {
+		events?: { on?: (channel: string, handler: (data: unknown) => void) => void };
+	}).events;
+	if (!events?.on || researchDiscoveryRegistered.has(pi as object)) return;
+	researchDiscoveryRegistered.add(pi as object);
+	events.on("subagent:discover-profiles", (envelope: unknown) => {
+		if (!envelope || typeof envelope !== "object") return;
+		const contributions = (envelope as { contributions?: ProfileContribution[] }).contributions;
+		if (!Array.isArray(contributions)) return;
+		const existing = new Set(
+			contributions.map((entry) => `${entry.owner}\u0000${entry.profile.name}`),
+		);
+		for (const contribution of getContributions()) {
+			const key = `${contribution.owner}\u0000${contribution.profile.name}`;
+			if (!existing.has(key)) {
+				contributions.push(contribution);
+				existing.add(key);
+			}
+		}
+	});
+}
 
 // --- Reusable tool execute functions (avoids duplication in registration) --
 
@@ -490,10 +570,17 @@ async function persistCheckpointEvidence(
 // --- Extension entrypoint ---------------------------------------------------
 
 export default function piLoop(pi: ExtensionAPI) {
-	// Load research configuration once at init time.
+	let researchConfig: ResearchConfigShape | null = null;
+	let resolvedResearchConfig: ResolvedResearchConfig | null = null;
+	let researchProfiles: readonly ProfileContribution[] = [];
+
+	// Load research configuration and freeze pre-activation discovery snapshots
+	// once at init time. Activation/resume replaces them with the validated
+	// contract snapshots rather than re-reading mutable prompt sources.
 	try {
 		const loaded = loadPackagedConfig();
 		resolvedResearchConfig = loaded;
+		researchProfiles = resolveResearchProfiles(loaded);
 		researchConfig = {
 			defaults: {
 				maxSearchesPerAgent: loaded.defaults.maxSearches ?? 0,
@@ -505,7 +592,34 @@ export default function piLoop(pi: ExtensionAPI) {
 		};
 	} catch {
 		researchConfig = null;
+		resolvedResearchConfig = null;
+		researchProfiles = [];
 	}
+
+	// Contribute the research-owned subagent profiles exactly once, per loop
+	// instance, via the owner-neutral, load-order independent
+	// `subagent:discover-profiles` channel. Repeated piLoop invocations on the
+	// same pi instance must not register a second listener.
+	registerResearchProfileDiscovery(pi, () => researchProfiles);
+
+	// Publish the research-owned policy adapter only after activation/resume
+	// succeeds, bound to the active workspace and the same frozen policy
+	// snapshot that activation persisted. On resume the identical frozenConfig
+	// from the manifest is used (never rebuilt from the mutable source config)
+	// so activation and resume publish the same snapshot. A restored-but-paused
+	// workspace remains fail closed.
+	const publishResearchIntegration = (
+		workspace: Workspace,
+		contract: ResolvedRunContract,
+		frozenConfig: FrozenConfig,
+	) => {
+		if (!resolvedResearchConfig || !(pi as { events?: unknown }).events) return;
+		researchProfiles = contributionsFromContract(contract);
+		registerResearchSubagentIntegration(pi, {
+			workspace,
+			frozenConfig,
+		});
+	};
 
 	// --- Create the generic loop engine -----------------------------------
 	const engine = new LoopEngine({
@@ -555,20 +669,25 @@ export default function piLoop(pi: ExtensionAPI) {
 						"Research configuration not loaded — cannot start research.",
 					);
 				}
-				return prepareAndActivateResearch(
+				const pointer = await prepareAndActivateResearch(
 					request,
 					buildResearchDeps(ctx, resolvedResearchConfig),
 				);
+				// The run is now active: publish the research policy adapter bound
+				// to the active workspace + frozen config so the generic subagent
+				// manager can reserve research concurrency.
+				publishResearchIntegration(pointer.workspace, pointer.contract, pointer.frozenConfig);
+				return pointer;
 			},
 			onResumeDeps: (ctx) => {
 				if (!resolvedResearchConfig) return null;
-				const config = resolvedResearchConfig;
-				const tools = researchRequiredTools(config);
 				return {
-					config,
+					config: resolvedResearchConfig,
 					getModels: () => buildModelView(ctx),
-					getProviders: () => buildProviderView(ctx, config, tools),
 				};
+			},
+			onResearchResumed: (result) => {
+				publishResearchIntegration(result.workspace, result.contract, result.frozenConfig);
 			},
 		},
 		engine,
@@ -717,7 +836,7 @@ export { programBlockFor };
 // --- Research startup engine wiring (Task 10) ------------------------------
 //
 // buildResearchDeps injects the runtime StartupDependencies into
-// prepareAndActivateResearch. Model/provider views wrap Pi's live registries;
+// prepareAndActivateResearch. The model view wraps Pi's live registry;
 // the workspace/state/manifest/transitions/policy/checkpoint/verification
 // deps are the real research modules. No research config code imports Pi —
 // deps are injected at the wiring layer.
@@ -730,11 +849,9 @@ function buildResearchDeps(
 	// workspaces are created alongside it (discoverable by /research list).
 	const transitionsPath = path.join(ctx.cwd, "transitions.json");
 	const transitions = new TransitionsFile(transitionsPath);
-	const tools = researchRequiredTools(config);
 	return {
 		config,
 		getModels: () => buildModelView(ctx),
-		getProviders: () => buildProviderView(ctx, config, tools),
 		workspace: {
 			acquireWorkspaceClaim,
 			prepareStaging,
@@ -766,77 +883,13 @@ function buildResearchDeps(
 	};
 }
 
-/** Union of every tool the research config requires (roles + capabilities). */
-function researchRequiredTools(config: ResolvedResearchConfig): string[] {
-	const tools = new Set<string>();
-	for (const role of Object.values(config.roles)) {
-		for (const tool of role.tools) tools.add(tool);
-	}
-	for (const capability of Object.values(config.capabilities)) {
-		for (const tool of capability.requiredTools) tools.add(tool);
-	}
-	return Array.from(tools);
-}
-
-/**
- * Research role aliases (strong/eval/light) → concrete model names, from the
- * packaged tmux-subagent models map, merged with the trusted project override
- * (<cwd>/.pi/tmux-subagent/config.json) when present. Best-effort: falls back
- * to matching the alias directly against Pi's model names/ids.
- */
-function researchModelAliases(ctx?: {
-	cwd?: string;
-	isProjectTrusted?: () => boolean;
-}): Record<string, string> {
-	let aliases: Record<string, string> = {};
-	try {
-		const configPath = path.resolve(
-			path.dirname(fileURLToPath(import.meta.url)),
-			"../../config/tmux-subagent.json",
-		);
-		const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
-			models?: Record<string, string>;
-		};
-		aliases = { ...(raw.models ?? {}) };
-	} catch {
-		// No packaged alias map — the project layer (if any) still applies.
-	}
-	if (ctx?.isProjectTrusted?.() && ctx.cwd) {
-		try {
-			const projectConfigPath = path.join(
-				ctx.cwd,
-				".pi",
-				"tmux-subagent",
-				"config.json",
-			);
-			const raw = JSON.parse(fs.readFileSync(projectConfigPath, "utf8")) as {
-				models?: Record<string, string>;
-			};
-			aliases = { ...aliases, ...(raw.models ?? {}) };
-		} catch {
-			// No project layer (or unreadable) — packaged aliases stand.
-		}
-	}
-	return aliases;
-}
-
-/**
- * Model registry view over Pi's live model registry. Roles reference model
- * aliases (strong/eval/light); the view resolves them against model name or
- * id (and against the tmux-subagent alias map — packaged plus any trusted
- * project override — when available).
- */
+/** Model registry view over Pi's live registry. Alias ownership is research config. */
 function buildModelView(ctx: ExtensionContext): ModelRegistryView {
 	const all = ctx.modelRegistry.getAll();
-	const aliases = researchModelAliases(ctx);
-	const match = (m: (typeof all)[number], name: string): boolean =>
-		m.name === name || m.id === name || m.id.endsWith(`/${name}`);
-	const find = (name: string) => {
-		const direct = all.find((m) => match(m, name));
-		if (direct) return direct;
-		const concrete = aliases[name];
-		return concrete ? all.find((m) => match(m, concrete)) : undefined;
-	};
+	const find = (name: string) =>
+		all.find((model) =>
+			model.name === name || model.id === name || model.id.endsWith(`/${name}`),
+		);
 	return {
 		get(name) {
 			const model = find(name);
@@ -855,38 +908,5 @@ function buildModelView(ctx: ExtensionContext): ModelRegistryView {
 		has(name) {
 			return find(name) !== undefined;
 		},
-	};
-}
-
-/**
- * Provider registry view over Pi's registered providers plus the research
- * child extensions (which supply the research tool capabilities).
- */
-function buildProviderView(
-	ctx: ExtensionContext,
-	config: ResolvedResearchConfig,
-	tools: string[],
-): ProviderRegistryView {
-	const providers = new Map<string, ProviderDescriptor>();
-	// Child extensions (web-search, tmux-subagent) supply the research tools.
-	for (const child of config.childExtensions) {
-		providers.set(child, {
-			id: child,
-			adapterVersion: "1.0",
-			capabilities: tools,
-		});
-	}
-	// Pi's registered model providers.
-	for (const id of ctx.modelRegistry.getRegisteredProviderIds()) {
-		providers.set(id, {
-			id,
-			adapterVersion: "1.0",
-			capabilities: tools,
-		});
-	}
-	return {
-		get: (id) => providers.get(id),
-		has: (id) => providers.has(id),
-		getAll: () => Array.from(providers.values()),
 	};
 }

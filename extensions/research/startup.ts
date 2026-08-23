@@ -1,7 +1,7 @@
 /**
  * Research startup and atomic activation.
  *
- * Validates the run contract against config + model/registry views,
+ * Validates the run contract against config + model registry views,
  * then performs an atomic staging → commit → transition → policy-claim
  * workflow so that a failed startup never corrupts an existing run.
  *
@@ -16,8 +16,6 @@ import type { ResolvedResearchConfig } from "./config.ts";
 import type { Workspace, WorkspaceClaim, StagedRun } from "./workspace.ts";
 import type { RunState, RunLease } from "./state.ts";
 import type { RunManifest } from "./manifest.ts";
-import type { ProviderDescriptor } from "../subagent-dispatch/contract.ts";
-import { negotiateProvider } from "../subagent-dispatch/contract.ts";
 import type { Verdict, CheckpointResult } from "./checkpoint.ts";
 import type { VerificationResult } from "./verification.ts";
 import type { ResearchPolicy, FrozenConfig } from "./policy.ts";
@@ -41,11 +39,32 @@ export interface ModelRegistryView {
 	has(name: string): boolean;
 }
 
-/** Test-doubleable view into Pi's provider registry. */
-export interface ProviderRegistryView {
-	get(id: string): ProviderDescriptor | undefined;
-	getAll(): ReadonlyArray<ProviderDescriptor>;
-	has(id: string): boolean;
+/**
+ * Immutable snapshot of a single research role contribution.
+ *
+ * Produced by `validateStartupContract`: the role's alias is resolved against
+ * the config `models` map to a concrete model id, its prompt is read,
+ * tool/access conflicts are checked, and the frozen contribution is
+ * returned keyed by role name. Generic code must never reinterpret access
+ * or re-resolve these — they are already resolved and frozen.
+ */
+export interface ResolvedProfile {
+	/** Role name (the config role key). */
+	name: string;
+	/** Role description. */
+	description: string;
+	/** Concrete model id resolved from config.models → model registry. */
+	model: string;
+	/** Reasoning/thinking level. */
+	thinking: "minimal" | "low" | "medium" | "high";
+	/** Exact tool set contributed by the role. */
+	tools: string[];
+	/** Access level (read | write). */
+	access: "read" | "write";
+	/** Complete, read system prompt. */
+	systemPrompt: string;
+	/** Timeout ceiling in seconds. */
+	timeoutSeconds: number;
 }
 
 /**
@@ -75,11 +94,14 @@ export interface ResolvedRunContract {
 		maxSearches: number;
 		maxFetches: number;
 	};
+	/**
+	 * Frozen, already-resolved role contributions keyed by role name. Each
+	 * carries its concrete model, complete prompt, exact tools, and access.
+	 * This supersedes the old provider-negotiated display; `resolvedModels`
+	 * is retained for resume integrity checks.
+	 */
+	resolvedProfiles: Record<string, ResolvedProfile>;
 	resolvedModels: Record<string, ModelEntry>;
-	providerSelection: {
-		selectedProvider: string | null;
-		resolvedProvider: ProviderDescriptor;
-	};
 	hardCeilings: {
 		maxConcurrentAttempts: number;
 		maxAttemptsPerTask: number;
@@ -115,8 +137,6 @@ export interface StartupDependencies {
 	config: ResolvedResearchConfig;
 	/** Test-doubleable model registry view. */
 	getModels: () => ModelRegistryView;
-	/** Test-doubleable provider registry view. */
-	getProviders: () => ProviderRegistryView;
 	workspace: {
 		acquireWorkspaceClaim: (
 			projectRoot: string,
@@ -142,7 +162,12 @@ export interface StartupDependencies {
 		acquireLease: (ws: Workspace, sessionId: string) => Promise<RunLease>;
 	};
 	manifest: {
-		createRunManifest: (ws: Workspace, snapshotContent?: string) => RunManifest;
+		createRunManifest: (
+			ws: Workspace,
+			snapshotContent?: string,
+			resolvedContract?: ResolvedRunContract,
+			frozenConfig?: FrozenConfig,
+		) => RunManifest;
 	};
 	transitions: {
 		getPath: () => string;
@@ -184,6 +209,12 @@ export interface ActiveResearchPointer {
 	manifest: RunManifest;
 	contract: ResolvedRunContract;
 	policy: ResearchPolicy;
+	/**
+	 * The frozen policy configuration used by the policy at activation.
+	 * Persisted with the manifest and republished on resume so activation and
+	 * resume publish the identical snapshot (never rebuilt from mutable config).
+	 */
+	frozenConfig: FrozenConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -269,8 +300,37 @@ export class TransitionsFile {
 // ---------------------------------------------------------------------------
 
 /**
- * Validates configuration, resolves models, negotiates providers,
- * and checks hard ceilings — returning a frozen run contract.
+ * Mutation-capable tools. A role declared `access: "read"` may not declare
+ * any of these — the access/tool conflict check in `validateStartupContract`
+ * enforces read-only roles.
+ */
+const MUTATION_TOOLS = new Set([
+	"write",
+	"edit",
+	"create",
+	"append",
+	"delete",
+	"del",
+	"remove",
+	"rename",
+	"move",
+	"copy",
+	"exec",
+	"bash",
+	"shell",
+	"apply_patch",
+	"ctx_shell",
+	"ctx_execute",
+	"ctx_edit",
+	"ctx_patch",
+	"ctx_refactor",
+	"ast_grep_replace",
+]);
+
+/**
+ * Validates configuration, resolves role models and prompts, checks
+ * access/tool conflicts, and checks hard ceilings — returning a frozen run
+ * contract with already-resolved, frozen role contributions.
  *
  * The contract's runId is derived from the canonical workspace formula
  * (`transitionId-finalDir`) via formatRunId. When a mission is supplied
@@ -278,12 +338,15 @@ export class TransitionsFile {
  * from the actually-claimed final directory so it always matches the
  * workspace runId even when a suffix was allocated.
  *
+ * Provider negotiation is gone: each role alias is resolved against the
+ * config `models` map and then against Pi's model registry, the complete
+ * system prompt is read and frozen, and access/tool conflicts are checked.
+ *
  * Throws if any validation step fails.
  */
 export async function validateStartupContract(
 	config: ResolvedResearchConfig,
 	models: ModelRegistryView,
-	providers: ProviderRegistryView,
 	mission: string = "",
 ): Promise<ResolvedRunContract> {
 	const profileName = config.defaultProfile;
@@ -307,49 +370,70 @@ export async function validateStartupContract(
 		);
 	}
 
-	// Validate role model names exist in registry
+	// Resolve each role: alias → concrete model, read prompt, check access/tool.
 	const resolvedModels: Record<string, ModelEntry> = {};
+	const resolvedProfiles: Record<string, ResolvedProfile> = {};
 	for (const [roleName, role] of Object.entries(config.roles)) {
-		const modelRef = role.model;
-		const modelEntry = models.get(modelRef);
+		const modelAlias = role.model;
+		// Resolve the role alias through the config `models` map first, then
+		// fall back to matching the alias directly against the registry (by
+		// name/id). Reject a missing alias/model.
+		const concreteAlias = config.models?.[modelAlias];
+		const lookupName = concreteAlias ?? modelAlias;
+		const modelEntry = models.get(lookupName);
 		if (!modelEntry) {
+			if (concreteAlias) {
+				throw new Error(
+					`Role '${roleName}': model alias '${modelAlias}' resolves to '${concreteAlias}', which is not found in the model registry.`,
+				);
+			}
 			throw new Error(
-				`Role '${roleName}': model '${modelRef}' not found in model registry.`,
+				`Role '${roleName}': model '${modelAlias}' not found in model registry.`,
 			);
 		}
-		resolvedModels[roleName] = modelEntry;
-	}
+		const modelSnapshot = Object.freeze({
+			...modelEntry,
+			capabilities: Object.freeze([...modelEntry.capabilities]) as unknown as string[],
+		});
+		resolvedModels[roleName] = modelSnapshot;
 
-	// Gather all required tool/capability names from roles and capabilities
-	const allRequiredTools = new Set<string>();
-	for (const role of Object.values(config.roles)) {
+		// Read and validate the complete system prompt.
+		let systemPrompt: string;
+		try {
+			systemPrompt = fs.readFileSync(role.promptPath, "utf-8");
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			throw new Error(
+				`Role '${roleName}': cannot read prompt at '${role.promptPath}': ${reason}`,
+			);
+		}
+		if (!systemPrompt.trim()) {
+			throw new Error(
+				`Role '${roleName}': prompt at '${role.promptPath}' is empty.`,
+			);
+		}
+
+		// Access/tool conflict: a read-only role may not declare a
+		// write-capable (mutation) tool.
 		for (const tool of role.tools) {
-			allRequiredTools.add(tool);
+			if (role.access === "read" && MUTATION_TOOLS.has(tool)) {
+				throw new Error(
+					`Role '${roleName}': access 'read' cannot include write-capable tool '${tool}'.`,
+				);
+			}
 		}
-	}
-	for (const cap of Object.values(config.capabilities)) {
-		for (const tool of cap.requiredTools) {
-			allRequiredTools.add(tool);
-		}
-	}
 
-	// Validate child extensions are available in the provider registry
-	const allProviders = providers.getAll();
-	for (const child of config.childExtensions) {
-		if (!providers.has(child)) {
-			throw new Error(
-				`Required child extension '${child}' not found in provider registry.`,
-			);
-		}
+		resolvedProfiles[roleName] = Object.freeze({
+			name: roleName,
+			description: role.description,
+			model: modelSnapshot.id,
+			thinking: role.thinking,
+			tools: Object.freeze([...role.tools]) as unknown as string[],
+			access: role.access,
+			systemPrompt,
+			timeoutSeconds: role.timeoutSeconds,
+		});
 	}
-
-	// Negotiate provider capabilities
-	const selectedProvider = config.defaultProvider;
-	const { providerId, descriptor } = negotiateProvider(
-		allProviders,
-		selectedProvider,
-		Array.from(allRequiredTools),
-	);
 
 	// Compute hard ceilings
 	const maxConcurrentAttempts = Object.values(config.roles).reduce(
@@ -399,11 +483,8 @@ export async function validateStartupContract(
 			maxSearches: config.defaults.maxSearches,
 			maxFetches: config.defaults.maxFetches,
 		},
-		resolvedModels,
-		providerSelection: {
-			selectedProvider,
-			resolvedProvider: descriptor,
-		},
+		resolvedProfiles: Object.freeze(resolvedProfiles),
+		resolvedModels: Object.freeze(resolvedModels),
 		hardCeilings: {
 			maxConcurrentAttempts,
 			maxAttemptsPerTask,
@@ -437,11 +518,10 @@ export async function prepareAndActivateResearch(
 
 	// --- Step 1: Validate contract (config provided via deps) ---
 
-	// Validate the contract (resolves models, negotiates providers)
+	// Validate the contract (resolves role models + prompts, checks access)
 	const contract = await validateStartupContract(
 		deps.config,
 		deps.getModels!(),
-		deps.getProviders!(),
 		mission,
 	);
 
@@ -458,9 +538,11 @@ export async function prepareAndActivateResearch(
 		lines.push("├───────────────────────────────────────────────");
 		lines.push(`│  Mission:     ${mission}`);
 		lines.push(`│  Profile:     ${profile}`);
-		lines.push(
-			`│  Provider:    ${contract.providerSelection.resolvedProvider.id}`,
-		);
+		for (const [roleName, resolved] of Object.entries(
+			contract.resolvedProfiles,
+		)) {
+			lines.push(`│  Role ${roleName}:  ${resolved.model}`);
+		}
 		lines.push(`│  Max Rounds:  ${contract.profileConfig.maxRounds ?? "∞"}`);
 		lines.push(`│  Min Sources: ${contract.profileConfig.minSources}`);
 		lines.push(`│  Timeout:     ${contract.hardCeilings.hardTimeoutSeconds}s`);
@@ -568,9 +650,42 @@ export async function prepareAndActivateResearch(
 	contract.runId = workspace.runId;
 	const runId = workspace.runId;
 
-	// --- Step 7: Create manifest ---
+	// --- Step 6.5: Build the frozen policy configuration ---
+	// Build the FrozenConfig snapshot exactly once, before the manifest is
+	// written, so the identical snapshot is both persisted with the immutable
+	// run manifest and used to claim the policy (activation and resume
+	// publication never rebuild it from mutable source config).
+	const frozenConfig: FrozenConfig = Object.freeze({
+		roles: Object.freeze(
+			Object.fromEntries(
+				Object.entries(deps.config.roles).map(([name, role]) => {
+					const resolved = contract.resolvedProfiles[name];
+					return [
+						name,
+						Object.freeze({
+							...role,
+							name,
+							model: resolved.model,
+							thinking: resolved.thinking,
+							tools: Object.freeze([...resolved.tools]) as unknown as string[],
+							access: resolved.access,
+							timeoutSeconds: resolved.timeoutSeconds,
+						}),
+					];
+				}),
+			),
+		),
+		hardTimeoutSeconds: contract.hardCeilings.hardTimeoutSeconds,
+	});
 
-	const manifest = deps.manifest.createRunManifest(workspace, snapshotContent);
+	// --- Step 7: Create manifest (persist the frozen snapshots) ---
+
+	const manifest = deps.manifest.createRunManifest(
+		workspace,
+		snapshotContent,
+		contract,
+		frozenConfig,
+	);
 
 	// --- Step 8: Create and initialize run state ---
 
@@ -611,19 +726,6 @@ export async function prepareAndActivateResearch(
 
 	// --- Step 14: Claim the research policy ---
 
-	const frozenConfig: FrozenConfig = {
-		roles: Object.fromEntries(
-			Object.entries(deps.config.roles).map(([name, role]) => [
-				name,
-				{
-					...role,
-					name,
-				},
-			]),
-		),
-		hardTimeoutSeconds: contract.hardCeilings.hardTimeoutSeconds,
-	};
-
 	const policy = deps.policy.createPolicy(
 		workspace,
 		frozenConfig,
@@ -652,5 +754,6 @@ export async function prepareAndActivateResearch(
 		manifest,
 		contract,
 		policy,
+		frozenConfig,
 	};
 }

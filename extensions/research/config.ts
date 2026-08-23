@@ -21,6 +21,13 @@ export interface ResolvedResearchConfig {
 	defaultProgram: string;
 	defaultProfile: string;
 	defaultProvider: string | null;
+	/**
+	 * Validated, layered model-alias map owned by research. Maps a role model
+	 * alias (e.g. "strong") to a concrete model id resolved by Pi's model
+	 * registry. Packaged aliases live here (never in config/tmux-subagent.json).
+	 * Defaults to an empty map when a layer omits it.
+	 */
+	models: Record<string, string>;
 	defaults: {
 		maxIterations: number;
 		maxTokens: number;
@@ -84,6 +91,7 @@ const KNOWN_TOP_LEVEL_FIELDS = new Set([
 	"roles",
 	"capabilities",
 	"childExtensions",
+	"models",
 ]);
 
 const KNOWN_DEFAULTS_FIELDS = new Set([
@@ -135,6 +143,34 @@ const VALID_ACCESS = new Set(["read", "write"]);
 const VALID_RESULT_FORMATS = new Set(["markdown", "json"]);
 
 const VALID_RETENTION = new Set(["ephemeral", "artifact", "persistent"]);
+
+/**
+ * Validates the layered `models` alias map: a plain object whose values are
+ * non-empty model-id strings. Credential fields are rejected at any depth.
+ * An absent map is allowed (it defaults to `{}` in validateFinalConfig).
+ */
+function validateModels(raw: Record<string, unknown>, sourceLabel: string): void {
+	if (!("models" in raw)) {
+		return;
+	}
+	const models = raw.models as unknown;
+	if (!isPlainObject(models)) {
+		throw new Error(
+			`models must be an object mapping alias → model id (${sourceLabel}).`,
+		);
+	}
+	for (const [alias, id] of Object.entries(models as Record<string, unknown>)) {
+		if (typeof id !== "string" || !id.trim()) {
+			throw new Error(
+				`Model alias '${alias}' must map to a non-empty string (${sourceLabel}).`,
+			);
+		}
+	}
+	rejectCredentialFields(
+		models as Record<string, unknown>,
+		`${sourceLabel}.models`,
+	);
+}
 
 // Fields that indicate credentials — rejected at any nesting depth
 const CREDENTIAL_FIELD_NAMES = new Set([
@@ -809,6 +845,7 @@ function validateLayer(
 	// Check for credential fields first (before unknown-field check so the
 	// error message is specific rather than "Unknown field").
 	rejectCredentialFields(raw, sourceLabel);
+	validateModels(raw, sourceLabel);
 
 	if (layer.kind === "packaged") {
 		// Packaged layers: full validation — all fields required.
@@ -914,6 +951,19 @@ function validateFinalConfig(raw: Record<string, unknown>): Record<string, unkno
 	}
 
 	validateDefaults(raw, "resolved config");
+	validateModels(raw, "resolved config");
+
+	const models = Object.prototype.hasOwnProperty.call(raw, "models")
+		? (raw.models as Record<string, unknown>)
+		: {};
+	for (const [alias, id] of Object.entries(models)) {
+		if (typeof id !== "string" || !id.trim()) {
+			throw new Error(
+				`Model alias '${alias}' must map to a non-empty string in resolved config.`,
+			);
+		}
+	}
+	raw.models = models as unknown as Record<string, unknown>;
 	validateProfiles(raw, "resolved config", new Set(Object.keys(raw.roles ?? {})));
 	validateRoles(raw, "resolved config");
 	validateCapabilities(raw, "resolved config");

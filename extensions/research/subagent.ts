@@ -79,8 +79,12 @@ export const POLICY_ADAPTERS_CHANNEL = "subagent:register-policy-adapters";
 export interface IntegrationEvents {
 	readonly events: {
 		emit(channel: string, data: { contributions: PolicyAdapterContribution[] }): void;
+		on?: (channel: string, listener: (data: unknown) => void) => void;
 	};
 }
+
+const activeContribution = new WeakMap<object, PolicyAdapterContribution>();
+const pullListenerRegistered = new WeakSet<object>();
 
 /**
  * Register the research-owned policy adapter contribution on the generic
@@ -94,9 +98,29 @@ export function registerResearchSubagentIntegration(
 	deps: ResearchAdapterDeps & { readonly owner?: string },
 ): void {
 	const owner = deps.owner ?? "research";
-	const adapter = createResearchPolicyAdapter(deps);
+	const contribution = { owner, adapter: createResearchPolicyAdapter(deps) };
+	activeContribution.set(pi as object, contribution);
+
+	if (pi.events.on && !pullListenerRegistered.has(pi as object)) {
+		pullListenerRegistered.add(pi as object);
+		pi.events.on(POLICY_ADAPTERS_CHANNEL, (value) => {
+			const current = activeContribution.get(pi as object);
+			if (!current || !value || typeof value !== "object") return;
+			const envelope = value as { contributions?: PolicyAdapterContribution[] };
+			if (!Array.isArray(envelope.contributions)) return;
+			const index = envelope.contributions.findIndex(
+				(entry) => entry.owner === current.owner,
+			);
+			if (index < 0) envelope.contributions.push(current);
+			else envelope.contributions[index] = current;
+		});
+	}
+
+	// Push for already-loaded consumers. The pull listener above also makes a
+	// later consumer load safe: it can emit an empty envelope and receive the
+	// current active adapter synchronously.
 	pi.events.emit(POLICY_ADAPTERS_CHANNEL, {
-		contributions: [{ owner, adapter }],
+		contributions: [contribution],
 	});
 }
 

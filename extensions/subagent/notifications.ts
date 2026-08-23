@@ -90,6 +90,15 @@ export interface NotificationCoordinatorDeps {
 	readonly now: () => number;
 	/** How long to wait for every member before partial-flushing terminals. */
 	readonly groupWaitMs: number;
+	/**
+	 * Install a one-shot flush timer for the active turn's partial delivery.
+	 * Returns an opaque handle to pass to {@link cancelScheduled}. Injectable so
+	 * the timeout seam is driven deterministically (and on a real event loop)
+	 * by callers and tests.
+	 */
+	readonly schedule: (callback: () => Promise<void>, delayMs: number) => ScheduledHandle;
+	/** Cancel a handle returned by {@link schedule}. */
+	readonly cancelScheduled: (handle: ScheduledHandle) => void;
 }
 
 /**
@@ -136,27 +145,8 @@ export interface NotificationCoordinator {
 const NOTIFICATIONS_ROOT = "<task-notifications>";
 const NOTIFICATION_ELEMENT = "<task-notification>";
 
-/**
- * An in-memory copy of one group member captured when the active turn ends.
- *
- * Delivery under fake timers cannot await the store (durable `result.json` /
- * `delivery.json` reads never settle while the event loop is faked), so the
- * coordinator snapshots every member — its rendered {@link NotificationItem}
- * and durable delivery state — at {@link NotificationCoordinator.turnEnd}, when
- * those reads still happen on a real loop. The scheduled 30-second flush and
- * later straggler delivery read from this snapshot instead of re-touching disk.
- */
-type MemberSnapshot = {
-	item: NotificationItem;
-	terminal: TerminalResult | null;
-	deliveryState: DeliveryRecord["state"] | null;
-};
-
-/** The durable, in-flight state of the active turn's notification group. */
-type ActiveTurn = {
-	readonly groupId: string;
-	readonly members: Map<string, MemberSnapshot>;
-};
+/** Opaque handle returned by {@link NotificationCoordinatorDeps.schedule}. */
+type ScheduledHandle = unknown;
 
 /** Escape XML text and strip NUL characters so they never reach the output. */
 function escapeText(value: string): string {
@@ -225,7 +215,7 @@ export function createNotificationCoordinator(
 	deps: NotificationCoordinatorDeps,
 ): NotificationCoordinator {
 	const { store, registryLockPath, owner, activeOrigin, managerGeneration,
-		assertManagerCurrent, nonce, now, groupWaitMs } = deps;
+		assertManagerCurrent, nonce, now, groupWaitMs, schedule, cancelScheduled } = deps;
 	const pi = deps.pi;
 	// A single never-aborted signal guards the registry lease for the
 	// coordinator's lifetime; delivery is short-lived and never abortable.
@@ -237,33 +227,37 @@ export function createNotificationCoordinator(
 	}
 
 	let currentGroupId: string | null = null;
-	const flushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	const flushTimers = new Map<string, ScheduledHandle>();
+
 	/**
-	 * Snapshot of the active turn's group members, populated at
-	 * {@link NotificationCoordinator.turnEnd} while the store is still readable
-	 * on a real event loop, so the fire-and-forget flush timer and later
-	 * straggler delivery can run without awaiting durable storage.
+	 * Install the active turn's partial-flush timer. The scheduled callback
+	 * runs the durable {@link deliver} path so the flush persists
+	 * `dispatching` before its single send and `delivered` afterwards — the same
+	 * at-most-once contract as immediate and recovery delivery. Rejections are
+	 * swallowed so a send failure never surfaces as an unhandled rejection.
 	 */
-	let activeTurn: ActiveTurn | null = null;
+	function scheduleFlushTimer(groupId: string): void {
+		const handle = schedule(
+			() =>
+				(async () => {
+					flushTimers.delete(groupId);
+					await deliver(groupId);
+				})().catch(() => {
+					// A failure leaves members as `dispatching`; recover()
+					// treats that as an ambiguous, already-attempted delivery and
+					// never resends. Swallow so the timer raises no rejection.
+				}),
+			groupWaitMs,
+		);
+		flushTimers.set(groupId, handle);
+	}
 
 	async function clearFlushTimer(groupId: string): Promise<void> {
-		const timer = flushTimers.get(groupId);
-		if (timer) {
-			clearTimer(timer);
+		const handle = flushTimers.get(groupId);
+		if (handle !== undefined) {
+			cancelScheduled(handle);
 			flushTimers.delete(groupId);
 		}
-	}
-
-	function clearTimer(timer: ReturnType<typeof setTimeout>): void {
-		clearTimeout(timer);
-	}
-
-	function scheduleFlushTimer(groupId: string): void {
-		const timer = setTimeout(() => {
-			flushTimers.delete(groupId);
-			deliverSnapshot(groupId);
-		}, groupWaitMs);
-		flushTimers.set(groupId, timer);
 	}
 
 	function deriveGroupId(inputs: {
@@ -303,87 +297,6 @@ export function createNotificationCoordinator(
 	async function isTerminal(agentId: string): Promise<boolean> {
 		const result = await store.readResult(agentId);
 		return result !== null;
-	}
-
-	/**
-	 * Copy every durable member of `groupId` — its rendered item, terminal
-	 * result, and delivery state — into an in-memory {@link ActiveTurn}. Returns
-	 * `null` for an empty group so a memberless turn never schedules a flush.
-	 */
-	async function populateSnapshot(groupId: string): Promise<ActiveTurn | null> {
-		const memberIds = await readGroupMembers(groupId);
-		if (memberIds.length === 0) return null;
-		const members = new Map<string, MemberSnapshot>();
-		for (const id of memberIds) {
-			const terminal = await store.readResult(id);
-			const item = await buildItem(id);
-			const delivery = await store.readDelivery(id);
-			members.set(id, {
-				item,
-				terminal,
-				deliveryState: delivery?.state ?? null,
-			});
-		}
-		return { groupId, members };
-	}
-
-	/** `true` only when every snapshot member has a durable terminal result. */
-	function allMembersSnapshot(turn: ActiveTurn): boolean {
-		if (turn.members.size === 0) return false;
-		for (const snapshot of turn.members.values()) {
-			if (!snapshot.terminal) return false;
-		}
-		return true;
-	}
-
-	/**
-	 * Deliver a partial or straggler notification straight from the in-memory
-	 * snapshot, avoiding any durable read so it can settle while the clock is
-	 * faked. Only still-eligible terminal members are sent; already-sent or
-	 * consumed members are skipped, so a straggler `evaluate` re-delivers only
-	 * the members that settled after an earlier partial flush.
-	 */
-	function deliverSnapshot(groupId: string): void {
-		if (!activeTurn || activeTurn.groupId !== groupId) return;
-		const turn = activeTurn;
-		const eligible: string[] = [];
-		for (const [id, snapshot] of turn.members) {
-			if (
-				snapshot.terminal &&
-				(snapshot.deliveryState === null || snapshot.deliveryState === "pending")
-			) {
-				eligible.push(id);
-			}
-		}
-		if (eligible.length === 0) return;
-		const notificationId = makeNotificationId(now());
-		const items = eligible.map((id) => turn.members.get(id)!.item);
-		const previewLimit = eligible.length === 1 ? 500 : 300;
-		const content = renderNotificationXml(items, previewLimit);
-		const message: NotificationMessage = {
-			customType: "subagent-notification",
-			content,
-			display: true,
-			details: { notificationId, groupId, agentIds: eligible },
-		};
-		const options: NotificationOptions = {
-			deliverAs: "followUp",
-			triggerTurn: true,
-		};
-		void (
-			async () => {
-				await pi.sendMessage(message, options);
-				for (const id of eligible) {
-					const current = turn.members.get(id);
-					if (current) {
-						turn.members.set(id, {
-							...current,
-							deliveryState: "delivered",
-						});
-					}
-				}
-			}
-		)().catch(() => undefined);
 	}
 
 	async function allMembersTerminal(groupId: string): Promise<boolean> {
@@ -514,20 +427,12 @@ export function createNotificationCoordinator(
 			if (!groupId) return;
 
 			const origin = activeOrigin();
-			let deliverNow = false;
 			await lock(async () => {
 				await store.updateGroup(groupId, { endedAt: now() });
-				const group = await store.readGroup(groupId);
-				// Snapshot the turn's members while the store is still readable on
-				// a real loop: the fire-and-forget flush timer can never await
-				// durable reads under faked timers, so it (and later straggler
-				// delivery) read from this snapshot instead.
-				activeTurn = await populateSnapshot(groupId);
-				const terminal = activeTurn ? allMembersSnapshot(activeTurn) : false;
-				deliverNow = !!group && origin === group.origin && terminal;
 			});
 
-			if (deliverNow) {
+			const group = await store.readGroup(groupId);
+			if (group && origin === group.origin && await allMembersTerminal(groupId)) {
 				await deliver(groupId);
 			} else {
 				scheduleFlushTimer(groupId);
@@ -539,25 +444,6 @@ export function createNotificationCoordinator(
 			if (!manifest || !manifest.groupId) return;
 			const groupId = manifest.groupId;
 			await clearFlushTimer(groupId);
-			if (activeTurn && activeTurn.groupId === groupId) {
-				// The active turn is captured in memory; refresh this member's
-				// terminal result and delivery state on the real loop, then deliver
-				// from the snapshot so the flush can settle while the clock is faked.
-				const snapshot = activeTurn.members.get(agentId);
-				if (snapshot) {
-					const terminal = await store.readResult(agentId);
-					const delivery = await store.readDelivery(agentId);
-					snapshot.terminal = terminal;
-					snapshot.deliveryState = delivery?.state ?? null;
-					if (terminal) {
-						snapshot.item = await buildItem(agentId);
-					}
-				}
-				if (activeTurn && allMembersSnapshot(activeTurn)) {
-					deliverSnapshot(groupId);
-				}
-				return;
-			}
 			if (await allMembersTerminal(groupId)) {
 				await deliver(groupId);
 			}

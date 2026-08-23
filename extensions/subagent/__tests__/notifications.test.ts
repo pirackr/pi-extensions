@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
 	createNotificationCoordinator,
@@ -96,6 +96,12 @@ let nowMs: number;
 let nonce: number;
 let sent: SentMessage[];
 let sendImpl: NotificationCoordinatorDeps["pi"]["sendMessage"];
+type ScheduledFlush = {
+	callback: () => Promise<void>;
+	delayMs: number;
+	cancelled: boolean;
+};
+let scheduled: ScheduledFlush[];
 let coordinator: NotificationCoordinator;
 
 function coordinatorDeps(
@@ -114,6 +120,14 @@ function coordinatorDeps(
 		nonce: () => `nonce-${++nonce}`,
 		now: () => nowMs,
 		groupWaitMs: 30_000,
+		schedule: (callback, delayMs) => {
+			const flush = { callback, delayMs, cancelled: false };
+			scheduled.push(flush);
+			return flush;
+		},
+		cancelScheduled: (handle) => {
+			(handle as ScheduledFlush).cancelled = true;
+		},
 		...overrides,
 	};
 }
@@ -144,14 +158,11 @@ beforeEach(async () => {
 	nowMs = 1_700_000_000_000;
 	nonce = 0;
 	sent = [];
+	scheduled = [];
 	sendImpl = async (message, options) => {
 		sent.push({ message, options });
 	};
 	coordinator = createNotificationCoordinator(coordinatorDeps());
-});
-
-afterEach(() => {
-	vi.useRealTimers();
 });
 
 describe("renderNotificationXml", () => {
@@ -266,21 +277,26 @@ describe("NotificationCoordinator groups", () => {
 		expect(sent[0].message.details.agentIds).toEqual(["q9xm", "v4nr"]);
 	});
 
-	it("flushes terminal members after 30 seconds and later delivers stragglers separately", async () => {
-		vi.useFakeTimers();
+	it("flushes terminal members durably after 30 seconds and later delivers stragglers separately", async () => {
 		const groupId = await coordinator.turnStart(5);
 		await enqueueTerminal("q9xm", groupId, 1, "conversation-a", nowMs);
 		await store.enqueue(manifest("v4nr", groupId, "conversation-a", 2), {});
+		let stateObservedDuringSend: string | undefined;
+		sendImpl = async (message, options) => {
+			stateObservedDuringSend = (await store.readDelivery("q9xm"))?.state;
+			sent.push({ message, options });
+		};
 		await coordinator.turnEnd();
 		expect(sent).toHaveLength(0);
+		expect(scheduled).toHaveLength(1);
+		expect(scheduled[0]).toMatchObject({ delayMs: 30_000, cancelled: false });
 
-		nowMs += 29_999;
-		await vi.advanceTimersByTimeAsync(29_999);
-		expect(sent).toHaveLength(0);
-		nowMs += 1;
-		await vi.advanceTimersByTimeAsync(1);
+		nowMs += 30_000;
+		await scheduled[0].callback();
+		expect(stateObservedDuringSend).toBe("dispatching");
 		expect(sent).toHaveLength(1);
 		expect(sent[0].message.details.agentIds).toEqual(["q9xm"]);
+		expect(await store.readDelivery("q9xm")).toMatchObject({ state: "delivered" });
 
 		nowMs += 10_000;
 		await store.publishTerminal("v4nr", result("v4nr", nowMs));

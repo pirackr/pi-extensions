@@ -1,12 +1,13 @@
 // Task 11 — compact rendering, widget/footer, and `/agents`.
 //
-// Pure, dependency-free rendering primitives for the subagent extension plus the
-// interactive `/agents` command. Every function here is intentionally side-effect
-// free and string-oriented so it is usable by both the TUI (Task 12 wires it into
-// `setWidget` / `setFooter` / `registerMessageRenderer`) and RPC/tool-call wiring
-// (which expects plain string arrays). The only exception is `runAgentsCommand`,
-// which owns the live TUI selector; it composes the pure helpers above and calls
-// `ctx.ui.requestRender()` / `performAgentAction` after every state change.
+// The compact/widget/footer/notification helpers are pure and dependency-free
+// so they are usable by both the TUI (Task 12 wires it into `setWidget`
+// / `setFooter` / `registerMessageRenderer`) and RPC/tool-call wiring (which
+// expects plain string arrays). The one exception is the live `/agents` selector
+// (`runAgentsCommand`) and the tool renderers (`createToolRenderers`), which own
+// the real Pi `Text` / `SelectList` components; they compose the pure helpers
+// above and call `ctx.ui.requestRender()` / `performAgentAction` after every
+// state change. The only runtime import is `@earendil-works/pi-tui`.
 //
 // Scope rulings (see task-11-brief.md):
 //   - Compact output never echoes the task prompt.
@@ -28,6 +29,8 @@ import type {
 import type { SubagentManager } from "./manager.ts";
 
 import type { NotificationItem } from "./notifications.ts";
+
+import { type SelectItem, type SelectListTheme, Container, Key, matchesKey, SelectList, Text } from "@earendil-works/pi-tui";
 
 // ---------------------------------------------------------------------------
 // State markers — one glyph per lifecycle state. Kept in one place so the
@@ -153,30 +156,74 @@ export function renderResult(
 	if (options.expanded && isReceipt(value)) {
 		return expandedToolDetails(value).join("\n");
 	}
+	return compactResultText(value);
+}
+
+/** The plain compact result line for a receipt or foreground completion. */
+function compactResultText(value: AgentReceipt | ResultResponse): string {
 	const handle = `subagent-${value.agentId}`;
 	if (isForegroundCompletion(value)) return "⎿ Done";
 	if (value.state === "queued") return `⎿ Queued as ${handle}…`;
 	return `⎿ Running as ${handle}…`;
 }
 
+/** Minimal subset of the pi theme the renderers may use when available. */
+interface RendererTheme {
+	readonly fg: (color: string, text: string) => string;
+	readonly bold: (text: string) => string;
+}
+
+/**
+ * Apply optional pi theming. When the renderer receives a real `theme`
+ * (as `pi` does at call time) the text is painted; when `theme` is absent or
+ * shape-less (as in the RPC/string harness) the raw text is returned verbatim.
+ */
+function themed(theme: RendererTheme | unknown | undefined, text: string): string {
+	if (
+		theme &&
+		typeof theme === "object" &&
+		typeof (theme as RendererTheme).fg === "function" &&
+		typeof (theme as RendererTheme).bold === "function"
+	) {
+		return (theme as RendererTheme).fg("toolTitle", (theme as RendererTheme).bold(text));
+	}
+	return text;
+}
+
 /**
  * Factory mirroring the pi tool-renderer contract
  * (`renderCall(args, theme, context)` / `renderResult(result, options, theme, context)`).
- * The compact form returns plain strings so RPC wiring is trivial; the TUI
- * layer reuses the same helpers and applies theming on top.
+ * Both return real pi `Text` components so the TUI layer can theme them; the
+ * compact form never echoes the prompt. RPC wiring can render the same
+ * components to plain strings via `component.render(width)`.
  */
 export function createToolRenderers() {
 	return {
 		renderCall: (
-			request: AgentRequest,
+			args: AgentRequest,
+			theme?: RendererTheme,
 			_context?: unknown,
-			_theme?: unknown,
-		): string => renderCall(request),
+		): Text =>
+			new Text(themed(theme, `▸ ${args.subagent_type} (${args.description})`), 0, 0),
 		renderResult: (
 			value: AgentReceipt | ResultResponse,
 			options: { expanded?: boolean } = {},
-			_theme?: unknown,
-		): string => renderResult(value, options),
+			theme?: RendererTheme,
+			_context?: unknown,
+		): Text | Container => {
+			if (options.expanded && isReceipt(value)) {
+				const container = new Container();
+				for (const line of expandedToolDetails(value)) {
+					container.addChild(new Text(themed(theme, line), 0, 0));
+				}
+				return container;
+			}
+			return new Text(
+				themed(theme, compactResultText(value)),
+				0,
+				0,
+			);
+		},
 	};
 }
 
@@ -337,16 +384,28 @@ function renderNotificationItem(item: NotificationItem): string {
 // `/agents` action logic
 // ---------------------------------------------------------------------------
 
-/** The action the `/agents` UI performs for a task in the given state. */
-export type AgentRowAction = "attach" | "stop" | "retrieve";
+/**
+ * The action(s) the `/agents` UI performs for a task. Terminal tasks expose
+ * both full-result retrieval and a display/copy of the artifact path; live
+ * tasks expose attach or stop. The selector offers every listed action for a
+ * row, so no action is reachable only through a direct function call.
+ */
+export type AgentRowAction = "attach" | "stop" | "retrieve" | "path";
 
-/** Classify a durable manifest into the single sensible `/agents` action. */
+/** Classify a durable manifest into the single primary `/agents` action. */
 export function classifyAgentRow(manifest: AgentManifest): AgentRowAction {
 	if (isTerminalState(manifest.state)) return "retrieve";
 	if (manifest.state === "running" || manifest.state === "starting") {
 		return "attach";
 	}
 	return "stop";
+}
+
+/** Actions offered for a row in its lifecycle state. */
+function actionsFor(manifest: AgentManifest): AgentRowAction[] {
+	if (isTerminalState(manifest.state)) return ["retrieve", "path"];
+	if (manifest.state === "running" || manifest.state === "starting") return ["attach"];
+	return ["stop"];
 }
 
 /** The exact attach command for a task, or `null` when no window has started. */
@@ -394,50 +453,89 @@ export function artifactPathFor(result: ResultResponse): string {
 export interface AgentsSelectable {
 	readonly agentId: string;
 	readonly label: string;
-	readonly action: AgentRowAction | "refresh";
+	/** Ordered actions the selector offers for this row (primary first). */
+	readonly actions: readonly (AgentRowAction | "refresh")[];
 	readonly state: TaskStatus;
 	readonly profile: string;
+	readonly depth: number;
+	readonly parentAgentId: string | null;
 	readonly tmuxSession: string | null;
 	readonly tmuxWindow: string | null;
-	readonly artifactDir: string | null;
 }
 
 /** Result of a selector key event. */
 export type AgentsDispatch =
 	| "rerender"
 	| "done"
-	| { readonly action: AgentRowAction | "refresh"; readonly id: string };
+	| { readonly action: AgentRowAction; readonly id: string };
+
+/** Durable state groups in selector order: active work first, then finished. */
+const STATE_GROUP_ORDER: readonly TaskStatus[] = [
+	"queued",
+	"starting",
+	"running",
+	"succeeded",
+	"failed",
+	"timed_out",
+	"cancelled",
+	"interrupted",
+];
 
 /**
- * Immutable, key-driven selector over durable manifests. The refresh action is
- * always offered first, then one row per task classified by its state.
+ * Immutable, selector-ready view over durable manifests. The refresh action is
+ * always offered first, then durable tasks grouped by state (active work first)
+ * with one selectable row per task. Labels are indented by the task's depth so
+ * parent/descendant hierarchy is preserved in the displayed/selectable labels.
  */
 export class AgentsView {
+	/** Refresh sentinel followed by one selectable row per durable task. */
 	readonly rows: AgentsSelectable[];
+	/** SelectList items matching `rows`, in order. */
+	readonly items: SelectItem[];
+	/** Stable lookup of each selectable by its agent id, including refresh. */
+	readonly byId: Map<string, AgentsSelectable>;
 	private selectedIndex: number;
 
 	constructor(manifests: readonly AgentManifest[]) {
 		this.selectedIndex = 0;
-		this.rows = [
-			{
-				agentId: "__refresh__",
-				label: "Refresh",
-				action: "refresh",
-				state: "queued",
-				profile: "",
-				tmuxSession: null,
-				tmuxWindow: null,
-				artifactDir: null,
-			},
-			...manifests.map((manifest) => ({
-				agentId: manifest.agentId,
-				label: `${manifest.profile.name}: ${manifest.description}`,
-				action: classifyAgentRow(manifest),
-				state: manifest.state,
-				profile: manifest.profile.name,
-				tmuxSession: manifest.tmuxSession,
-				tmuxWindow: manifest.tmuxWindow,
-				artifactDir: null,
+		const depthBy = buildDepths(manifests);
+		// Stable grouping by state (active tasks first), preserving list order.
+		const ordered = [...manifests].sort((a, b) =>
+			stateGroupIndex(a.state) - stateGroupIndex(b.state),
+		);
+		const body: AgentsSelectable[] = ordered.map((manifest) => ({
+			agentId: manifest.agentId,
+			label: applyDepth(depthBy.get(manifest.agentId) ?? 0, `${manifest.profile.name}: ${manifest.description}`),
+			actions: actionsFor(manifest),
+			state: manifest.state,
+			profile: manifest.profile.name,
+			depth: depthBy.get(manifest.agentId) ?? 0,
+			parentAgentId: manifest.parentAgentId ?? null,
+			tmuxSession: manifest.tmuxSession,
+			tmuxWindow: manifest.tmuxWindow,
+		}));
+		const refresh: AgentsSelectable = {
+			agentId: "__refresh__",
+			label: "Refresh",
+			actions: ["refresh"],
+			state: "queued",
+			profile: "",
+			depth: 0,
+			parentAgentId: null,
+			tmuxSession: null,
+			tmuxWindow: null,
+		};
+		this.rows = [refresh, ...body];
+		this.byId = new Map([
+			[refresh.agentId, refresh],
+			...body.map((row) => [row.agentId, row] as const),
+		]);
+		this.items = [
+			{ value: refresh.agentId, label: refresh.label, description: refresh.actions.join(" · ") },
+			...body.map((row) => ({
+				value: row.agentId,
+				label: row.label,
+				description: `${row.profile} · ${row.state} · ${row.actions.join(" · ")}`,
 			})),
 		];
 	}
@@ -449,28 +547,62 @@ export class AgentsView {
 	/** AgentsView holds no render cache; invalidate is a documented no-op. */
 	invalidate(): void {}
 
+	/**
+	 * Dispatch a raw terminal key. Real terminals deliver escape sequences
+	 * (`\x1b[B` for Down, `\x1b` for Escape, `\r` for Enter); we match them
+	 * against the pi `Key` identifiers rather than the literal tokens, so the
+	 * selector navigates and exits correctly in a live TUI.
+	 */
 	dispatch(input: string): AgentsDispatch {
-		switch (input) {
-			case "down":
-				this.selectedIndex = Math.min(
-					this.selectedIndex + 1,
-					this.rows.length - 1,
-				);
-				return "rerender";
-			case "up":
-				this.selectedIndex = Math.max(this.selectedIndex - 1, 0);
-				return "rerender";
-			case "escape":
-				this.selectedIndex = this.rows.length - 1;
-				return "done";
-			case "enter": {
-				const selected = this.selected();
-				return { action: selected.action, id: selected.agentId };
-			}
-			default:
-				return "rerender";
+		if (matchesKey(input, Key.down)) {
+			this.selectedIndex = Math.min(this.selectedIndex + 1, this.rows.length - 1);
+			return "rerender";
 		}
+		if (matchesKey(input, Key.up)) {
+			this.selectedIndex = Math.max(this.selectedIndex - 1, 0);
+			return "rerender";
+		}
+		if (matchesKey(input, Key.escape)) {
+			this.selectedIndex = this.rows.length - 1;
+			return "done";
+		}
+		if (matchesKey(input, Key.enter)) {
+			const selected = this.selected();
+			// Entering on the refresh sentinel returns the selection to the
+			// bottom; any real row yields its primary action.
+			if (selected.agentId === "__refresh__") return "rerender";
+			return { action: selected.actions[0] as AgentRowAction, id: selected.agentId };
+		}
+		return "rerender";
 	}
+}
+
+/** Indent `text` by `depth` two-space steps, preserving any leading marker. */
+function applyDepth(depth: number, text: string): string {
+	return "  ".repeat(Math.max(0, depth)) + text;
+}
+
+function stateGroupIndex(state: TaskStatus): number {
+	return STATE_GROUP_ORDER.indexOf(state);
+}
+
+/** Map each agent id to its depth computed via the parent chain. */
+function buildDepths(manifests: readonly AgentManifest[]): Map<string, number> {
+	const byId = new Map(manifests.map((m) => [m.agentId, m]));
+	const depthOf = (agentId: string): number => {
+		let depth = 0;
+		let current = byId.get(agentId);
+		while (current?.parentAgentId && byId.has(current.parentAgentId)) {
+			depth++;
+			current = byId.get(current.parentAgentId);
+		}
+		return depth;
+	};
+	const out = new Map<string, number>();
+	for (const manifest of manifests) {
+		out.set(manifest.agentId, depthOf(manifest.agentId));
+	}
+	return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -509,69 +641,50 @@ export function isAgentsCommandContext(
 	);
 }
 
-/** Extra action keys the live selector dispatches beyond the classification. */
-type AgentsExecAction = AgentRowAction | "path" | "refresh";
-
-/**
- * Minimal structural view of the public manager surface the `/agents` command
- * needs (`list`, `stop`, `getResult`). The concrete `SubagentManager` is
- * assignable to this, so the command stays decoupled from the manager's internal
- * `wait`/`signal` plumbing while still driving the real public API.
- */
-export interface AgentsManagerApi {
-	list(): Promise<AgentManifest[]>;
-	stop(agentId: string): Promise<StopResponse>;
-	getResult(agentId: string): Promise<ResultResponse>;
-}
-
-/**
- * Minimal structural view of the public manager surface the `/agents` command
- * needs (`list`, `stop`, `getResult`). The concrete `SubagentManager` is
- * assignable to this, so the command stays decoupled from the manager's internal
- * `wait`/`signal` plumbing while still driving the real public API.
- */
-export interface AgentsManagerApi {
-	list(): Promise<AgentManifest[]>;
-	stop(agentId: string): Promise<StopResponse>;
-	getResult(agentId: string): Promise<ResultResponse>;
-}
-
 /**
  * Execute one `/agents` selection. Every call goes through the public
- * `SubagentManager` API and reports via `ctx.ui.notify`. Attach is exposed as an
- * exact command string; it is never executed through a shell.
+ * `SubagentManager` API (`list`, `stop`, `getResult`) and reports via
+ * `ctx.ui.notify`. Retrieval always passes `wait = false` and a concrete
+ * `AbortController` signal so a terminal task is not blocked waiting for a
+ * result that already exists; attach is exposed as an exact command string and
+ * is never executed through a shell.
  */
 export async function performAgentAction(
-	action: AgentsExecAction,
+	action: AgentRowAction | "refresh",
 	selectable: AgentsSelectable,
 	ctx: AgentsCommandContext,
 	manager: SubagentManager,
 ): Promise<void> {
-	// The UI only needs the single-arg public surface; narrow to avoid the
-	// manager's internal `wait`/`signal` plumbing. The real `SubagentManager`
-	// satisfies this shape via structural assignability.
-	const api: AgentsManagerApi = manager as unknown as AgentsManagerApi;
+	const controller = new AbortController();
 	switch (action) {
 		case "attach":
 			ctx.ui.notify(attachCommandFor(selectable) ?? "no attached tmux window");
 			return;
 		case "stop": {
-			const response = await api.stop(selectable.agentId);
+			const response = await manager.stop(selectable.agentId);
 			ctx.ui.notify(stopSummary(response));
 			return;
 		}
 		case "retrieve": {
-			const response = await api.getResult(selectable.agentId);
+			const response = await manager.getResult(
+				selectable.agentId,
+				false,
+				controller.signal,
+			);
 			ctx.ui.notify(retrieveSummary(response));
 			return;
 		}
 		case "path": {
-			const response = await api.getResult(selectable.agentId);
+			const response = await manager.getResult(
+				selectable.agentId,
+				false,
+				controller.signal,
+			);
 			ctx.ui.notify(artifactPathFor(response));
 			return;
 		}
 		case "refresh":
-			await api.list();
+			await manager.list();
 			ctx.ui.requestRender();
 			return;
 		default:
@@ -581,11 +694,9 @@ export async function performAgentAction(
 
 /**
  * The `/agents` command. Builds a durable, state-grouped selector via the public
- * manager API and drives TUI selection, requesting a rerender after every state
- * change and dispatching the selected action through `performAgentAction`.
- *
- * Task 12 owns wiring this into `pi.registerCommand`; this function is the
- * self-contained handler.
+ * manager API and drives a real Pi `SelectList`, delegating raw terminal input
+ * to it and requesting a TUI rerender after every key. Task 12 owns wiring this
+ * into `pi.registerCommand`; this function is the self-contained handler.
  */
 export async function runAgentsCommand(
 	ctx: AgentsCommandContext,
@@ -598,40 +709,58 @@ export async function runAgentsCommand(
 	}
 
 	const view = new AgentsView(await manager.list());
+	const theme = ctx.ui.theme;
+	const selectListTheme: SelectListTheme = {
+		selectedPrefix: (text) => style(theme, text),
+		selectedText: (text) => style(theme, text),
+		description: (text) => style(theme, text),
+		scrollInfo: (text) => style(theme, text),
+		noMatch: (text) => style(theme, text),
+	};
 
 	await ctx.ui.custom<void>((tui, _theme, _keybindings, done) => {
+		const selectList = new SelectList(view.items, Math.min(view.items.length, 10), selectListTheme);
+
+		selectList.onCancel = () => done();
+		selectList.onSelect = async (item) => {
+			const selectable = view.byId.get(item.value);
+			if (!selectable) {
+				done();
+				return;
+			}
+			// Refresh re-lists and rerenders; any other action dispatches through
+			// the public manager API and closes the selector.
+			if (selectable.actions.includes("refresh")) {
+				await performAgentAction("refresh", selectable, ctx, manager);
+			} else {
+				await performAgentAction(selectable.actions[0], selectable, ctx, manager);
+				done();
+			}
+		};
+
 		return {
 			render(width: number): string[] {
-				const selectedId = view.selected().agentId;
-				return view.rows.map((row, index) => {
-					const marker = row.agentId === selectedId ? "▸ " : "  ";
-					return truncateToWidth(marker + row.label, width);
-				});
+				return selectList.render(width);
 			},
 			invalidate(): void {
+				selectList.invalidate();
 				view.invalidate();
 			},
 			handleInput(data: string): void {
-				const outcome = view.dispatch(data);
+				// Raw terminal input (escape sequences) — delegate to the real
+				// SelectList, which performs its own key handling.
+				selectList.handleInput(data);
 				tui.requestRender();
-				if (outcome === "done") {
-					done();
-					return;
-				}
-				if (
-					outcome &&
-					typeof outcome === "object" &&
-					"action" in outcome
-				) {
-					done();
-					void performAgentAction(
-						outcome.action,
-						view.selected(),
-						ctx,
-						manager,
-					);
-				}
 			},
 		};
 	});
+}
+
+/** Paint `text` with the live theme when available, otherwise return it raw. */
+function style(theme: { fg(color: string, text: string): string }, text: string): string {
+	try {
+		return theme.fg("muted", text);
+	} catch {
+		return text;
+	}
 }

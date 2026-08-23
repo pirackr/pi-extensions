@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@earendil-works/pi-tui": "^0.84.2",
     "@mozilla/readability": "^0.6.0",
     "@tavily/core": "^0.7.7",
     "@tiny-fish/sdk": "^0.3.0",

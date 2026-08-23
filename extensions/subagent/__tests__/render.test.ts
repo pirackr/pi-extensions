@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { Key, Text, matchesKey } from "@earendil-works/pi-tui";
+
 import type {
 	AgentManifest,
 	AgentReceipt,
@@ -193,6 +195,16 @@ describe("render exports", () => {
 describe("compact tool rendering", () => {
 	const { renderCall, renderResult } = createToolRenderers();
 
+	it("returns real pi Text components, not strings", () => {
+		const request: AgentRequest = {
+			description: "do abc xyz",
+			prompt: "SECRET system prompt",
+			subagent_type: "worker",
+			run_in_background: true,
+		};
+		expect(renderCall(request, {} as never, {} as never)).toBeInstanceOf(Text);
+	});
+
 	it("renders the canonical compact call header from the profile + description", () => {
 		const request: AgentRequest = {
 			description: "do abc xyz",
@@ -200,7 +212,9 @@ describe("compact tool rendering", () => {
 			subagent_type: "worker",
 			run_in_background: true,
 		};
-		expect(renderCall(request, {} as never, {} as never)).toBe("▸ worker (do abc xyz)");
+		expect(renderText(renderCall(request, {} as never, {} as never))).toBe(
+			"▸ worker (do abc xyz)",
+		);
 	});
 
 	it("never echoes the prompt in the compact header", () => {
@@ -214,29 +228,31 @@ describe("compact tool rendering", () => {
 			{} as never,
 			{} as never,
 		);
-		expect(call).not.toContain("SECRET");
+		expect(renderText(call)).not.toContain("SECRET");
 	});
 
 	it("renders the canonical running receipt with a truncated handle", () => {
-		expect(renderResult(RUNNING_RECEIPT, { expanded: false }, {} as never)).toBe(
-			"⎿ Running as subagent-a1b2…",
-		);
+		expect(
+			renderText(renderResult(RUNNING_RECEIPT, { expanded: false }, {} as never)),
+		).toBe("⎿ Running as subagent-a1b2…");
 	});
 
 	it("says Queued when capacity is full", () => {
-		expect(renderResult(QUEUED_RECEIPT, { expanded: false }, {} as never)).toBe(
-			"⎿ Queued as subagent-a1b2…",
-		);
+		expect(
+			renderText(renderResult(QUEUED_RECEIPT, { expanded: false }, {} as never)),
+		).toBe("⎿ Queued as subagent-a1b2…");
 	});
 
 	it("says Done for a foreground completion", () => {
-		expect(renderResult(FOREGROUND_RESULT, { expanded: false }, {} as never)).toBe(
-			"⎿ Done",
-		);
+		expect(
+			renderText(renderResult(FOREGROUND_RESULT, { expanded: false }, {} as never)),
+		).toBe("⎿ Done");
 	});
 
 	it("never echoes the prompt in the compact result", () => {
-		const text = renderResult(RUNNING_RECEIPT, { expanded: false }, {} as never);
+		const text = renderText(
+			renderResult(RUNNING_RECEIPT, { expanded: false }, {} as never),
+		);
 		expect(text).not.toContain("SECRET");
 	});
 
@@ -252,6 +268,30 @@ describe("compact tool rendering", () => {
 		expect(expandedToolDetails(QUEUED_RECEIPT)).toEqual([
 			"Artifacts: /tmp/proj/pi-k7m2/subagents/a1b2",
 		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Documented tool-renderer signature: renderCall(args, theme, context) and
+// renderResult(result, options, theme, context).
+// ---------------------------------------------------------------------------
+
+describe("tool-renderer documented signatures", () => {
+	const { renderCall, renderResult } = createToolRenderers();
+
+	it("renderResult honours the options argument in the documented (result, options, …) position", () => {
+		// Expanded rendering is selected through the second `options` argument;
+		// the result itself is the first argument. Proves the documented order.
+		const expanded = renderText(
+			renderResult(RUNNING_RECEIPT, { expanded: true }, {} as never, {} as never),
+		);
+		const collapsed = renderText(
+			renderResult(RUNNING_RECEIPT, { expanded: false }, {} as never, {} as never),
+		);
+		expect(expanded).toContain("Tmux:");
+		expect(expanded).toContain("Attach:");
+		expect(expanded).toContain("Artifacts:");
+		expect(collapsed).not.toContain("Tmux:");
 	});
 });
 
@@ -311,6 +351,11 @@ function visibleWidthTestOnly(value: string): number {
 		width++;
 	}
 	return width;
+}
+
+/** Render a Text/Container component to its trimmed visible string form. */
+function renderText(node: { render(width: number): string[] }, width = 200): string {
+	return node.render(width).map((line) => line.replace(/\s+$/, "")).join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -437,24 +482,10 @@ describe("artifactPathFor", () => {
 // /agents selection model + action dispatch
 // ---------------------------------------------------------------------------
 
-function selectable(
-	agentId: string,
-	action: "attach" | "stop" | "retrieve",
-	state: TaskStatus,
-	overrides: Partial<AgentsSelectable> = {},
-): AgentsSelectable {
-	return {
-		agentId,
-		label: agentId,
-		action,
-		state,
-		profile: "general",
-		tmuxSession: null,
-		tmuxWindow: null,
-		artifactDir: null,
-		...overrides,
-	};
-}
+const ESC_DOWN = "\x1b[B";
+const ESC_UP = "\x1b[A";
+const ESC_ENTER = "\r";
+const ESC_ESCAPE = "\x1b";
 
 describe("AgentsView", () => {
 	let view: AgentsView;
@@ -466,29 +497,87 @@ describe("AgentsView", () => {
 		]);
 	});
 
-	it("offers refresh first, then one selectable row per task", () => {
+	it("offers refresh first, then one selectable row per task grouped by state", () => {
+		// The refresh sentinel is first; durable rows follow in state-group order
+		// (queued before running before terminal), which is the grouping invariant.
 		expect(view.rows.map((r) => r.agentId)).toEqual([
 			"__refresh__",
-			"a1b2",
 			"q1w2",
+			"a1b2",
 			"s3d4",
 		]);
+		const order = view.rows.map((r) => r.state);
+		// Every non-terminal group precedes every terminal group.
+		const firstTerminal = order.indexOf("succeeded");
+		expect(order.slice(0, firstTerminal)).not.toContain("succeeded");
 	});
 
-	it("navigates and rerenders", () => {
-		expect(view.dispatch("down")).toBe("rerender");
-		expect(view.selected().agentId).toBe("a1b2");
+	it("navigates on the raw CSI-down escape sequence, not the literal token", () => {
+		// Real terminals deliver "\x1b[B", not the string "down".
+		expect(matchesKey(ESC_DOWN, Key.down)).toBe(true);
+		expect(matchesKey("down", Key.down)).toBe(false);
+		expect(view.dispatch(ESC_DOWN)).toBe("rerender");
+		expect(view.selected().agentId).toBe("q1w2");
 	});
 
-	it("resolves the correct action per task", () => {
-		expect(view.dispatch("down")).toBe("rerender");
-		expect(view.dispatch("enter")).toEqual({ action: "attach", id: "a1b2" });
-		expect(view.dispatch("down")).toBe("rerender");
-		expect(view.dispatch("down")).toBe("rerender");
-		expect(view.dispatch("enter")).toEqual({ action: "retrieve", id: "s3d4" });
-		expect(view.dispatch("escape")).toBe("done");
+	it("navigates up on the raw CSI-up escape sequence", () => {
+		view.dispatch(ESC_DOWN);
+		expect(view.dispatch(ESC_UP)).toBe("rerender");
+		expect(view.selected().agentId).toBe("__refresh__");
+	});
+
+	it("resolves the correct action per task on raw Enter", () => {
+		// Navigate to the running row (grouped after the queued row) and confirm
+		// Enter yields its primary action, then to the terminal row.
+		view.dispatch(ESC_DOWN); // q1w2 (queued -> stop)
+		expect(view.selected().actions[0]).toBe("stop");
+		view.dispatch(ESC_DOWN); // a1b2 (running -> attach)
+		expect(view.selected().actions[0]).toContain("attach");
+		expect(view.dispatch(ESC_ENTER)).toEqual({ action: "attach", id: "a1b2" });
+		view.dispatch(ESC_DOWN); // s3d4 (succeeded -> retrieve)
+		expect(view.selected().actions[0]).toContain("retrieve");
+		expect(view.dispatch(ESC_ENTER)).toEqual({ action: "retrieve", id: "s3d4" });
+	});
+
+	it("offers the artifact-path action for terminal tasks through the selector", () => {
+		const terminal = view.rows.find((r) => r.agentId === "s3d4");
+		expect(terminal).toBeDefined();
+		expect(terminal!.actions).toEqual(
+			expect.arrayContaining(["retrieve", "path"]),
+		);
+	});
+
+	it("preserves parent/descendant hierarchy in selectable labels", () => {
+		const descendant = new AgentsView([
+			manifest("a1b2", "running"),
+			manifest("c3d4", "running", { parentAgentId: "a1b2" }),
+		]);
+		const byLabel = new Map(descendant.rows.map((r) => [r.agentId, r.label]));
+		expect(byLabel.get("a1b2")!).not.toMatch(/^  /);
+		expect(byLabel.get("c3d4")!).toMatch(/^  /);
 	});
 });
+
+/** Build a selectable with the real multi-action shape the selector expects. */
+function selectable(
+	agentId: string,
+	state: TaskStatus,
+	actions: readonly ("attach" | "stop" | "retrieve" | "path" | "refresh")[],
+	overrides: Partial<AgentsSelectable> = {},
+): AgentsSelectable {
+	return {
+		agentId,
+		label: agentId,
+		actions: [...actions],
+		state,
+		profile: "general",
+		depth: 0,
+		parentAgentId: null,
+		tmuxSession: null,
+		tmuxWindow: null,
+		...overrides,
+	};
+}
 
 // ---------------------------------------------------------------------------
 // performAgentAction: real manager calls via a thin ctx
@@ -518,7 +607,7 @@ describe("performAgentAction", () => {
 		const manager = { stop: vi.fn(), getResult: vi.fn(), list: vi.fn() };
 		await performAgentAction(
 			"attach",
-			selectable("a1b2", "attach", "running", {
+			selectable("a1b2", "running", ["attach"], {
 				tmuxSession: "pi-k7m2",
 				tmuxWindow: "subagent-a1b2",
 			}),
@@ -540,7 +629,7 @@ describe("performAgentAction", () => {
 		}));
 		await performAgentAction(
 			"stop",
-			selectable("a1b2", "stop", "running"),
+			selectable("a1b2", "running", ["stop"]),
 			ctx,
 			{ stop } as unknown as SubagentManager,
 		);
@@ -548,19 +637,24 @@ describe("performAgentAction", () => {
 		expect(notify).toHaveBeenCalledWith("stopped a1b2 (running)");
 	});
 
-	it("retrieves a terminal result through the manager", async () => {
+	it("retrieves a terminal result with wait=false and a concrete AbortSignal", async () => {
 		const { ctx, notify } = makeCtx();
-		const getResult = vi.fn(async (): Promise<ResultResponse> => ({
-			...FOREGROUND_RESULT,
-			artifactDir: "/tmp/proj/x",
-		}));
+		const getResult = vi.fn(
+			async (_agentId: string, _wait: boolean, _signal: AbortSignal): Promise<ResultResponse> =>
+				({
+					...FOREGROUND_RESULT,
+					artifactDir: "/tmp/proj/x",
+				}),
+		);
 		await performAgentAction(
 			"retrieve",
-			selectable("a1b2", "retrieve", "succeeded"),
+			selectable("a1b2", "succeeded", ["retrieve", "path"]),
 			ctx,
 			{ getResult } as unknown as SubagentManager,
 		);
-		expect(getResult).toHaveBeenCalledWith("a1b2");
+		expect(getResult.mock.calls[0][0]).toBe("a1b2");
+		expect(getResult.mock.calls[0][1]).toBe(false);
+		expect(getResult.mock.calls[0][2]).toBeInstanceOf(AbortSignal);
 		expect(notify).toHaveBeenCalledWith(
 			"✓ succeeded · 3 tools · 1.2k tok · 12.0s · artifacts: /tmp/proj/x",
 		);
@@ -574,10 +668,11 @@ describe("performAgentAction", () => {
 		}));
 		await performAgentAction(
 			"path",
-			selectable("a1b2", "retrieve", "succeeded"),
+			selectable("a1b2", "succeeded", ["retrieve", "path"]),
 			ctx,
 			{ getResult } as unknown as SubagentManager,
 		);
+		expect(getResult).toHaveBeenCalledTimes(1);
 		expect(notify).toHaveBeenCalledWith("/tmp/proj/artifacts");
 	});
 
@@ -586,11 +681,74 @@ describe("performAgentAction", () => {
 		const manager = { stop: vi.fn(), getResult: vi.fn(), list: vi.fn() };
 		await performAgentAction(
 			"refresh",
-			selectable("__refresh__", "retrieve", "succeeded"),
+			selectable("__refresh__", "queued", ["refresh"]),
 			ctx,
 			manager as unknown as SubagentManager,
 		);
 		expect(requestRender).toHaveBeenCalled();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// runAgentsCommand: real SelectList, raw terminal input, rerender on input
+// ---------------------------------------------------------------------------
+
+/**
+ * Drive runAgentsCommand with a fake `ctx.ui.custom` that captures the component
+ * it returns, so we can feed real terminal key data through SelectList.
+ */
+describe("runAgentsCommand", () => {
+	it("drives a real SelectList with raw terminal escape sequences and rerenders", async () => {
+		const manager = {
+			list: vi.fn(async () => [
+				manifest("a1b2", "running", { tmuxSession: "pi-k7m2", tmuxWindow: "subagent-a1b2" }),
+				manifest("q1w2", "queued"),
+				manifest("s3d4", "succeeded"),
+			]),
+			stop: vi.fn(),
+			getResult: vi.fn(async () => ({ ...FOREGROUND_RESULT })),
+		};
+
+		let component: {
+			render(width: number): string[];
+			invalidate(): void;
+			handleInput(data: string): void;
+		} | undefined;
+
+		const requestRender = vi.fn();
+		const ctx = {
+			mode: "tui",
+			ui: {
+				theme: { fg: (_color: string, text: string) => text, bold: (t: string) => t },
+				notify: vi.fn(),
+				requestRender,
+				custom: ((_factory: (tui: { requestRender(): void }, theme: unknown, kb: unknown, done: unknown) => unknown) => {
+					const result = _factory(
+						{ requestRender: () => requestRender() },
+						{},
+						{},
+						() => {},
+					);
+					component = result as { render(width: number): string[]; invalidate(): void; handleInput(data: string): void };
+					return Promise.resolve(result);
+				}),
+			},
+		} as unknown as AgentsCommandContext;
+
+		await runAgentsCommand(ctx, manager as unknown as SubagentManager);
+
+		expect(component).toBeDefined();
+		expect(component!.render(80).length).toBeGreaterThan(0);
+
+		// Real CSI-down is delivered by a live terminal and must rerender via
+		// the factory's `tui`, exactly as pi would pass it.
+		component!.handleInput(ESC_DOWN);
+		expect(requestRender).toHaveBeenCalled();
+
+		// A literal "down" token is not how a real terminal delivers the key;
+		// the selector matches the escape sequence, not the token.
+		expect(matchesKey(ESC_DOWN, "down")).toBe(true);
+		expect(matchesKey("down", "down")).toBe(false);
 	});
 });
 

@@ -25,6 +25,7 @@ import {
 	type AgentRequest,
 	type ProfileContribution,
 	type ProfilePolicyAdapter,
+	type ProfileReservation,
 	type ResolvedProfile,
 	type ResultResponse,
 	type StopResponse,
@@ -372,6 +373,7 @@ export function createSubagentManager(deps: SubagentManagerDeps): SubagentManage
 					shellQuote(requestPath),
 				].join(" ");
 			},
+			policyAdapters: initial.policyAdapters,
 		};
 		scheduler = createScheduler(schedulerInput);
 		started = true;
@@ -441,9 +443,18 @@ export function createSubagentManager(deps: SubagentManagerDeps): SubagentManage
 				const sequence = all.reduce((highest, task) => Math.max(highest, task.sequence), 0) + 1;
 				const owner = resolved.contributions.find((item) => item.profile.name === profile.name)?.owner;
 				const adapter = owner ? resolved.policyAdapters[owner] : undefined;
-				if (adapter) await adapter.reserve(owner!, profile.name);
+				// Capture the owner's durable reservation immediately before publication.
+				// An owner policy returning undefined denied admission, so no unreserved
+				// durable task may be published for that contributed profile.
+				let reservation: ProfileReservation | undefined;
+				if (adapter) {
+					reservation = await adapter.reserve(owner!, profile.name, agentId);
+					if (!reservation) {
+						throw new Error(`policy '${owner}' rejected profile '${profile.name}'`);
+					}
+				}
 
-				published = { ...baseManifest, sequence };
+				published = { ...baseManifest, sequence, reservation: reservation ?? null };
 				const runnerRequest: RunnerRequest = {
 					schema: 1,
 					parentId: published.parentId,
@@ -463,6 +474,7 @@ export function createSubagentManager(deps: SubagentManagerDeps): SubagentManage
 					loadContextFiles: resolved.config.loadContextFiles,
 					webSearchMaxLookups: resolved.config.webSearchMaxLookups,
 					webSearchMaxFetches: resolved.config.webSearchMaxFetches,
+					reservation: reservation ?? null,
 				};
 				await deps.store.enqueue(published, runnerRequest as unknown as Record<string, unknown>);
 				await assertManagerCurrent();

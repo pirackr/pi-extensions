@@ -33,6 +33,7 @@ import {
 	type StatusUpdate,
 	type DeliveryRecord,
 	type GroupRecord,
+	type ProfileSettlement,
 } from "../types.ts";
 
 // ---------------------------------------------------------------------------
@@ -1132,6 +1133,81 @@ describe("scheduler — reconciliation", () => {
 
 		expect(tmux.closed).toEqual(["subagent-a1"]);
 		expect(tmux.windows.has("subagent-a2")).toBe(true);
+		await scheduler.stop();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Scheduler — reservation settlement
+// ---------------------------------------------------------------------------
+
+describe("scheduler — reservation settlement", () => {
+	it("settles the owner reservation exactly once after terminal publication", async () => {
+		const settle = vi.fn(async (_settlement: ProfileSettlement) => undefined);
+		const { scheduler, store, tmux } = await startHarness({
+			policyAdapters: { research: { reserve: async () => undefined, settle } },
+		});
+		const reservation = { owner: "research", profile: "reviewer", token: "res-1", acquiredAt: 1_000 };
+		store.tasks.set(
+			"a1",
+			makeManifest({
+				agentId: "a1",
+				sequence: 1,
+				state: "succeeded",
+				tmuxWindow: "subagent-a1",
+				reservation,
+			}),
+		);
+		store.results.set("a1", {
+			agentId: "a1",
+			state: "succeeded",
+			output: "done",
+			usage: { totalTokens: 1, toolUses: 1, durationMs: 1 },
+			finishedAt: 42,
+			terminalReason: null,
+		} as TerminalResult);
+		tmux.windows.add("subagent-a1");
+
+		await scheduler.reconcile();
+
+		expect(settle).toHaveBeenCalledTimes(1);
+		const settled = vi.mocked(settle).mock.calls[0]![0];
+		expect(settled.owner).toBe("research");
+		expect(settled.agentId).toBe("a1");
+		expect(settled.reservation.token).toBe("res-1");
+
+		// Idempotent across repeated reconciles (retries/recovery): no double release.
+		await scheduler.reconcile();
+		expect(settle).toHaveBeenCalledTimes(1);
+		await scheduler.stop();
+	});
+
+	it("skips settlement for tasks with no reservation", async () => {
+		const settle = vi.fn(async () => undefined);
+		const { scheduler, store } = await startHarness({
+			policyAdapters: { research: { reserve: async () => undefined, settle } },
+		});
+		store.tasks.set(
+			"a1",
+			makeManifest({
+				agentId: "a1",
+				sequence: 1,
+				state: "succeeded",
+				tmuxWindow: "subagent-a1",
+			}),
+		);
+		store.results.set("a1", {
+			agentId: "a1",
+			state: "succeeded",
+			output: "done",
+			usage: { totalTokens: 1, toolUses: 1, durationMs: 1 },
+			finishedAt: 42,
+			terminalReason: null,
+		} as TerminalResult);
+
+		await scheduler.reconcile();
+
+		expect(settle).not.toHaveBeenCalled();
 		await scheduler.stop();
 	});
 });

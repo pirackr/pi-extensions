@@ -38,6 +38,17 @@ export interface RunState {
 	tokensUsed: number;
 	/** In-flight reservation count (used by ResearchPolicy releaseAttempt F1). */
 	concurrentReservations: number;
+	/**
+	 * Durable reservation ledger keyed by reservation id → the role that
+	 * acquired it and when. Owned by {@link ResearchPolicy} so a fresh adapter
+	 * instance can release a reservation after a restart: the reservation id is
+	 * persisted here (never in-memory-only) and the same durable token is
+	 * reused by the subagent manifest so recovery settlement resolves exactly
+	 * once.
+	 */
+	reservations: Record<string, { role: string; acquiredAt: number }>;
+	/** Durable consumed-attempt totals by frozen role; settlement never decrements these. */
+	reservationTotals: Record<string, number>;
 	/** Current research round counter (separate from loop iterations). */
 	researchRound: number;
 	/** Checkpoint verdict for the last evaluated round. */
@@ -120,6 +131,8 @@ export function newRunState(ws: Workspace): RunState {
 		nestedUsage: 0,
 		tokensUsed: 0,
 		concurrentReservations: 0,
+		reservations: {},
+		reservationTotals: {},
 		researchRound: 0,
 		checkpointVerdict: "CONTINUE" as Verdict,
 		checkpointDigest: "",

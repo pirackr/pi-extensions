@@ -539,6 +539,46 @@ describe("createSubagentManager", () => {
 		expect(await h.store.readDelivery("d003")).toBeNull();
 	});
 
+	it("passes owner policy adapters to the production scheduler for recovery settlement", async () => {
+		const adapter: ProfilePolicyAdapter = {
+			reserve: async (owner, profile) => ({ owner, profile, token: "scheduler-policy", acquiredAt: 1 }),
+			settle: async () => undefined,
+		};
+		const resolved: ManagerResolvedCall = {
+			config: CONFIG,
+			profiles: [PROFILE],
+			contributions: [{ owner: "research", profile: PROFILE }],
+			policyAdapters: { research: adapter },
+		};
+		let observed: Readonly<Record<string, ProfilePolicyAdapter>> | undefined;
+		const h = await createHarness({
+			resolved,
+			onPump: async (deps) => { observed = deps.policyAdapters; },
+		});
+		await h.start();
+		await h.manager.enqueue(REQUEST, CALL_CONTEXT, new AbortController().signal);
+		expect(observed).toEqual({ research: adapter });
+	});
+
+	it("rejects policy-denied admission without publishing an unreserved task", async () => {
+		const adapter: ProfilePolicyAdapter = {
+			reserve: async () => undefined,
+			settle: async () => undefined,
+		};
+		const resolved: ManagerResolvedCall = {
+			config: CONFIG,
+			profiles: [PROFILE],
+			contributions: [{ owner: "research", profile: PROFILE }],
+			policyAdapters: { research: adapter },
+		};
+		const h = await createHarness({ resolved });
+		await h.start();
+		await expect(
+			h.manager.enqueue(REQUEST, CALL_CONTEXT, new AbortController().signal),
+		).rejects.toThrow(/policy.*rejected/i);
+		expect(await h.store.scanAll()).toEqual([]);
+	});
+
 	it("reserves an owner policy immediately before durable publication", async () => {
 		let store!: ArtifactStore;
 		const events: string[] = [];
@@ -564,6 +604,31 @@ describe("createSubagentManager", () => {
 
 		expect(events).toEqual(["reserve:research:general"]);
 		expect(await store.scanAll()).toHaveLength(1);
+	});
+
+	it("persists the owner reservation on the manifest and runner request for later settlement", async () => {
+		let store!: ArtifactStore;
+		const settle = vi.fn(async () => undefined);
+		const adapter: ProfilePolicyAdapter = {
+			reserve: async (owner, profile) => ({ owner, profile, token: "reservation-1", acquiredAt: 1_000 }),
+			settle,
+		};
+		const resolved: ManagerResolvedCall = {
+			config: CONFIG,
+			profiles: [PROFILE],
+			contributions: [{ owner: "research", profile: PROFILE }],
+			policyAdapters: { research: adapter },
+		};
+		const h = await createHarness({ resolved });
+		store = h.store;
+		await h.start();
+
+		await h.manager.enqueue(REQUEST, CALL_CONTEXT, new AbortController().signal);
+
+		const task = await h.store.readTask("a001");
+		expect(task?.reservation).toEqual({ owner: "research", profile: "general", token: "reservation-1", acquiredAt: 1_000 });
+		const req = await readRequest(h.store, "a001");
+		expect((req as { reservation?: unknown }).reservation).toEqual({ owner: "research", profile: "general", token: "reservation-1", acquiredAt: 1_000 });
 	});
 
 	it("allows nested foreground publication with inherited ownership and rejects nested background before reserve", async () => {

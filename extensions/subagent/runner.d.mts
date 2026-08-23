@@ -10,6 +10,8 @@
 // dependency and imports nothing. Task 9 may `import type { RunnerRequest }`
 // from here later. Plain `node runner.mjs` never reads this file.
 
+import type { ProfileReservation } from "./types.ts";
+
 /**
  * Snapshotted, immutable profile fields the runner needs to launch Pi without
  * the parent process in memory. Mirrors
@@ -75,6 +77,12 @@ export interface RunnerRequest {
 	readonly webSearchMaxLookups: number;
 	/** Hard cap on fetch_web calls (0 disables the flag). */
 	readonly webSearchMaxFetches: number;
+	/**
+	 * Owner-neutral reservation captured at enqueue, mirrored from the durable
+	 * manifest so the launch record is self-contained. The runner ignores it;
+	 * it exists so the reservation survives alongside the request it launches.
+	 */
+	readonly reservation: ProfileReservation | null;
 }
 
 /**

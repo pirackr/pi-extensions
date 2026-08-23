@@ -179,6 +179,7 @@ function baseStatus(request, now, processStart) {
 		tmuxWindow: null,
 		timeoutSeconds: request.profile.timeoutSeconds ?? null,
 		terminalReason: null,
+		reservation: request.reservation ?? null,
 	};
 }
 

@@ -137,6 +137,7 @@ const BASE_REQUEST: RunnerRequest = {
 	loadContextFiles: false,
 	webSearchMaxLookups: 5,
 	webSearchMaxFetches: 3,
+	reservation: null,
 };
 
 function makeRequest(overrides: Partial<RunnerRequest> = {}): RunnerRequest {
@@ -646,7 +647,13 @@ describe("5. failed outcomes publish durable failed (result before status)", () 
 describe("6. text/tool events append and coalesce", () => {
 	it("captures raw events, transcript, activity, tool uses, turns, usage, context, compaction", async () => {
 		const { fn, made: made0 } = createFakeSpawn();
-		const { dir, requestPath } = writeTempRequest(makeRequest());
+		const reservation = {
+			owner: "research",
+			profile: "general",
+			token: "reservation-a001",
+			acquiredAt: 1,
+		};
+		const { dir, requestPath } = writeTempRequest(makeRequest({ reservation }));
 		made = made0;
 		const kill = vi.fn();
 		const stdout = vi.fn(() => true);
@@ -745,6 +752,7 @@ describe("6. text/tool events append and coalesce", () => {
 		expect(status.turns).toBe(1);
 		expect((status.usage as { totalTokens: number }).totalTokens).toBe(165);
 		expect(status.compactionCount).toBe(1);
+		expect(status.reservation).toEqual(reservation);
 		expect(String(status.activity)).toContain("responding");
 		const statusWritesAfterBurst = writes.filter((file) => file.endsWith("status.json")).length;
 		expect(statusWritesAfterBurst - statusWritesBeforeBurst).toBe(1);

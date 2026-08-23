@@ -78,7 +78,7 @@ export interface ProfileReservation {
 	readonly owner: string;
 	/** Reserved profile name. */
 	readonly profile: string;
-	/** Idempotency token; repeated reservations for the same owner+profile match. */
+	/** Idempotency token; repeated admission for the same owner/profile/agent matches. */
 	readonly token: string;
 	/** Epoch milliseconds the reservation was first acquired. */
 	readonly acquiredAt: number;
@@ -102,6 +102,19 @@ export interface ProfileSettlement {
 	readonly state: TerminalResult["state"];
 	/** Human-readable terminal reason, or `null`. */
 	readonly terminalReason: string | null;
+	/**
+	 * The durable, JSON-serializable reservation this settlement releases.
+	 * The owner releases it exactly once by this token; the generic surface
+	 * never interprets it beyond passing it to the owner.
+	 */
+	readonly reservation: ProfileReservation;
+	/**
+	 * Confined artifact path for the settled task, when one exists. Passed
+	 * owner-neutral so the owner can retain/export idempotently.
+	 */
+	readonly artifactPath: string | null;
+	/** Durable terminal result, published before settlement is attempted. */
+	readonly result: TerminalResult;
 }
 
 /**
@@ -119,10 +132,14 @@ export interface ProfilePolicyAdapter {
 	 *
 	 * Resolves to durable, JSON-serializable reservation metadata the
 	 * persistence layer can write to disk. Idempotent for the same
-	 * `(owner, profile)`: re-serving an existing reservation must not count
-	 * concurrency twice.
+	 * `(owner, profile, agentId)`: re-serving an existing reservation must not
+	 * count concurrency twice, while a different agent gets a distinct slot.
 	 */
-	reserve(owner: string, profile: string): Promise<ProfileReservation>;
+	reserve(
+		owner: string,
+		profile: string,
+		agentId: string,
+	): Promise<ProfileReservation | undefined>;
 
 	/**
 	 * Release the reservation and — when the owner's policy requires it —
@@ -383,6 +400,13 @@ export interface AgentManifest {
 	readonly tmuxWindow: string | null;
 	readonly timeoutSeconds: number | null;
 	readonly terminalReason: string | null;
+	/**
+	 * Owner-neutral reservation captured at enqueue from the owning adapter's
+	 * `reserve` return. Persisted verbatim so the scheduler can settle it on
+	 * terminal detection or recovery, including after a restart. `null` (or
+	 * absent) when no owner reserved (generic profiles).
+	 */
+	readonly reservation?: ProfileReservation | null;
 }
 
 /**

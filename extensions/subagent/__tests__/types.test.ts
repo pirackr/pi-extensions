@@ -325,14 +325,14 @@ class TestProfilePolicyAdapter implements ProfilePolicyAdapter {
 	private held = new Map<string, ProfileReservation>();
 	private settled = new Map<string, ProfileSettlement>();
 
-	async reserve(owner: string, profile: string): Promise<ProfileReservation> {
-		const key = `${owner}::${profile}`;
+	async reserve(owner: string, profile: string, agentId: string): Promise<ProfileReservation> {
+		const key = `${owner}::${profile}::${agentId}`;
 		const existing = this.held.get(key);
 		if (existing) return existing; // idempotent: no double count
 		const reservation: ProfileReservation = {
 			owner,
 			profile,
-			token: `tok-${owner}-${profile}`,
+			token: `tok-${owner}-${profile}-${agentId}`,
 			acquiredAt: Date.now(),
 		};
 		this.held.set(key, reservation);
@@ -349,7 +349,7 @@ class TestProfilePolicyAdapter implements ProfilePolicyAdapter {
 describe("ProfilePolicyAdapter", () => {
 	it("reserve returns durable, JSON-serializable reservation metadata", async () => {
 		const adapter = new TestProfilePolicyAdapter();
-		const reservation = await adapter.reserve("research", "briefing");
+		const reservation = await adapter.reserve("research", "briefing", "q9xm");
 		expect(reservation.owner).toBe("research");
 		expect(reservation.profile).toBe("briefing");
 		expect(typeof reservation.token).toBe("string");
@@ -357,22 +357,32 @@ describe("ProfilePolicyAdapter", () => {
 		expect(JSON.parse(JSON.stringify(reservation))).toEqual(reservation);
 	});
 
-	it("reserve is idempotent for the same owner+profile (no double count)", async () => {
+	it("reserve is idempotent for the same owner, profile, and agent", async () => {
 		const adapter = new TestProfilePolicyAdapter();
-		const a = await adapter.reserve("research", "briefing");
-		const b = await adapter.reserve("research", "briefing");
+		const a = await adapter.reserve("research", "briefing", "q9xm");
+		const b = await adapter.reserve("research", "briefing", "q9xm");
 		expect(b).toEqual(a);
 	});
 
 	it("settle receives generic terminal context and is idempotent", async () => {
 		const adapter = new TestProfilePolicyAdapter();
-		await adapter.reserve("research", "briefing");
+		await adapter.reserve("research", "briefing", "q9xm");
 		const settlement: ProfileSettlement = {
 			owner: "research",
 			profile: "briefing",
 			agentId: "q9xm",
 			state: "succeeded",
 			terminalReason: null,
+			reservation: SAMPLE_RESERVATION,
+			artifactPath: "/tmp/proj/pi-q9xm/subagents/q9xm",
+			result: {
+				agentId: "q9xm",
+				state: "succeeded",
+				output: "done",
+				usage: { totalTokens: 1, toolUses: 0, durationMs: 1 },
+				finishedAt: 1,
+				terminalReason: null,
+			},
 		};
 		await expect(adapter.settle(settlement)).resolves.toBeUndefined();
 		// a second settle on the same reservation is a no-op
@@ -389,6 +399,16 @@ describe("ProfilePolicyAdapter", () => {
 			agentId: "q9xm",
 			state: "failed",
 			terminalReason: "timed_out",
+			reservation: SAMPLE_RESERVATION,
+			artifactPath: "/tmp/proj/pi-q9xm/subagents/q9xm",
+			result: {
+				agentId: "q9xm",
+				state: "failed",
+				output: "",
+				usage: { totalTokens: 0, toolUses: 0, durationMs: 1 },
+				finishedAt: 1,
+				terminalReason: "timed_out",
+			},
 		};
 		expect(JSON.parse(JSON.stringify(settlement))).toEqual(settlement);
 	});

@@ -41,7 +41,13 @@ import {
 } from "./locks.ts";
 import { type ArtifactStore } from "./storage.ts";
 import { AGENT_WINDOW_PREFIX, type TmuxClient } from "./tmux.ts";
-import { type AgentManifest, type StatusUpdate, type TaskStatus } from "./types.ts";
+import {
+	type AgentManifest,
+	type ProfilePolicyAdapter,
+	type StatusUpdate,
+	type TaskStatus,
+} from "./types.ts";
+import { join } from "node:path";
 
 /** Terminal states that no longer occupy a concurrency slot. */
 const NON_TERMINAL: readonly TaskStatus[] = ["queued", "starting", "running"];
@@ -260,6 +266,12 @@ export interface SchedulerDeps {
 	readonly launchCommandFor?: (task: AgentManifest) => string;
 	/** Test hook fired after a successful claim, with the claimed task. */
 	readonly onClaimed?: (task: AgentManifest) => void;
+	/**
+	 * Owner-neutral policy adapters contributed by owners (for example research).
+	 * When present, the reconcile loop releases each terminal task's durable
+	 * reservation exactly once by the owner's {@link ProfilePolicyAdapter.settle}.
+	 */
+	readonly policyAdapters?: Readonly<Record<string, ProfilePolicyAdapter>>;
 }
 
 /**
@@ -295,6 +307,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 	// most one follow-up run, so a burst of dispatches never stacks reconciles.
 	let reconcileInFlight: Promise<void> | null = null;
 	let reconcilePending = false;
+	/** Successful settlements already handed to their owner in this manager generation. */
+	const settledReservations = new Set<string>();
 
 	/** Abortable timer, always created outside tool/file waits. */
 	function tick(ms: number): Promise<void> {
@@ -485,6 +499,42 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 			await deps.tmux.closeVerifiedWindow(win.name, {
 				durableResult: true,
 			});
+		}
+
+		// 3. Release owner reservations for terminal tasks. Settlement happens
+		// only after a durable terminal result is published, is idempotent by
+		// the persisted reservation token, and works for a fresh adapter
+		// instance (recovered settlement). Owners without adapters are skipped;
+		// a reservation is settled at most once even though this runs every
+		// reconcile.
+		if (deps.policyAdapters && Object.keys(deps.policyAdapters).length > 0) {
+			const all = await deps.store.scanAll();
+			for (const task of all) {
+				if (task.state !== "succeeded" && task.state !== "failed" &&
+					task.state !== "timed_out" && task.state !== "cancelled" &&
+					task.state !== "interrupted") {
+					continue;
+				}
+				const reservation = task.reservation;
+				if (!reservation) continue;
+				const owner = deps.policyAdapters[reservation.owner];
+				if (!owner) continue;
+				const settlementKey = `${reservation.owner}\0${reservation.token}`;
+				if (settledReservations.has(settlementKey)) continue;
+				const terminal = await deps.store.readResult(task.agentId);
+				if (!terminal) continue; // result not published yet
+				await owner.settle({
+					owner: reservation.owner,
+					profile: reservation.profile,
+					agentId: task.agentId,
+					state: terminal.state,
+					terminalReason: terminal.terminalReason,
+					reservation,
+					artifactPath: join(deps.store.artifactRoot, "subagents", task.agentId),
+					result: terminal,
+				});
+				settledReservations.add(settlementKey);
+			}
 		}
 	};
 

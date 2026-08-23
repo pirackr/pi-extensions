@@ -10,10 +10,13 @@
  *  - `reserveAttempt` uses the transactional state API with fresh-read retry
  *    on StateConflict. Serializes across parallel tool calls and enforces
  *    per-role total, per-role concurrent, and provider-wide concurrent limits
- *    before the façade launches anything.
- *  - `releaseAttempt` is idempotent by reservation ID, releases concurrency
- *    through the state API, and retains consumed counts for failure,
- *    cancellation, interruption.
+ *    before the façade launches anything. Each granted reservation is written
+ *    to the durable `reservations` ledger (never in-memory-only) so its id is
+ *    stable across restarts.
+ *  - `releaseAttempt` is idempotent by reservation id, releases concurrency
+ *    through the state API and the durable ledger (so a freshly constructed
+ *    adapter settles after a restart), and retains consumed counts for
+ *    failure, cancellation, interruption.
  *  - `exportArtifact` validates the frozen role schema, writes atomically,
  *    rejects symlink-parent escapes and immutable targets, returns digest
  *    metadata.
@@ -33,7 +36,7 @@ import type {
 	RequestedPlan,
 	AttemptResult,
 	ArtifactMetadata,
-} from "../subagent-dispatch/contract.ts";
+} from "./dispatch-contracts.ts";
 import {
 	readRunState,
 	updateRunState,
@@ -325,11 +328,6 @@ export class ResearchPolicy {
 			});
 		}
 
-		// F4: Provider-wide concurrent ceiling = sum of all role concurrentDispatch
-		// (not Math.max — Math.max silently undercounts capacity when multiple roles exist)
-		const providerCeiling = Object.values(this.frozenConfig.roles)
-			.reduce((sum, r) => sum + r.concurrentDispatch, 0);
-
 		// F5: maxConcurrentAttempts = max per-role concurrentDispatch (a concurrency count, not seconds)
 		const maxConcurrent = Math.max(
 			...Object.values(this.frozenConfig.roles).map((r) => r.concurrentDispatch),
@@ -382,50 +380,62 @@ export class ResearchPolicy {
 		role: ResolvedRole,
 		attempt: ResolvedAttempt,
 	): Promise<AttemptReservation | undefined> {
-		// Read state and check conditions
-		let state: RunState;
-		try {
-			state = readRunState(this.workspace);
-		} catch {
-			return undefined;
-		}
-
-		// Get or create bucket
+		// Get or create the process-local bucket used only to locate live
+		// reservations. Admission limits come from durable state so a fresh policy
+		// instance cannot reset consumed totals or per-role concurrency.
 		let bucket = this.buckets.get(roleKey);
 		if (!bucket) {
 			bucket = { total: 0, concurrent: 0, reservations: new Map() };
 			this.buckets.set(roleKey, bucket);
 		}
 
-		// F4: Provider-wide concurrent ceiling = sum of all role concurrentDispatch
+		// F4: Provider-wide concurrent ceiling = sum of all role concurrentDispatch.
 		const providerCeiling = Object.values(this.frozenConfig.roles)
 			.reduce((sum, r) => sum + r.concurrentDispatch, 0);
+		const reservationId = `res-${createHash("sha256")
+			.update(JSON.stringify([roleKey, attempt.planId, attempt.attemptId]))
+			.digest("hex")}`;
 
-		// Check in-memory bucket total cap
-		if (bucket.total >= role.totalDispatch) return undefined;
-		// Check in-memory bucket concurrent cap
-		if (bucket.concurrent >= role.concurrentDispatch) return undefined;
-
-		// F1: Check state-based concurrent count for accuracy
-		const stateConcurrent = state.concurrentReservations ?? 0;
-		if (stateConcurrent >= providerCeiling) return undefined;
-
-		// All checks passed — atomically commit via updateRunState.
-		// We do NOT throw inside the mutate callback to avoid breaking the
-		// serialization chain. Instead we check, then write a small state
-		// increment and update the in-memory bucket afterwards.
-		const MAX_RETRIES = 5;
-		let revision = state.revision;
-
-		for (let attemptNo = 0; attemptNo < MAX_RETRIES; attemptNo++) {
+		// Re-read and re-check every retry. A cross-process winner changes the
+		// revision, causing updateRunState to conflict; the next iteration then
+		// evaluates all limits against that winner's durable state.
+		for (let attemptNo = 0; attemptNo < 5; attemptNo++) {
+			let state: RunState;
 			try {
-				await updateRunState(this.workspace, revision, (current) => ({
+				state = readRunState(this.workspace);
+			} catch {
+				return undefined;
+			}
+			const reservations = state.reservations ?? {};
+			if (reservations[reservationId]) {
+				return {
+					reservationId,
+					attempt,
+					providerId: role.model ?? "default",
+				};
+			}
+			const roleConcurrent = Object.values(reservations)
+				.filter((entry) => entry.role === roleKey).length;
+			const roleTotal = (state.reservationTotals ?? {})[roleKey] ?? 0;
+			if (roleTotal >= role.totalDispatch) return undefined;
+			if (roleConcurrent >= role.concurrentDispatch) return undefined;
+			if ((state.concurrentReservations ?? 0) >= providerCeiling) return undefined;
+
+			const acquiredAt = Date.now();
+			try {
+				await updateRunState(this.workspace, state.revision, (current) => ({
 					...current,
 					concurrentReservations: (current.concurrentReservations ?? 0) + 1,
+					reservations: {
+						...(current.reservations ?? {}),
+						[reservationId]: { role: roleKey, acquiredAt },
+					},
+					reservationTotals: {
+						...(current.reservationTotals ?? {}),
+						[roleKey]: ((current.reservationTotals ?? {})[roleKey] ?? 0) + 1,
+					},
 				}));
 
-				// Create reservation in in-memory bucket
-				const reservationId = `res-${attempt.attemptId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 				const reservation: AttemptReservation = {
 					reservationId,
 					attempt,
@@ -434,14 +444,10 @@ export class ResearchPolicy {
 				bucket.total++;
 				bucket.concurrent++;
 				bucket.reservations.set(reservationId, reservation);
-
 				return reservation;
 			} catch (err) {
-				if (isStateConflict(err)) {
-					revision = (err as StateConflict).actual;
-					continue;
-				}
-				return undefined; // Unexpected error
+				if (isStateConflict(err)) continue;
+				return undefined;
 			}
 		}
 		return undefined;
@@ -453,41 +459,73 @@ export class ResearchPolicy {
 
 	async releaseAttempt(
 		reservation: AttemptReservation,
-		outcome: AttemptOutcome,
+		_outcome: AttemptOutcome,
 	): Promise<void> {
 		const bucket = this._findBucket(reservation);
 		if (!bucket) {
-			return; // already released or never registered
+			// No in-memory record (for example a fresh adapter instance after a
+			// restart). Release through the durable ledger so recovery settles
+			// exactly once; a missing id is a no-op.
+			await this._releaseLedger(reservation.reservationId);
+			return;
 		}
 
 		if (!bucket.reservations.has(reservation.reservationId)) {
-			return; // idempotent: already released
+			// Idempotent: already released in this instance. Still ensure the
+			// durable ledger has cleared the slot (the source of truth for
+			// recovery), then return.
+			await this._releaseLedger(reservation.reservationId);
+			return;
 		}
 
 		// IMPORTANT: Do NOT decrement total — it's consumed and stays consumed
-		// for failure, cancellation, interruption outcomes
+		// for failure, cancellation, interruption outcomes. Durable concurrency
+		// is decremented only by _releaseLedger; doing it here as well would free
+		// two slots whenever another reservation remained active.
 		bucket.reservations.delete(reservation.reservationId);
-
-		// Release concurrency slot (in-memory — immediate response)
 		bucket.concurrent = Math.max(0, bucket.concurrent - 1);
+		await this._releaseLedger(reservation.reservationId);
+	}
 
-		// F1: Release concurrency through the SAME transactional state API
-		// used by reserveAttempt (updateRunState). Idempotent by reservationId
-		// and retains consumed counts for failure/cancellation/interruption.
-		try {
-			const state = readRunState(this.workspace);
-			await updateRunState(this.workspace, state.revision, (current) => ({
-					...current,
-					concurrentReservations: Math.max(0, (current.concurrentReservations ?? 0) - 1),
-				}));
-		} catch {
-			// Best-effort — in-memory bucket already released; state update
-			// provides durable backup for crash recovery.
+	/**
+	 * Remove one reservation id from the durable ledger. Serialized through the
+	 * transactional state API so concurrent releases cannot double-decrement
+	 * the concurrency count. A missing id is a no-op: the reservation was
+	 * already released.
+	 */
+	/** Whether a durable reservation is still active and therefore settleable. */
+	hasReservation(reservationId: string): boolean {
+		return Boolean((readRunState(this.workspace).reservations ?? {})[reservationId]);
+	}
+
+	private async _releaseLedger(reservationId: string): Promise<void> {
+		const state = readRunState(this.workspace);
+		let revision = state.revision;
+		for (let attemptNo = 0; attemptNo < 5; attemptNo++) {
+			try {
+				await updateRunState(this.workspace, revision, (current) => {
+					const reservations = { ...(current.reservations ?? {}) };
+					if (!reservations[reservationId]) return current; // already released
+					delete reservations[reservationId];
+					return {
+						...current,
+						reservations,
+						concurrentReservations: Math.max(0, (current.concurrentReservations ?? 0) - 1),
+					};
+				});
+				return;
+			} catch (err) {
+				if (isStateConflict(err)) {
+					revision = (err as StateConflict).actual;
+					continue;
+				}
+				return;
+			}
 		}
 	}
 
 	private _findBucket(reservation: AttemptReservation): ReservationBucket | null {
-		for (const [roleKey, bucket] of this.buckets) {
+		for (const bucket of this.buckets.values()) {
 			if (bucket.reservations.has(reservation.reservationId)) {
 				return bucket;
 			}
@@ -520,8 +558,13 @@ export class ResearchPolicy {
 			}
 		}
 
-		// Generate artifact name and confine path
-		const artifactName = `artifact-${reservation.attempt.attemptId}-${Date.now()}.json`;
+		// The durable reservation token makes export path and content idempotent.
+		// Concurrent/recovered settlement can retry safely without creating a
+		// second artifact for the same admitted attempt.
+		const artifactName = `artifact-${reservation.reservationId}.json`;
+		const acquiredAt = (readRunState(this.workspace).reservations ?? {})[
+			reservation.reservationId
+		]?.acquiredAt ?? Date.now();
 		let artifactPath: string;
 		try {
 			artifactPath = confinePath(this.workspace.path, artifactName);
@@ -549,13 +592,13 @@ export class ResearchPolicy {
 			workspace: this.workspace.path,
 			retention: role?.retention ?? "ephemeral",
 			timeoutSeconds: role?.timeoutSeconds ?? DEFAULT_HARD_TIMEOUT_SECONDS,
-			createdAt: Date.now(),
+			createdAt: acquiredAt,
 			output: result.output,
 			usage: result.usage,
 		};
 
 		// Write atomically: temp → fsync → rename
-		const tmpPath = artifactPath + ".tmp";
+		const tmpPath = `${artifactPath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
 		const content = JSON.stringify(artifactContent, null, 2);
 		fs.writeFileSync(tmpPath, content, "utf-8");
 

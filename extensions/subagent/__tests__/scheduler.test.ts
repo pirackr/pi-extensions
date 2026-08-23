@@ -32,6 +32,7 @@ import {
 	type TerminalResult,
 	type StatusUpdate,
 	type DeliveryRecord,
+	type GroupRecord,
 } from "../types.ts";
 
 // ---------------------------------------------------------------------------
@@ -507,6 +508,25 @@ class FakeStore implements ArtifactStore {
 			consumedAt: null,
 			...update,
 		};
+	}
+
+	async readGroup(_groupId: string): Promise<GroupRecord | null> {
+		return null;
+	}
+
+	async writeGroup(record: GroupRecord): Promise<GroupRecord> {
+		return record;
+	}
+
+	async updateGroup(
+		_groupId: string,
+		update: Partial<GroupRecord>,
+	): Promise<GroupRecord> {
+		return { ...update } as GroupRecord;
+	}
+
+	async scanGroups(): Promise<GroupRecord[]> {
+		return [];
 	}
 }
 

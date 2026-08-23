@@ -18,6 +18,7 @@ import {
 import {
 	type AgentManifest,
 	type DeliveryRecord,
+	type GroupRecord,
 	type TerminalResult,
 	type ResolvedProfile,
 	TaskStatus,
@@ -694,5 +695,111 @@ describe("ArtifactStore scan rejects non-directory entries", () => {
 			mode: 0o600,
 		});
 		await expect(store.scan()).rejects.toThrow(/non-directory/i);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// ArtifactStore — durable group records (Task 10 binding design)
+//
+// The grouped-notification coordinator owns durable group records under
+// `groups/<group-id>.json` and persists them atomically under the registry
+// lease. The current ArtifactStore exposes the `groups/` directory but no
+// typed read/write accessors for group records. The tests below bind that
+// missing storage API: they MUST fail (readGroup/writeGroup are absent) until
+// Task 10 makes the minimum coherent storage addition. No production code
+// changes here.
+// ---------------------------------------------------------------------------
+
+function makeGroupRecord(groupId: string): GroupRecord {
+	return {
+		groupId,
+		origin: "orig-A",
+		managerGeneration: "gen-1",
+		turnIndex: 0,
+		nonce: "n1",
+		createdAt: 1_700_000_000_000,
+		endedAt: null,
+	};
+}
+
+describe("ArtifactStore durable group records", () => {
+	let identity: ParentIdentity;
+
+	beforeEach(async () => {
+		identity = {
+			id: "a7k2",
+			tmuxSession: "pi-a7k2",
+			tmpRoot: root,
+			projectSlug: "coolproject",
+			artifactRoot: join(root, "coolproject", "pi-a7k2"),
+		};
+		store = createArtifactStore(identity);
+		await store.initializeParent();
+	});
+
+	it("persists a group record atomically under groups/<id>.json (0600)", async () => {
+		const groupId = "abcd1234";
+		const written = await store.writeGroup(makeGroupRecord(groupId));
+		expect(written.groupId).toBe(groupId);
+		expect(written.endedAt).toBeNull();
+
+		const onDisk = JSON.parse(
+			await readFile(
+				join(store.artifactRoot, "groups", `${groupId}.json`),
+				"utf8",
+			),
+		);
+		expect(onDisk.groupId).toBe(groupId);
+		expect(onDisk.origin).toBe("orig-A");
+		expect(onDisk.managerGeneration).toBe("gen-1");
+		const s = await stat(
+			join(store.artifactRoot, "groups", `${groupId}.json`),
+		);
+		expect(s.isFile()).toBe(true);
+		expect(s.mode & 0o777).toBe(0o600);
+	});
+
+	it("reads a group record back and returns null when absent", async () => {
+		const groupId = "abcd1234";
+		await store.writeGroup(makeGroupRecord(groupId));
+		const read = await store.readGroup(groupId);
+		expect(read?.groupId).toBe(groupId);
+		expect(read?.endedAt).toBeNull();
+		expect(await store.readGroup("missing0")).toBeNull();
+	});
+
+	it("merges a partial group update and preserves other fields", async () => {
+		const groupId = "abcd1234";
+		await store.writeGroup(makeGroupRecord(groupId));
+		const updated = await store.updateGroup(groupId, {
+			endedAt: 1_700_000_001_000,
+		});
+		expect(updated.endedAt).toBe(1_700_000_001_000);
+		expect(updated.origin).toBe("orig-A");
+		expect(updated.nonce).toBe("n1");
+
+		const onDisk = JSON.parse(
+			await readFile(
+				join(store.artifactRoot, "groups", `${groupId}.json`),
+				"utf8",
+			),
+		);
+		expect(onDisk.endedAt).toBe(1_700_000_001_000);
+		expect(onDisk.managerGeneration).toBe("gen-1");
+	});
+
+	it("scans durable groups in deterministic creation order", async () => {
+		await store.writeGroup({ ...makeGroupRecord("group-b"), createdAt: 2 });
+		await store.writeGroup({ ...makeGroupRecord("group-a"), createdAt: 1 });
+		expect((await store.scanGroups()).map((group) => group.groupId)).toEqual([
+			"group-a",
+			"group-b",
+		]);
+	});
+
+	it("rejects a traversal group id before touching disk", async () => {
+		await expect(
+			store.writeGroup(makeGroupRecord("../evil")),
+		).rejects.toThrow(/group id/i);
 	});
 });

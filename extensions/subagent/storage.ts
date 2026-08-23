@@ -49,6 +49,7 @@ import {
 import {
 	AgentManifest,
 	DeliveryRecord,
+	GroupRecord,
 	StatusUpdate,
 	TerminalResult,
 	isShortId,
@@ -166,6 +167,30 @@ export interface ArtifactStore {
 
 	/** Read a task's durable delivery record, or `null` when absent. */
 	readDelivery(agentId: string): Promise<DeliveryRecord | null>;
+
+	/**
+	 * Read a durable group record, or `null` when it does not exist.
+	 */
+	readGroup(groupId: string): Promise<GroupRecord | null>;
+
+	/**
+	 * Atomically persist a durable group record under `groups/<id>.json`.
+	 * The group id must be path-safe; traversal or separators are rejected
+	 * before the filesystem is touched.
+	 */
+	writeGroup(record: GroupRecord): Promise<GroupRecord>;
+
+	/**
+	 * Merge a partial group update into an existing durable group record.
+	 * Creates a fresh record when none exists.
+	 */
+	updateGroup(groupId: string, update: Partial<GroupRecord>): Promise<GroupRecord>;
+
+	/**
+	 * List every durable group record ordered by ascending creation time.
+	 * Symlinked or non-file entries are rejected, never followed.
+	 */
+	scanGroups(): Promise<GroupRecord[]>;
 
 	/**
 	 * Merge a partial delivery update into the task's delivery record and
@@ -599,7 +624,85 @@ export function createArtifactStore(
 			);
 			return merged;
 		},
+
+		async readGroup(groupId: string): Promise<GroupRecord | null> {
+			assertGroupId(groupId);
+			return readJsonSecure<GroupRecord>(
+				join(groupsRoot, `${groupId}.json`),
+			);
+		},
+
+		async writeGroup(record: GroupRecord): Promise<GroupRecord> {
+			assertGroupId(record.groupId);
+			await atomicWriteJson(
+				join(groupsRoot, `${record.groupId}.json`),
+				record,
+			);
+			return record;
+		},
+
+		async updateGroup(
+			groupId: string,
+			update: Partial<GroupRecord>,
+		): Promise<GroupRecord> {
+			assertGroupId(groupId);
+			const existing = await readJsonSecure<GroupRecord>(
+				join(groupsRoot, `${groupId}.json`),
+			);
+			if (existing === null) {
+				throw new Error(`no group to update: ${groupId}`);
+			}
+			const merged: GroupRecord = { ...existing, ...update };
+			await atomicWriteJson(join(groupsRoot, `${groupId}.json`), merged);
+			return merged;
+		},
+
+		async scanGroups(): Promise<GroupRecord[]> {
+			let entries: string[];
+			try {
+				entries = await readdir(groupsRoot);
+			} catch {
+				return [];
+			}
+			const groups: GroupRecord[] = [];
+			for (const entry of entries) {
+				if (!entry.endsWith(".json")) continue;
+				const info = await lstat(join(groupsRoot, entry));
+				if (info.isSymbolicLink()) {
+					throw new Error(
+						`refusing to follow symlink in scanGroups: ${join(groupsRoot, entry)}`,
+					);
+				}
+				if (!info.isFile()) {
+					throw new Error(
+						`unexpected non-file in scanGroups: ${join(groupsRoot, entry)}`,
+					);
+				}
+				const group = await readJsonSecure<GroupRecord>(
+					join(groupsRoot, entry),
+				);
+				if (group === null) continue;
+				groups.push(group);
+			}
+			return groups.sort((a, b) => a.createdAt - b.createdAt);
+		},
 	});
+}
+
+/**
+ * Assert that `groupId` is a path-safe group identifier: lowercase `a-z`,
+ * digits, underscore, and hyphen only. Rejects traversal (`..`, `/`) and any
+ * separator before the filesystem is touched.
+ *
+ * @throws when `groupId` is not a non-empty path-safe string.
+ */
+function assertGroupId(groupId: unknown): void {
+	if (typeof groupId !== "string" || groupId.length === 0) {
+		throw new Error(`invalid group id: ${String(groupId)}`);
+	}
+	if (!/^[a-z0-9_-]+$/.test(groupId)) {
+		throw new Error(`invalid group id: ${String(groupId)}`);
+	}
 }
 
 /**

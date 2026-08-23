@@ -136,6 +136,19 @@ export interface ProfilePolicyAdapter {
 }
 
 /**
+ * A single task assembled for notification rendering: the terminal result and
+ * its manifest's profile summary. Produced by the notification coordinator from
+ * durable `result.json` / `status.json` and rendered to XML.
+ */
+export interface NotificationItem {
+	readonly agentId: string;
+	readonly state: TerminalResult["state"];
+	readonly summary: string;
+	readonly output: string;
+	readonly usage: Usage;
+}
+
+/**
  * The normalized input contract for the `Agent` tool.
  *
  * `description` is a short UI label (never the whole prompt), `prompt` is the
@@ -299,6 +312,28 @@ export interface DeliveryRecord {
 	readonly createdAt: number;
 	readonly dispatchedAt: number | null;
 	readonly consumedAt: number | null;
+}
+
+/**
+ * Durable record for a single notification group, atomically written to
+ * `groups/<group-id>.json` under the registry lease. The grouped-notification
+ * coordinator owns these records; {@link ArtifactStore} persists them.
+ */
+export interface GroupRecord {
+	/** Path-safe, derived identifier for the group. */
+	readonly groupId: string;
+	/** Origin conversation this group belongs to; used for `/new` suppression. */
+	readonly origin: string;
+	/** Manager generation that allocated the group. */
+	readonly managerGeneration: string;
+	/** Background turn index the group was allocated for. */
+	readonly turnIndex: number;
+	/** Nonce that disambiguates same-turn groups. */
+	readonly nonce: string;
+	/** Epoch milliseconds the group was allocated. */
+	readonly createdAt: number;
+	/** Epoch milliseconds the group ended, or `null` while active. */
+	readonly endedAt: number | null;
 }
 
 /**

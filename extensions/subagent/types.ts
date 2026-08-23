@@ -258,6 +258,28 @@ export interface TerminalResult {
 	readonly terminalReason: string | null;
 }
 
+/**
+ * A partial, runtime status update merged into an existing durable manifest.
+ * Only the fields supplied are changed; the rest of the durable manifest is
+ * preserved. This is the single contract shared by the durable store and the
+ * scheduler's generation-checked `mutate`. Monotonic revision enforcement is
+ * owned by the store that writes it.
+ */
+export interface StatusUpdate {
+	/** Task whose manifest is being updated. Required so a write targets one record. */
+	readonly agentId: string;
+	/** Optional explicit revision; defaults to stored revision + 1 (monotonic). */
+	readonly revision?: number;
+	readonly state?: TaskStatus;
+	readonly startedAt?: number | null;
+	readonly heartbeatAt?: number | null;
+	readonly finishedAt?: number | null;
+	readonly runnerPid?: number | null;
+	readonly tmuxWindow?: string | null;
+	readonly terminalReason?: string | null;
+	readonly sequence?: number;
+}
+
 /** Durable FIFO queue is the set of task manifests with state `queued`. */
 export type QueueState = "queued";
 

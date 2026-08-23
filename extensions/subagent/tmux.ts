@@ -63,6 +63,13 @@ export interface CreateAgentWindowOptions {
 	cwd: string;
 	/** Program the window runs (runner request), passed as one argv element. */
 	launchCommand: string;
+	/**
+	 * Optional lifecycle signal forwarded to the underlying `new-window` call so
+	 * a deliberate scheduler `stop()` cancels an in-flight window creation. The
+	 * window is only created once the call resolves; aborting before then leaves
+	 * nothing behind.
+	 */
+	signal?: AbortSignal;
 }
 
 /**
@@ -177,7 +184,7 @@ class TmuxClientImpl implements TmuxClient {
 	async createAgentWindow(
 		options: CreateAgentWindowOptions,
 	): Promise<AgentWindow> {
-		const { agentId } = options;
+		const { agentId, signal } = options;
 		// Re-validate here so the caller cannot bypass createAgentWindowInput.
 		if (!isShortId(agentId)) {
 			throw new Error(
@@ -188,6 +195,8 @@ class TmuxClientImpl implements TmuxClient {
 		if (await this.windowExists(name)) {
 			return { name, target: this.targetFor(name), sessionName: this.sessionName };
 		}
+		// Abort before touching tmux if the lifecycle signal fires first.
+		signal?.throwIfAborted();
 		// Detached full window: created off-screen and never focused. The cwd and
 		// launch command are passed as distinct argv elements so hostile paths or
 		// shell metacharacters never reach a shell interpreter.

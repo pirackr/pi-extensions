@@ -229,6 +229,44 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Abortable sleep: resolves after `ms`, or rejects with the abort reason the
+ * moment `signal` aborts. Used so a short-lived contender can wait for a live
+ * owner to release a lock without busy-spinning or ignoring cancellation.
+ */
+function abortableSleep(
+	ms: number,
+	signal: AbortSignal,
+): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		if (signal.aborted) {
+			reject(signal.reason ?? new Error("aborted"));
+			return;
+		}
+		let done = false;
+		const cleanup = () => {
+			clearTimeout(timer);
+			signal.removeEventListener("abort", onAbort);
+		};
+		const timer = setTimeout(() => {
+			if (done) return;
+			done = true;
+			cleanup();
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			if (done) return;
+			done = true;
+			cleanup();
+			reject(signal.reason ?? new Error("aborted"));
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+/** Default poll cadence (ms) a short-lived contender waits between retries. */
+const REGISTRY_POLL_MS = 10;
+
+/**
  * The parsed state of a lock file at a path.
  *
  * - `null` — the lock does not exist (free to create).
@@ -332,15 +370,15 @@ async function quarantineStale(path: string): Promise<void> {
 	}
 }
 
-function isStale(
+async function isStale(
 	identity: LeaseIdentity,
 	isAlive: (pid: number) => Promise<boolean>,
 	currentProcessStart: string,
-): boolean {
+): Promise<boolean> {
 	// Provable staleness: the owning PID is not alive, or the recorded
 	// process-start identity is foreign to the current manager. A lock owned by
 	// the current manager (matching PID alive + matching start) is never stale.
-	return !isAlive(identity.pid) || identity.processStart !== currentProcessStart;
+	return !(await isAlive(identity.pid)) || identity.processStart !== currentProcessStart;
 }
 
 /**
@@ -358,13 +396,16 @@ function isStale(
  *   winner.
  *
  * A live, non-stale owner always wins; contenders throw once the retry budget
- * is exhausted or when a live owner refuses.
+ * is exhausted or when a live owner refuses — unless `waitOnContention` is set,
+ * in which case a short-lived contender abortably waits for the owner to
+ * release before retrying exclusive creation.
  *
  * @param path  The lock file path (for example `<parentRoot>/manager.lock`).
  * @param owner The owner label recorded in the flushed identity.
  * @param signal Optional {@link AbortSignal}; aborting stops retrying and
  *   throws the abort reason.
  * @param deps Injectable dependencies (defaults used when omitted).
+ * @param options Short-lived contention policy (see {@link ContentionPolicy}).
  *
  * @throws when the signal is aborted, when a live owner refuses, or when the
  *   retry budget is exhausted on a persistent incomplete payload.
@@ -374,6 +415,7 @@ export async function acquireManagerLease(
 	owner: string,
 	signal: AbortSignal,
 	deps: LeaseDeps = {},
+	options: { waitOnContention?: boolean } = {},
 ): Promise<ManagerLease> {
 	const now = deps.now ?? Date.now;
 	const currentPid = deps.currentPid ?? (() => process.pid);
@@ -445,7 +487,10 @@ export async function acquireManagerLease(
 		signal.throwIfAborted();
 
 		if (attempt > 0) {
-			await sleep(jitteredBackoff(attempt, deps));
+			const delay = jitteredBackoff(attempt, deps);
+			await (options.waitOnContention
+				? abortableSleep(delay, signal)
+				: sleep(delay));
 		}
 
 		try {
@@ -475,7 +520,7 @@ export async function acquireManagerLease(
 			continue;
 		}
 
-		if (isStale(state.identity, isAlive, currentProcessStart)) {
+		if (await isStale(state.identity, isAlive, currentProcessStart)) {
 			// Reclaim: quarantine the stale lock to a unique name, then retry
 			// exclusive creation. Competing reclaimers converge on one winner.
 			if (attempt >= maxRetries) {
@@ -485,6 +530,17 @@ export async function acquireManagerLease(
 			}
 			await quarantineStale(path);
 			await deps.onRetry?.(attempt + 1);
+			attempt++;
+			continue;
+		}
+
+		if (options.waitOnContention) {
+			// Short-lived contender: the path is held by a live, non-stale owner.
+			// Abortably wait for release, then retry exclusive creation. This is the
+			// generation-safe contention path for the registry lock — we never
+			// steal the owner's file and always re-assert our own generation after
+			// acquiring. Long-lived manager leases keep the refusal below.
+			await abortableSleep(REGISTRY_POLL_MS, signal);
 			attempt++;
 			continue;
 		}
@@ -500,6 +556,12 @@ export async function acquireManagerLease(
  * release it afterward. Used for the registry lock that guards a single
  * enqueue, group membership, or manifest publication.
  *
+ * The registry lock is the *short-lived* primitive: a contender that finds it
+ * held by a live owner abortably waits for release rather than throwing, so
+ * concurrent enqueues and claims serialize instead of racing. The wait is
+ * generation-safe — acquisition still goes through the same exclusive open and
+ * the caller re-asserts its own lease generation inside `fn`.
+ *
  * @throws the abort reason if `signal` is aborted, or any error `fn` throws
  *   (the lease is still released in that case).
  */
@@ -510,7 +572,9 @@ export async function withRegistryLock<T>(
 	signal: AbortSignal,
 	deps: LeaseDeps = {},
 ): Promise<T> {
-	const lease = await acquireManagerLease(path, owner, signal, deps);
+	const lease = await acquireManagerLease(path, owner, signal, deps, {
+		waitOnContention: true,
+	});
 	try {
 		return await fn(lease);
 	} finally {

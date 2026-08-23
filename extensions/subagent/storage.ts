@@ -42,8 +42,14 @@ import {
 import { dirname, join } from "node:path";
 
 import {
+	withRegistryLock,
+	type LeaseDeps,
+} from "./locks.ts";
+
+import {
 	AgentManifest,
 	DeliveryRecord,
+	StatusUpdate,
 	TaskStatus,
 	TerminalResult,
 	isShortId,
@@ -76,24 +82,6 @@ export interface ArtifactStoreDeps {
 	now?: () => number;
 	/** Records every atomic destination write, in order, for ordering tests. */
 	recordWrites?: Array<{ op: string; path: string }>;
-}
-
-/**
- * A partial, runtime status update merged into an existing manifest. Only the
- * fields supplied are changed; the rest of the durable manifest is preserved.
- */
-export interface StatusUpdate {
-	readonly agentId: string;
-	/** Optional explicit revision; defaults to stored revision + 1 (monotonic). */
-	readonly revision?: number;
-	readonly state?: TaskStatus;
-	readonly startedAt?: number | null;
-	readonly heartbeatAt?: number | null;
-	readonly finishedAt?: number | null;
-	readonly runnerPid?: number | null;
-	readonly tmuxWindow?: string | null;
-	readonly terminalReason?: string | null;
-	readonly sequence?: number;
 }
 
 /**
@@ -130,8 +118,31 @@ export interface ArtifactStore {
 	 */
 	scan(): Promise<AgentManifest[]>;
 
+	/**
+	 * List every non-terminal durable manifest under this parent — `queued`,
+	 * `starting`, and `running` — ordered by ascending FIFO sequence. The
+	 * scheduler uses this both to dispatch eligible queues and to reconcile
+	 * live and dead runners. Symlinked or non-directory entries are rejected,
+	 * never followed.
+	 */
+	scanActive(): Promise<AgentManifest[]>;
+
+	/**
+	 * List every durable manifest under this parent, regardless of state,
+	 * ordered by ascending FIFO sequence. Used to allocate the next monotonic
+	 * sequence atomically under the registry lock.
+	 */
+	scanAll(): Promise<AgentManifest[]>;
+
 	/** Read a task's durable manifest, or `null` when it does not exist. */
 	readTask(agentId: string): Promise<AgentManifest | null>;
+
+	/**
+	 * Read a task's durable terminal result, or `null` when it has not
+	 * published one. The presence of a result is what makes a completed
+	 * orphan window safe to close.
+	 */
+	readResult(agentId: string): Promise<TerminalResult | null>;
 
 	/**
 	 * Atomically publish a complete manifest snapshot. The revision must be
@@ -411,6 +422,53 @@ export function createArtifactStore(
 			return readJsonSecure<AgentManifest>(statusPath(agentId));
 		},
 
+		async readResult(agentId: string): Promise<TerminalResult | null> {
+			if (!isShortId(agentId)) return null;
+			return readJsonSecure<TerminalResult>(
+				join(workspace(agentId), RESULT_FILE),
+			);
+		},
+
+		async scanAll(): Promise<AgentManifest[]> {
+			let entries: string[];
+			try {
+				entries = await readdir(subagentsRoot);
+			} catch {
+				return [];
+			}
+			const manifests: AgentManifest[] = [];
+			for (const entry of entries) {
+				if (!isShortId(entry)) continue;
+				const info = await lstat(join(subagentsRoot, entry));
+				if (info.isSymbolicLink()) {
+					throw new Error(
+						`refusing to follow symlink in scanAll: ${join(subagentsRoot, entry)}`,
+					);
+				}
+				if (!info.isDirectory()) {
+					throw new Error(
+						`unexpected non-directory in scanAll: ${join(subagentsRoot, entry)}`,
+					);
+				}
+				const manifest = await readJsonSecure<AgentManifest>(
+					join(subagentsRoot, entry, STATUS_FILE),
+				);
+				if (manifest === null) continue;
+				manifests.push(manifest);
+			}
+			return manifests.sort((a, b) => a.sequence - b.sequence);
+		},
+
+		async scanActive(): Promise<AgentManifest[]> {
+			const all = await this.scanAll();
+			return all.filter(
+				(m) =>
+					m.state === "queued" ||
+					m.state === "starting" ||
+					m.state === "running",
+			);
+		},
+
 		async writeStatus(update: StatusUpdate): Promise<AgentManifest> {
 			if (!isShortId(update.agentId)) {
 				throw new Error(`invalid agent id for writeStatus: ${String(update.agentId)}`);
@@ -522,4 +580,57 @@ export function createArtifactStore(
 function basenameOf(destination: string): string {
 	const slash = destination.lastIndexOf("/");
 	return slash === -1 ? destination : destination.slice(slash + 1);
+}
+
+/**
+ * Enqueue one task with a durably allocated FIFO sequence, serialized under
+ * the short-lived {@link registry.lock} so concurrent `Agent` submissions get
+ * strictly increasing, collision-free sequences.
+ *
+ * Under the lock the next sequence is `(highest on-disk sequence) + 1` across
+ * every manifest, so the counter stays monotonic across restarts without a
+ * separate counter file; the complete queued manifest is published before the
+ * lock is released.
+ *
+ * The manager generation is asserted both before and after the mutation so a
+ * stale lease can neither allocate nor publish.
+ *
+ * @param store  The durable store for the current parent.
+ * @param manifest  The queued manifest without a `sequence` field.
+ * @param runnerRequest  The runner request record written to `request.json`.
+ * @param registryLockPath  Path to the short-lived `registry.lock`.
+ * @param owner  Owner label recorded in the registry lease.
+ * @param signal  Lifecycle abort signal.
+ * @param deps  Injectable lease dependencies.
+ */
+export async function enqueueWithSequence(
+	store: ArtifactStore,
+	manifest: Omit<AgentManifest, "sequence">,
+	runnerRequest: Record<string, unknown>,
+	registryLockPath: string,
+	owner: string,
+	signal: AbortSignal,
+	deps: LeaseDeps = {},
+): Promise<AgentManifest> {
+	return withRegistryLock(
+		registryLockPath,
+		owner,
+		async (lease) => {
+			await lease.assertCurrent();
+			const all = await store.scanAll();
+			const next = all.reduce((highest, task) =>
+				Math.max(highest, task.sequence),
+				0,
+			) + 1;
+			const withSequence: AgentManifest = {
+				...manifest,
+				sequence: next,
+			};
+			await store.enqueue(withSequence, runnerRequest);
+			await lease.assertCurrent();
+			return withSequence;
+		},
+		signal,
+		deps,
+	);
 }

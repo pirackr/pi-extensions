@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, writeFile, readFile, stat, readdir, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { getEventListeners } from "node:events";
 
 import {
 	acquireManagerLease,
@@ -166,6 +167,26 @@ describe("acquireManagerLease — incomplete payload", () => {
 // ---------------------------------------------------------------------------
 
 describe("acquireManagerLease — stale reclamation", () => {
+	it("reclaims a dead PID even when its process-start identity matches", async () => {
+		await writeSeed(path, {
+			owner: "deadowner",
+			pid: DEAD_PID,
+			processStart: CUR_START,
+			generation: "gDead",
+			acquiredAt: 1,
+		});
+
+		const lease = await acquireManagerLease(
+			path,
+			"ownerA",
+			signal(),
+			baseDeps(),
+		);
+
+		expect(lease.owner).toBe("ownerA");
+		expect(lease.generation).not.toBe("gDead");
+	});
+
 	it("reclaims a dead-PID lock via a unique quarantine rename", async () => {
 		await writeSeed(path, {
 			owner: "deadowner",
@@ -361,6 +382,78 @@ describe("withRegistryLock", () => {
 
 		// the short-lived lock is released once fn returns
 		await expect(stat(path)).rejects.toThrow();
+	});
+
+	it("does not accumulate abort listeners while polling a live holder", async () => {
+		await writeSeed(path, {
+			owner: "ownerA",
+			pid: ALIVE_PID,
+			processStart: CUR_START,
+			generation: "gLive",
+			acquiredAt: 1,
+		});
+		const controller = new AbortController();
+		let checks = 0;
+		let observedFiveChecks!: () => void;
+		const fiveChecks = new Promise<void>((resolve) => {
+			observedFiveChecks = resolve;
+		});
+		const waiting = acquireManagerLease(
+			path,
+			"ownerB",
+			controller.signal,
+			baseDeps({
+				isProcessAlive: async () => {
+					checks += 1;
+					if (checks === 5) observedFiveChecks();
+					return true;
+				},
+			}),
+			{ waitOnContention: true },
+		);
+
+		await fiveChecks;
+		const listenersDuringPolling = getEventListeners(
+			controller.signal,
+			"abort",
+		).length;
+		controller.abort(new Error("stop polling"));
+		await expect(waiting).rejects.toThrow("stop polling");
+
+		expect(listenersDuringPolling).toBeLessThanOrEqual(1);
+		expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+	});
+
+	it("aborts promptly during contention retry backoff", async () => {
+		await writeSeed(path, {
+			owner: "ownerA",
+			pid: ALIVE_PID,
+			processStart: CUR_START,
+			generation: "gLive",
+			acquiredAt: 1,
+		});
+		const controller = new AbortController();
+		const reason = new Error("stop retrying");
+		const waiting = acquireManagerLease(
+			path,
+			"ownerB",
+			controller.signal,
+			baseDeps({ baseDelayMs: 500, maxDelayMs: 500 }),
+			{ waitOnContention: true },
+		).then(
+			() => "acquired" as const,
+			(error: unknown) => error,
+		);
+
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		controller.abort(reason);
+		const outcome = await Promise.race([
+			waiting,
+			new Promise<"timeout">((resolve) =>
+				setTimeout(() => resolve("timeout"), 100),
+			),
+		]);
+		expect(outcome).toBe(reason);
 	});
 });
 

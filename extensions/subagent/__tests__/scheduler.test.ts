@@ -470,9 +470,20 @@ class FakeStore implements ArtifactStore {
 	}
 
 	async publishTerminal(
-		_agentId: string,
-		_result: TerminalResult,
-	): Promise<void> {}
+		agentId: string,
+		result: TerminalResult,
+	): Promise<void> {
+		const existing = this.tasks.get(agentId);
+		if (existing === undefined) throw new Error(`no status to settle: ${agentId}`);
+		this.results.set(agentId, { ...result });
+		this.tasks.set(agentId, {
+			...existing,
+			state: result.state,
+			finishedAt: result.finishedAt,
+			terminalReason: result.terminalReason,
+			revision: existing.revision + 1,
+		});
+	}
 
 	async requestCancellation(agentId: string): Promise<boolean> {
 		return this.tasks.has(agentId);
@@ -1123,6 +1134,81 @@ describe("scheduler — coalesced reconcile", () => {
 		await Promise.all([scheduler.reconcile(), scheduler.reconcile()]);
 
 		expect(scanActiveCalls).toBe(1);
+		await scheduler.stop();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Scheduler — durable failures before/without a runner result
+// ---------------------------------------------------------------------------
+
+describe("scheduler — durable startup and interruption failures", () => {
+	it("publishes result before failed status when tmux window creation fails", async () => {
+		const { scheduler, store, tmux } = await startHarness({ now: () => 2_000 });
+		store.tasks.set("a1", makeManifest({ agentId: "a1", sequence: 1 }));
+		tmux.createAgentWindow = async () => {
+			throw new Error("tmux launch refused");
+		};
+		const publications: string[] = [];
+		store.publishTerminal = async (agentId, terminal) => {
+			publications.push(`result:${terminal.state}`);
+			store.results.set(agentId, terminal);
+			publications.push(`status:${terminal.state}`);
+			await store.writeStatus({
+				agentId,
+				state: terminal.state,
+				finishedAt: terminal.finishedAt,
+				terminalReason: terminal.terminalReason,
+			});
+		};
+
+		await scheduler.pump();
+
+		expect(publications).toEqual(["result:failed", "status:failed"]);
+		expect(await store.readResult("a1")).toEqual({
+			agentId: "a1",
+			state: "failed",
+			output: "",
+			usage: { totalTokens: 0, toolUses: 0, durationMs: 0 },
+			finishedAt: 2_000,
+			terminalReason: "tmux launch failed: tmux launch refused",
+		});
+		expect((await store.readTask("a1"))?.state).toBe("failed");
+		await scheduler.stop();
+	});
+
+	it("publishes an interrupted result before terminal status when a live window disappears", async () => {
+		const { scheduler, store } = await startHarness({ now: () => 3_000 });
+		store.tasks.set("a1", makeManifest({
+			agentId: "a1",
+			state: "running",
+			startedAt: 1_500,
+			tmuxWindow: "subagent-a1",
+		}));
+		const publications: string[] = [];
+		store.publishTerminal = async (agentId, terminal) => {
+			publications.push(`result:${terminal.state}`);
+			store.results.set(agentId, terminal);
+			publications.push(`status:${terminal.state}`);
+			await store.writeStatus({
+				agentId,
+				state: terminal.state,
+				finishedAt: terminal.finishedAt,
+				terminalReason: terminal.terminalReason,
+			});
+		};
+
+		await scheduler.reconcile();
+
+		expect(publications).toEqual(["result:interrupted", "status:interrupted"]);
+		expect(await store.readResult("a1")).toEqual({
+			agentId: "a1",
+			state: "interrupted",
+			output: "",
+			usage: { totalTokens: 0, toolUses: 0, durationMs: 1_500 },
+			finishedAt: 3_000,
+			terminalReason: "runner or window disappeared without a durable result",
+		});
 		await scheduler.stop();
 	});
 });

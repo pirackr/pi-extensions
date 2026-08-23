@@ -50,7 +50,6 @@ import {
 	AgentManifest,
 	DeliveryRecord,
 	StatusUpdate,
-	TaskStatus,
 	TerminalResult,
 	isShortId,
 } from "./types.ts";
@@ -98,7 +97,10 @@ export interface ArtifactStore {
 	/** The durable artifact root this parent owns. */
 	readonly artifactRoot: string;
 
-	/** Create the parent root layout: `parent.json`, `subagents/`, `groups/`. */
+	/**
+	 * Create the parent root layout, or securely reopen an existing layout whose
+	 * durable `parent.json` identity matches this store.
+	 */
 	initializeParent(): Promise<void>;
 
 	/**
@@ -358,6 +360,33 @@ export function createArtifactStore(
 		artifactRoot: identity.artifactRoot,
 
 		async initializeParent(): Promise<void> {
+			let rootExists = false;
+			try {
+				await lstat(identity.artifactRoot);
+				rootExists = true;
+			} catch {
+				// A missing root is created exclusively below.
+			}
+
+			if (rootExists) {
+				await ensureDir(identity.artifactRoot);
+				const recorded = await readJsonSecure<Record<string, unknown>>(
+					join(identity.artifactRoot, "parent.json"),
+				);
+				if (
+					recorded === null ||
+					recorded.id !== identity.id ||
+					recorded.tmuxSession !== identity.tmuxSession ||
+					recorded.tmpRoot !== identity.tmpRoot ||
+					recorded.projectSlug !== identity.projectSlug
+				) {
+					throw new Error(`parent identity mismatch at ${identity.artifactRoot}`);
+				}
+				await ensureDir(subagentsRoot);
+				await ensureDir(groupsRoot);
+				return;
+			}
+
 			await ensureDir(identity.artifactRoot, true);
 			await ensureDir(subagentsRoot, true);
 			await ensureDir(groupsRoot, true);

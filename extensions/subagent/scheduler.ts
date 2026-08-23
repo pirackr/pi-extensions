@@ -370,12 +370,30 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 				});
 				await lease.assertCurrent();
 				await assertManagerAlive();
-				const window = await deps.tmux.createAgentWindow({
-					agentId: fresh.agentId,
-					cwd,
-					launchCommand: deps.launchCommandFor?.(fresh) ?? "",
-					signal,
-				});
+				let window;
+				try {
+					window = await deps.tmux.createAgentWindow({
+						agentId: fresh.agentId,
+						cwd,
+						launchCommand: deps.launchCommandFor?.(fresh) ?? "",
+						signal,
+					});
+				} catch (error) {
+					if (signal.aborted) throw error;
+					await assertManagerAlive();
+					const message = error instanceof Error ? error.message : String(error);
+					await deps.store.publishTerminal(fresh.agentId, {
+						agentId: fresh.agentId,
+						state: "failed",
+						output: "",
+						usage: { totalTokens: 0, toolUses: 0, durationMs: 0 },
+						finishedAt: now(),
+						terminalReason: `tmux launch failed: ${message}`,
+					});
+					await lease.assertCurrent();
+					await assertManagerAlive();
+					return;
+				}
 				await mutate(fresh.agentId, { tmuxWindow: window.name });
 				claimed = true;
 			},
@@ -434,12 +452,24 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 			// published; a finished runner already owns its terminal state.
 			const durable = await deps.store.readResult(task.agentId);
 			if (durable === null) {
-				await mutate(task.agentId, {
+				await assertManagerAlive();
+				const finishedAt = now();
+				await deps.store.publishTerminal(task.agentId, {
+					agentId: task.agentId,
 					state: "interrupted",
-					finishedAt: now(),
+					output: "",
+					usage: {
+						totalTokens: 0,
+						toolUses: 0,
+						durationMs: task.startedAt === null
+							? 0
+							: Math.max(0, finishedAt - task.startedAt),
+					},
+					finishedAt,
 					terminalReason:
 						"runner or window disappeared without a durable result",
 				});
+				await assertManagerAlive();
 			}
 		}
 

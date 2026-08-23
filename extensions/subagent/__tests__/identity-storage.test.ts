@@ -308,6 +308,43 @@ describe("ArtifactStore layout and modes", () => {
 		}
 	});
 
+	it("reopens an existing parent layout only when its durable identity matches", async () => {
+		const identity: ParentIdentity = {
+			id: "a7k2",
+			tmuxSession: "pi-a7k2",
+			tmpRoot: root,
+			projectSlug: "coolproject",
+			artifactRoot: join(root, "coolproject", "pi-a7k2"),
+		};
+		store = createArtifactStore(identity);
+		await store.initializeParent();
+		await store.enqueue(makeManifest("q9xm", 1, "queued", 1), {});
+
+		const reopened = createArtifactStore(identity);
+		await reopened.initializeParent();
+
+		expect((await reopened.readTask("q9xm"))?.agentId).toBe("q9xm");
+	});
+
+	it("rejects reopening a parent layout whose durable identity does not match", async () => {
+		const identity: ParentIdentity = {
+			id: "a7k2",
+			tmuxSession: "pi-a7k2",
+			tmpRoot: root,
+			projectSlug: "coolproject",
+			artifactRoot: join(root, "coolproject", "pi-a7k2"),
+		};
+		store = createArtifactStore(identity);
+		await store.initializeParent();
+		const mismatched = createArtifactStore({
+			...identity,
+			id: "b8m3",
+			tmuxSession: "pi-b8m3",
+		});
+
+		await expect(mismatched.initializeParent()).rejects.toThrow(/parent identity mismatch/i);
+	});
+
 	it("writes a status.json with 0600 mode during enqueue", async () => {
 		const identity: ParentIdentity = {
 			id: "a7k2",

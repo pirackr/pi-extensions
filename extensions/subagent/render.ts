@@ -693,9 +693,13 @@ export async function performAgentAction(
 }
 
 /**
- * The `/agents` command. Builds a durable, state-grouped selector via the public
- * manager API and drives a real Pi `SelectList`, delegating raw terminal input
- * to it and requesting a TUI rerender after every key. Task 12 owns wiring this
+ * The `/agents` command. Runs a control-flow loop over the public
+ * `SubagentManager` API: each pass builds a fresh, state-grouped selector via
+ * `new AgentsView(await manager.list())` and drives a real Pi `SelectList`,
+ * delegating raw terminal input to it and requesting a TUI rerender after every
+ * key. A refresh re-lists through `manager.list()` and loops to rebuild the
+ * selector from the new manifests; escape, cancel, or any concrete action
+ * (attach/stop/retrieve/path) terminates the command. Task 12 owns wiring this
  * into `pi.registerCommand`; this function is the self-contained handler.
  */
 export async function runAgentsCommand(
@@ -708,52 +712,165 @@ export async function runAgentsCommand(
 		return;
 	}
 
-	const view = new AgentsView(await manager.list());
-	const theme = ctx.ui.theme;
-	const selectListTheme: SelectListTheme = {
+	const selectListTheme = selectListThemeFor(ctx.ui.theme);
+
+	// Control-flow loop. A refresh re-queries the manager and rebuilds the
+	// selector from the new manifests; everything else (escape, cancel, or a
+	// concrete attach/stop/retrieve/path action) terminates the command. Escape
+	// and cancel always terminate.
+	while (true) {
+		const view = new AgentsView(await manager.list());
+		const outcome = await driveSelectList(ctx, view, manager, selectListTheme);
+		if (outcome !== "refresh") return;
+	}
+}
+
+/**
+ * Drive a single `SelectList` over `view`. Returns `"refresh"` when the user
+ * selects the refresh sentinel (the caller's loop re-lists and rebuilds) or
+ * `"exit"` when the user escapes, cancels, or performs a concrete action.
+ */
+async function driveSelectList(
+	ctx: AgentsCommandContext,
+	view: AgentsView,
+	manager: SubagentManager,
+	selectListTheme: SelectListTheme,
+): Promise<"refresh" | "exit"> {
+	return await ctx.ui.custom<"refresh" | "exit">(
+		(tui, _theme, _keybindings, done) => {
+			const selectList = new SelectList(
+				view.items,
+				Math.min(view.items.length, 10),
+				selectListTheme,
+			);
+			// The selector resolves to its own outcome via `done`: the caller's loop
+			// re-lists and rebuilds on "refresh", and terminates on anything else.
+			selectList.onCancel = () => {
+				done("exit");
+			};
+			selectList.onSelect = async (item) => {
+				const selectable = view.byId.get(item.value);
+				if (!selectable) {
+					done("exit");
+					return;
+				}
+				// The refresh sentinel is handled by the caller's loop, which re-lists
+				// and rebuilds a fresh selector from the new manifests.
+				if (selectable.actions.includes("refresh")) {
+					done("refresh");
+					return;
+				}
+				// Terminal rows advertise both a retrieval and an artifact-path action.
+				// Surface both as a distinct action picker so neither is reachable
+				// only through a direct function call.
+				if (selectable.actions.length > 1) {
+					const action = await pickRowAction(ctx, selectable, selectListTheme);
+					await performAgentAction(action, selectable, ctx, manager);
+					done("exit");
+					return;
+				}
+				await performAgentAction(
+					selectable.actions[0] as AgentRowAction,
+					selectable,
+					ctx,
+					manager,
+				);
+				done("exit");
+			};
+			return {
+				render(width: number): string[] {
+					return selectList.render(width);
+				},
+				invalidate(): void {
+					selectList.invalidate();
+					view.invalidate();
+				},
+				handleInput(data: string): void {
+					// Raw terminal input (escape sequences) — delegate to the real
+					// SelectList, which performs its own key handling.
+					selectList.handleInput(data);
+					tui.requestRender();
+				},
+			};
+		},
+	);
+}
+
+/**
+ * Present a nested action picker for a row that offers more than one action
+ * (currently a terminal row: `retrieve` + `path`). The picker is a real
+ * `SelectList`; the chosen action is returned so the caller dispatches it
+ * through the public manager API. Cancelling falls back to `retrieve`.
+ */
+async function pickRowAction(
+	ctx: AgentsCommandContext,
+	selectable: AgentsSelectable,
+	selectListTheme: SelectListTheme,
+): Promise<AgentRowAction> {
+	const actions = selectable.actions.filter(
+		(action): action is AgentRowAction => action !== "refresh",
+	);
+	const items: SelectItem[] = actions.map((action) => ({
+		value: action,
+		label: actionLabelFor(action),
+		description: selectable.state,
+	}));
+	return (await ctx.ui.custom<string>(
+		(tui, _theme, _keybindings, done) => {
+			const picker = new SelectList(
+				items,
+				Math.min(items.length, 5),
+				selectListTheme,
+			);
+			picker.onCancel = () => {
+				done("retrieve");
+			};
+			picker.onSelect = (item) => {
+				done(item.value);
+			};
+			return {
+				render(width: number): string[] {
+					return picker.render(width);
+				},
+				invalidate(): void {
+					picker.invalidate();
+				},
+				handleInput(data: string): void {
+					picker.handleInput(data);
+					tui.requestRender();
+				},
+			};
+		},
+	)) as AgentRowAction;
+}
+
+/** Human-readable label for a row action, offered inside the action picker. */
+function actionLabelFor(action: AgentRowAction): string {
+	switch (action) {
+		case "retrieve":
+			return "Retrieve result";
+		case "path":
+			return "Show artifact path";
+		case "attach":
+			return "Attach window";
+		case "stop":
+			return "Stop task";
+		default:
+			return action;
+	}
+}
+
+/** Build the documented `SelectListTheme` from the live `ctx.ui.theme`. */
+function selectListThemeFor(
+	theme: { fg(color: string, text: string): string },
+): SelectListTheme {
+	return {
 		selectedPrefix: (text) => style(theme, text),
 		selectedText: (text) => style(theme, text),
 		description: (text) => style(theme, text),
 		scrollInfo: (text) => style(theme, text),
 		noMatch: (text) => style(theme, text),
 	};
-
-	await ctx.ui.custom<void>((tui, _theme, _keybindings, done) => {
-		const selectList = new SelectList(view.items, Math.min(view.items.length, 10), selectListTheme);
-
-		selectList.onCancel = () => done();
-		selectList.onSelect = async (item) => {
-			const selectable = view.byId.get(item.value);
-			if (!selectable) {
-				done();
-				return;
-			}
-			// Refresh re-lists and rerenders; any other action dispatches through
-			// the public manager API and closes the selector.
-			if (selectable.actions.includes("refresh")) {
-				await performAgentAction("refresh", selectable, ctx, manager);
-			} else {
-				await performAgentAction(selectable.actions[0], selectable, ctx, manager);
-				done();
-			}
-		};
-
-		return {
-			render(width: number): string[] {
-				return selectList.render(width);
-			},
-			invalidate(): void {
-				selectList.invalidate();
-				view.invalidate();
-			},
-			handleInput(data: string): void {
-				// Raw terminal input (escape sequences) — delegate to the real
-				// SelectList, which performs its own key handling.
-				selectList.handleInput(data);
-				tui.requestRender();
-			},
-		};
-	});
 }
 
 /** Paint `text` with the live theme when available, otherwise return it raw. */

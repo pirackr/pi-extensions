@@ -758,3 +758,129 @@ describe("isAgentsCommandContext", () => {
 		expect(isAgentsCommandContext(null as never)).toBe(false);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// runAgentsCommand: refresh rebuilds and the artifact path is a real selection.
+//
+// These drive the real `ctx.ui.custom` callback and the real `SelectList`.
+// A custom `ctx.ui.custom` resolves its promise via `done`, so we capture every
+// selector instance in call order and feed raw terminal escape sequences through
+// it — exactly what a live host passes. There is no `await` on the command in
+// most cases: refresh leaves the selector open, so the command dangles until we
+// cancel it; a dangling command never rejects.
+// ---------------------------------------------------------------------------
+
+/** Drive one `/agents` command, capturing every SelectList in call order. */
+function makeAgentsSession() {
+	const components: Array<{
+		render(width: number): string[];
+		invalidate(): void;
+		handleInput(data: string): void;
+	}> = [];
+	const requestRender = vi.fn();
+	const notify = vi.fn();
+	const ctx = {
+		mode: "tui",
+		ui: {
+			theme: { fg: (_color: string, text: string) => text, bold: (t: string) => t },
+			notify: (...args: unknown[]) => notify(...args),
+			requestRender: (...args: unknown[]) => requestRender(...args),
+			custom: (factory: (tui: { requestRender(): void }, theme: unknown, kb: unknown, done: (value?: unknown) => void) => unknown) =>
+				new Promise((resolve) => {
+					const returned = factory(
+						{ requestRender: () => requestRender() },
+						{},
+						{},
+						resolve,
+					);
+					Promise.resolve(returned).then((component) => {
+						components.push(component as typeof components[number]);
+					});
+				}),
+		},
+	} as unknown as AgentsCommandContext;
+	return { ctx, components, requestRender, notify };
+}
+
+/** Drain microtasks/macrotasks so awaited `custom`/`manager.list()` settles. */
+async function settle() {
+	for (let i = 0; i < 12; i++) {
+		await new Promise((r) => setTimeout(r, 0));
+	}
+}
+
+describe("runAgentsCommand refresh rebuilds the selector", () => {
+	it("re-lists and rebuilds the displayed SelectList when refresh re-queries", async () => {
+		let listCalls = 0;
+		const list = vi.fn(async () =>
+			listCalls++ === 0
+				? [manifest("a1b2", "running")]
+				: [
+					manifest("a1b2", "running"),
+					manifest("z9z9", "queued", { description: "do new thing" }),
+				],
+		);
+		const manager = { list, stop: vi.fn(), getResult: vi.fn() };
+		const { ctx, components, notify } = makeAgentsSession();
+		const runner = runAgentsCommand(ctx, manager as unknown as SubagentManager);
+		runner.catch(() => {});
+		await settle();
+
+		// Initial listing has only the running task; no durable history yet.
+		const initial = components[0].render(80).join("\n").toLowerCase();
+		expect(initial).toContain("general: do abc xyz");
+		expect(initial).not.toContain("do new thing");
+		expect(list).toHaveBeenCalledTimes(1);
+
+		// The refresh sentinel is the first selectable row.
+		components[0].handleInput(ESC_ENTER);
+		await settle();
+
+		// Refresh re-queried the manager once more…
+		expect(list).toHaveBeenCalledTimes(2);
+		// …and a rebuilt SelectList surfaced from the new manifests.
+		expect(components.length).toBeGreaterThan(1);
+		const rebuilt = components[components.length - 1].render(80).join("\n").toLowerCase();
+		expect(rebuilt).toContain("general: do abc xyz");
+		expect(rebuilt).toContain("do new thing");
+		// Refresh does not perform a retrieval or stop.
+		expect(notify).not.toHaveBeenCalled();
+	});
+});
+
+describe("runAgentsCommand terminal actions", () => {
+	it("offers the distinct artifact-path action that displays the path", async () => {
+		const getResult = vi.fn(
+			async (_agentId: string, _wait: boolean, _signal: AbortSignal): Promise<ResultResponse> =>
+				({ ...FOREGROUND_RESULT, artifactDir: "/tmp/proj/artifacts" }),
+		);
+		const manager = {
+			list: vi.fn(async () => [manifest("s3d4", "succeeded", { description: "do finalize" })]),
+			stop: vi.fn(),
+			getResult,
+		};
+		const { ctx, components, notify } = makeAgentsSession();
+		const runner = runAgentsCommand(ctx, manager as unknown as SubagentManager);
+		runner.catch(() => {});
+		await settle();
+
+		// The single terminal task is the second selectable row; navigate to it.
+		components[0].handleInput(ESC_DOWN);
+		await settle();
+		components[0].handleInput(ESC_ENTER);
+		await settle();
+
+		// Selecting a terminal task opens a distinct action picker (retrieve
+		// plus path); the path action is a real selectable item, not dead code.
+		expect(components.length).toBeGreaterThan(1);
+		components[1].handleInput(ESC_DOWN);
+		await settle();
+		components[1].handleInput(ESC_ENTER);
+		await settle();
+
+		// The path action goes through the real public getResult signature.
+		expect(getResult).toHaveBeenCalledWith("s3d4", false, expect.any(AbortSignal));
+		// …and displays the artifact path.
+		expect(notify).toHaveBeenCalledWith("/tmp/proj/artifacts");
+	});
+});

@@ -16,6 +16,8 @@ import {
 import {
 	occupiedOwnershipTrees,
 	selectEligibleQueued,
+	isNestedEligible,
+	descendantIds,
 	createScheduler,
 	type Scheduler,
 	type SchedulerDeps,
@@ -74,13 +76,15 @@ let seqCounter = 0;
 
 function makeManifest(overrides: Partial<AgentManifest> = {}): AgentManifest {
 	seqCounter += 1;
+	const agentId = overrides.agentId ?? `a${seqCounter}`;
 	return {
 		schema: 1,
 		generation: `g${seqCounter}`,
 		revision: 1,
 		parentId: "p000",
-		agentId: `a${seqCounter}`,
+		agentId,
 		parentAgentId: null,
+		ownershipTreeId: overrides.ownershipTreeId ?? agentId,
 		origin: "origin-uuid",
 		groupId: null,
 		description: `task ${seqCounter}`,
@@ -128,6 +132,7 @@ describe("occupiedOwnershipTrees", () => {
 				agentId: "a2",
 				state: "running",
 				parentAgentId: "a1",
+				ownershipTreeId: "a1",
 			}),
 		]);
 		expect(trees).toEqual(new Set(["a1"]));
@@ -144,17 +149,176 @@ describe("selectEligibleQueued", () => {
 		expect(chosen?.agentId).toBe("a1");
 	});
 
-	it("ignores nested queued tasks (reserved for Task 7)", () => {
+	it("ignores a nested queued task whose ancestor is missing", () => {
 		const chosen = selectEligibleQueued([
 			makeManifest({
 				agentId: "a1",
 				sequence: 1,
 				state: "queued",
 				parentAgentId: "a0",
+				ownershipTreeId: "a0",
 			}),
 			makeManifest({ agentId: "a2", sequence: 2, state: "queued" }),
 		]);
 		expect(chosen?.agentId).toBe("a2");
+	});
+
+	it("includes an eligible nested task in global sequence order", () => {
+		const chosen = selectEligibleQueued([
+			makeManifest({
+				agentId: "root",
+				sequence: 1,
+				state: "running",
+				ownershipTreeId: "root",
+			}),
+			makeManifest({ agentId: "top", sequence: 3, state: "queued" }),
+			makeManifest({
+				agentId: "nest",
+				sequence: 2,
+				state: "queued",
+				parentAgentId: "root",
+				ownershipTreeId: "root",
+			}),
+		]);
+		expect(chosen?.agentId).toBe("nest");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Nested ownership-tree helpers
+// ---------------------------------------------------------------------------
+
+describe("isNestedEligible", () => {
+	it("accepts only a queued nested task in an occupied live ancestor tree", () => {
+		const root = makeManifest({
+			agentId: "root",
+			sequence: 1,
+			state: "running",
+			ownershipTreeId: "root",
+		});
+		const child = makeManifest({
+			agentId: "child",
+			sequence: 2,
+			parentAgentId: "root",
+			ownershipTreeId: "root",
+		});
+
+		expect(isNestedEligible(child, [root, child])).toBe(true);
+		expect(isNestedEligible(root, [root, child])).toBe(false);
+	});
+
+	it("fails closed for missing, terminal, or mismatched ancestor trees", () => {
+		const liveRoot = makeManifest({
+			agentId: "live",
+			state: "running",
+			ownershipTreeId: "live",
+		});
+		const terminalRoot = makeManifest({
+			agentId: "root",
+			state: "succeeded",
+			ownershipTreeId: "root",
+		});
+		const missing = makeManifest({
+			agentId: "missing-child",
+			parentAgentId: "absent",
+			ownershipTreeId: "absent",
+		});
+		const terminal = makeManifest({
+			agentId: "terminal-child",
+			parentAgentId: "root",
+			ownershipTreeId: "root",
+		});
+		const mismatched = makeManifest({
+			agentId: "wrong-tree",
+			parentAgentId: "live",
+			ownershipTreeId: "other",
+		});
+
+		expect(isNestedEligible(missing, [missing])).toBe(false);
+		expect(isNestedEligible(terminal, [terminalRoot, terminal])).toBe(false);
+		expect(isNestedEligible(mismatched, [liveRoot, mismatched])).toBe(false);
+	});
+
+	it("allows one active nested descendant per tree without cross-tree blocking", () => {
+		const rootA = makeManifest({
+			agentId: "roota",
+			state: "running",
+			ownershipTreeId: "roota",
+		});
+		const activeA = makeManifest({
+			agentId: "activea",
+			state: "starting",
+			parentAgentId: "roota",
+			ownershipTreeId: "roota",
+		});
+		const queuedA = makeManifest({
+			agentId: "queueda",
+			parentAgentId: "roota",
+			ownershipTreeId: "roota",
+		});
+		const rootB = makeManifest({
+			agentId: "rootb",
+			state: "running",
+			ownershipTreeId: "rootb",
+		});
+		const queuedB = makeManifest({
+			agentId: "queuedb",
+			parentAgentId: "rootb",
+			ownershipTreeId: "rootb",
+		});
+		const tasks = [rootA, activeA, queuedA, rootB, queuedB];
+
+		expect(isNestedEligible(queuedA, tasks)).toBe(false);
+		expect(isNestedEligible(queuedB, tasks)).toBe(true);
+	});
+});
+
+describe("descendantIds", () => {
+	it("returns descendants deepest-first with sequence-stable siblings", () => {
+		const tasks = [
+			makeManifest({ agentId: "root", sequence: 1 }),
+			makeManifest({
+				agentId: "later",
+				sequence: 3,
+				parentAgentId: "root",
+				ownershipTreeId: "root",
+			}),
+			makeManifest({
+				agentId: "grand",
+				sequence: 4,
+				parentAgentId: "later",
+				ownershipTreeId: "root",
+			}),
+			makeManifest({
+				agentId: "first",
+				sequence: 2,
+				parentAgentId: "root",
+				ownershipTreeId: "root",
+			}),
+			makeManifest({ agentId: "other", sequence: 5 }),
+		];
+
+		expect(descendantIds("root", tasks)).toEqual(["first", "grand", "later"]);
+		expect(descendantIds("absent", tasks)).toEqual([]);
+	});
+
+	it("terminates cycles without returning duplicates or the requested root", () => {
+		const tasks = [
+			makeManifest({
+				agentId: "a1",
+				sequence: 1,
+				parentAgentId: "a2",
+				ownershipTreeId: "a1",
+			}),
+			makeManifest({
+				agentId: "a2",
+				sequence: 2,
+				parentAgentId: "a1",
+				ownershipTreeId: "a1",
+			}),
+		];
+
+		expect(descendantIds("a1", tasks)).toEqual(["a2"]);
 	});
 });
 
@@ -314,7 +478,7 @@ class FakeStore implements ArtifactStore {
 		return this.tasks.has(agentId);
 	}
 
-	async readDelivery(agentId: string): Promise<DeliveryRecord | null> {
+	async readDelivery(_agentId: string): Promise<DeliveryRecord | null> {
 		return null;
 	}
 
@@ -520,6 +684,253 @@ describe("scheduler — starting + running slots", () => {
 		expect(snap.starting).toBe(10);
 		expect(snap.queued).toBe(1);
 		expect(snap.slotsFree).toBe(0);
+		await scheduler.stop();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Scheduler — nested ownership-tree dispatch
+// ---------------------------------------------------------------------------
+
+describe("scheduler — nested ownership trees", () => {
+	it("dispatches a nested child inside its parent's slot at maxConcurrent one", async () => {
+		const { scheduler, store, tmux } = await startHarness({ maxConcurrent: 1 });
+		store.tasks.set(
+			"r001",
+			makeManifest({
+				agentId: "r001",
+				sequence: 1,
+				state: "running",
+				ownershipTreeId: "r001",
+			}),
+		);
+		store.tasks.set(
+			"c001",
+			makeManifest({
+				agentId: "c001",
+				sequence: 2,
+				parentAgentId: "r001",
+				ownershipTreeId: "r001",
+			}),
+		);
+
+		await scheduler.pump();
+
+		expect(tmux.created.map((entry) => entry.agentId)).toEqual(["c001"]);
+		expect(store.tasks.get("c001")?.state).toBe("starting");
+		const snap = await scheduler.snapshot();
+		expect(snap.slotsUsed).toBe(1);
+		expect(snap.slotsFree).toBe(0);
+		await scheduler.stop();
+	});
+
+	it("starts one descendant per tree at a time in sequence order", async () => {
+		const { scheduler, store, tmux } = await startHarness({ maxConcurrent: 10 });
+		store.tasks.set(
+			"r001",
+			makeManifest({
+				agentId: "r001",
+				sequence: 1,
+				state: "running",
+				ownershipTreeId: "r001",
+			}),
+		);
+		for (const [agentId, sequence] of [["c001", 2], ["c002", 3]] as const) {
+			store.tasks.set(
+				agentId,
+				makeManifest({
+					agentId,
+					sequence,
+					parentAgentId: "r001",
+					ownershipTreeId: "r001",
+				}),
+			);
+		}
+
+		await scheduler.pump();
+		expect(tmux.created.map((entry) => entry.agentId)).toEqual(["c001"]);
+		expect(store.tasks.get("c002")?.state).toBe("queued");
+
+		store.tasks.set("c001", {
+			...store.tasks.get("c001")!,
+			state: "succeeded",
+			finishedAt: 2000,
+		});
+		await scheduler.pump();
+
+		expect(tmux.created.map((entry) => entry.agentId)).toEqual(["c001", "c002"]);
+		await scheduler.stop();
+	});
+
+	it("preserves global sequence order when nested work is earlier and a slot is free", async () => {
+		const { scheduler, store, tmux } = await startHarness({ maxConcurrent: 2 });
+		store.tasks.set(
+			"r001",
+			makeManifest({
+				agentId: "r001",
+				sequence: 1,
+				state: "running",
+				ownershipTreeId: "r001",
+			}),
+		);
+		store.tasks.set(
+			"c001",
+			makeManifest({
+				agentId: "c001",
+				sequence: 2,
+				parentAgentId: "r001",
+				ownershipTreeId: "r001",
+			}),
+		);
+		store.tasks.set(
+			"t001",
+			makeManifest({ agentId: "t001", sequence: 3, ownershipTreeId: "t001" }),
+		);
+
+		await scheduler.pump();
+
+		expect(tmux.created.map((entry) => entry.agentId)).toEqual(["c001", "t001"]);
+		await scheduler.stop();
+	});
+
+	it("preserves global sequence order when top-level work is earlier and a slot is free", async () => {
+		const { scheduler, store, tmux } = await startHarness({ maxConcurrent: 2 });
+		store.tasks.set(
+			"r001",
+			makeManifest({
+				agentId: "r001",
+				sequence: 1,
+				state: "running",
+				ownershipTreeId: "r001",
+			}),
+		);
+		store.tasks.set(
+			"t001",
+			makeManifest({ agentId: "t001", sequence: 2, ownershipTreeId: "t001" }),
+		);
+		store.tasks.set(
+			"c001",
+			makeManifest({
+				agentId: "c001",
+				sequence: 3,
+				parentAgentId: "r001",
+				ownershipTreeId: "r001",
+			}),
+		);
+
+		await scheduler.pump();
+
+		expect(tmux.created.map((entry) => entry.agentId)).toEqual(["t001", "c001"]);
+		await scheduler.stop();
+	});
+
+	it("bypasses an earlier top-level task when only an occupied tree can run", async () => {
+		const { scheduler, store, tmux } = await startHarness({ maxConcurrent: 1 });
+		store.tasks.set(
+			"r001",
+			makeManifest({
+				agentId: "r001",
+				sequence: 1,
+				state: "running",
+				ownershipTreeId: "r001",
+			}),
+		);
+		store.tasks.set(
+			"t001",
+			makeManifest({ agentId: "t001", sequence: 2, ownershipTreeId: "t001" }),
+		);
+		store.tasks.set(
+			"c001",
+			makeManifest({
+				agentId: "c001",
+				sequence: 3,
+				parentAgentId: "r001",
+				ownershipTreeId: "r001",
+			}),
+		);
+
+		await scheduler.pump();
+
+		expect(tmux.created.map((entry) => entry.agentId)).toEqual(["c001"]);
+		expect(store.tasks.get("t001")?.state).toBe("queued");
+		await scheduler.stop();
+	});
+
+	it("claims at most one nested descendant when pumps race", async () => {
+		const { scheduler, store, tmux } = await startHarness({ maxConcurrent: 1 });
+		store.tasks.set(
+			"r001",
+			makeManifest({
+				agentId: "r001",
+				sequence: 1,
+				state: "running",
+				ownershipTreeId: "r001",
+			}),
+		);
+		for (const [agentId, sequence] of [["c001", 2], ["c002", 3]] as const) {
+			store.tasks.set(
+				agentId,
+				makeManifest({
+					agentId,
+					sequence,
+					parentAgentId: "r001",
+					ownershipTreeId: "r001",
+				}),
+			);
+		}
+
+		await Promise.all([scheduler.pump(), scheduler.pump()]);
+
+		expect(tmux.created.map((entry) => entry.agentId)).toEqual(["c001"]);
+		expect(store.tasks.get("c002")?.state).toBe("queued");
+		await scheduler.stop();
+	});
+
+	it("retains a nested task without dispatch when its ancestor is missing", async () => {
+		const { scheduler, store, tmux } = await startHarness({ maxConcurrent: 1 });
+		store.tasks.set(
+			"c001",
+			makeManifest({
+				agentId: "c001",
+				sequence: 1,
+				parentAgentId: "gone",
+				ownershipTreeId: "gone",
+			}),
+		);
+
+		await scheduler.pump();
+
+		expect(store.tasks.get("c001")?.state).toBe("queued");
+		expect(tmux.created).toHaveLength(0);
+		await scheduler.stop();
+	});
+
+	it("retains a nested task without dispatch when the manager is absent", async () => {
+		const { scheduler, store, tmux, manager } = await startHarness({ maxConcurrent: 1 });
+		store.tasks.set(
+			"r001",
+			makeManifest({
+				agentId: "r001",
+				sequence: 1,
+				state: "running",
+				ownershipTreeId: "r001",
+			}),
+		);
+		store.tasks.set(
+			"c001",
+			makeManifest({
+				agentId: "c001",
+				sequence: 2,
+				parentAgentId: "r001",
+				ownershipTreeId: "r001",
+			}),
+		);
+		await manager.release();
+
+		await expect(scheduler.pump()).rejects.toThrow();
+
+		expect(store.tasks.get("c001")?.state).toBe("queued");
+		expect(tmux.created).toHaveLength(0);
 		await scheduler.stop();
 	});
 });

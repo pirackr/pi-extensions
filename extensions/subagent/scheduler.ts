@@ -14,9 +14,9 @@
 //
 // Invariants enforced here:
 //
-// - **Strict top-level FIFO.** {@link selectEligibleQueued} returns the
-//   lowest-`sequence` eligible top-level queued task; nested eligibility is
-//   reserved for Task 7.
+// - **Durable FIFO with nested eligibility.** {@link selectEligibleQueued}
+//   returns the lowest-`sequence` dispatchable queued task. A nested task runs
+//   only inside its already-occupied ownership tree; it never opens a slot.
 // - **Concurrency counted by ownership tree.** {@link occupiedOwnershipTrees}
 //   counts a slot per occupied top-level tree, so `starting` and `running`
 //   both consume a slot and nested descendants never add a global one.
@@ -49,33 +49,96 @@ const NON_TERMINAL: readonly TaskStatus[] = ["queued", "starting", "running"];
 /** Default pump tick interval for the independent loop (ms). */
 const DEFAULT_PUMP_INTERVAL_MS = 250;
 
-/**
- * A `queued` task is eligible to start now when it is a top-level task (no
- * immediate parent). Nested eligibility, which depends on the owning tree's
- * concurrency slot, is reserved for Task 7.
- */
+/** Whether a task owns a global slot rather than running inside one. */
 function isTopLevel(task: AgentManifest): boolean {
 	return task.parentAgentId === null || task.parentAgentId === undefined;
 }
 
+/** Return the durable top-level ownership-tree id for slot accounting. */
+function topLevelTreeId(task: AgentManifest): string {
+	return task.ownershipTreeId;
+}
+
 /**
- * Walk `parentAgentId` links up to the root and return the top-level
- * ownership-tree id a task runs in. For a top-level task the tree id is its
- * own `agentId`.
+ * Whether a queued nested task may run inside its already-occupied tree.
+ * Every ancestor must be present, active, and in the same durable tree. At
+ * most one nested descendant in a tree may be `starting` or `running`.
  */
-function topLevelTreeId(
+export function isNestedEligible(
 	task: AgentManifest,
-	byId: Map<string, AgentManifest>,
-): string {
-	let current = task;
-	const seen = new Set<string>();
-	while (current.parentAgentId != null && !seen.has(current.parentAgentId)) {
-		seen.add(current.agentId);
-		const parent = byId.get(current.parentAgentId);
-		if (parent === undefined) break;
-		current = parent;
+	tasks: readonly AgentManifest[],
+): boolean {
+	if (task.state !== "queued" || isTopLevel(task)) return false;
+
+	const byId = new Map(tasks.map((item) => [item.agentId, item] as const));
+	const seen = new Set<string>([task.agentId]);
+	let parentId: string | null = task.parentAgentId;
+	let reachedRoot = false;
+
+	while (parentId !== null) {
+		if (seen.has(parentId)) return false;
+		seen.add(parentId);
+		const parent = byId.get(parentId);
+		if (parent === undefined) return false;
+		if (parent.ownershipTreeId !== task.ownershipTreeId) return false;
+		if (parent.state !== "starting" && parent.state !== "running") return false;
+		if (isTopLevel(parent)) {
+			reachedRoot =
+				parent.agentId === task.ownershipTreeId &&
+				parent.ownershipTreeId === task.ownershipTreeId;
+			break;
+		}
+		parentId = parent.parentAgentId;
 	}
-	return current.agentId;
+	if (!reachedRoot) return false;
+
+	return !tasks.some(
+		(other) =>
+			other.agentId !== task.agentId &&
+			!isTopLevel(other) &&
+			other.ownershipTreeId === task.ownershipTreeId &&
+			(other.state === "starting" || other.state === "running"),
+	);
+}
+
+/**
+ * Return descendants in deterministic post-order: deepest descendants first,
+ * with siblings visited by ascending durable sequence. The requested task is
+ * excluded, unrelated trees are ignored, and malformed cycles terminate.
+ */
+export function descendantIds(
+	agentId: string,
+	tasks: readonly AgentManifest[],
+): string[] {
+	const root = tasks.find((task) => task.agentId === agentId);
+	if (root === undefined) return [];
+
+	const children = new Map<string, AgentManifest[]>();
+	for (const task of tasks) {
+		if (task.parentAgentId === null) continue;
+		if (task.ownershipTreeId !== root.ownershipTreeId) continue;
+		const siblings = children.get(task.parentAgentId) ?? [];
+		siblings.push(task);
+		children.set(task.parentAgentId, siblings);
+	}
+	for (const siblings of children.values()) {
+		siblings.sort(
+			(a, b) => a.sequence - b.sequence || a.agentId.localeCompare(b.agentId),
+		);
+	}
+
+	const result: string[] = [];
+	const visited = new Set<string>([agentId]);
+	const visit = (parentId: string): void => {
+		for (const child of children.get(parentId) ?? []) {
+			if (visited.has(child.agentId)) continue;
+			visited.add(child.agentId);
+			visit(child.agentId);
+			result.push(child.agentId);
+		}
+	};
+	visit(agentId);
+	return result;
 }
 
 /**
@@ -86,27 +149,34 @@ function topLevelTreeId(
 export function occupiedOwnershipTrees(
 	tasks: readonly AgentManifest[],
 ): Set<string> {
-	const byId = new Map(tasks.map((task) => [task.agentId, task] as const));
 	const occupied = new Set<string>();
 	for (const task of tasks) {
 		if (task.state !== "starting" && task.state !== "running") continue;
-		occupied.add(topLevelTreeId(task, byId));
+		occupied.add(topLevelTreeId(task));
 	}
 	return occupied;
 }
 
-/**
- * Return the lowest-sequence queued task that is eligible to start now, or
- * `null` when none is eligible. Task 6 considers only top-level queued tasks;
- * nested eligibility is reserved for Task 7.
- */
+/** Return the lowest-sequence dispatchable queued task, or `null`. */
 export function selectEligibleQueued(
 	tasks: readonly AgentManifest[],
 ): AgentManifest | null {
 	let best: AgentManifest | null = null;
 	for (const task of tasks) {
 		if (task.state !== "queued") continue;
-		if (!isTopLevel(task)) continue;
+		if (!isTopLevel(task) && !isNestedEligible(task, tasks)) continue;
+		if (best === null || task.sequence < best.sequence) best = task;
+	}
+	return best;
+}
+
+/** Lowest eligible nested task for an already-full global slot set. */
+function selectEligibleNested(
+	tasks: readonly AgentManifest[],
+): AgentManifest | null {
+	let best: AgentManifest | null = null;
+	for (const task of tasks) {
+		if (!isNestedEligible(task, tasks)) continue;
 		if (best === null || task.sequence < best.sequence) best = task;
 	}
 	return best;
@@ -233,9 +303,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 				reject(signal.reason);
 				return;
 			}
-			let done = false;
 			const cleanup = () => {
-				done = true;
 				clearTimeout(timer);
 				signal.removeEventListener("abort", onAbort);
 			};
@@ -280,13 +348,20 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 			async (lease) => {
 				await lease.assertCurrent();
 				await assertManagerAlive();
-				// Re-read under the lock: another pump may have claimed it.
-				const fresh = await deps.store.readTask(task.agentId);
+				// Re-scan under the lock: another pump may have claimed a task,
+				// filled a global slot, or occupied this nested task's tree.
+				const active = await deps.store.scanActive();
+				const fresh = active.find((candidate) => candidate.agentId === task.agentId);
 				if (
-					fresh === null ||
+					fresh === undefined ||
 					fresh.state !== "queued" ||
 					fresh.generation !== task.generation
 				) {
+					return;
+				}
+				if (isTopLevel(fresh)) {
+					if (occupiedOwnershipTrees(active).size >= deps.maxConcurrent) return;
+				} else if (!isNestedEligible(fresh, active)) {
 					return;
 				}
 				await mutate(fresh.agentId, {
@@ -311,15 +386,17 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 		return claimed;
 	};
 
-	/** Dispatch eligible queued tasks until the concurrency ceiling is hit. */
+	/** Dispatch eligible queued tasks until no global or in-tree work fits. */
 	const dispatch = async (): Promise<number> => {
 		await assertManagerAlive();
 		let dispatched = 0;
 		for (;;) {
 			const active = await deps.store.scanActive();
 			const occupied = occupiedOwnershipTrees(active).size;
-			if (occupied >= deps.maxConcurrent) break;
-			const next = selectEligibleQueued(active);
+			const next =
+				occupied >= deps.maxConcurrent
+					? selectEligibleNested(active)
+					: selectEligibleQueued(active);
 			if (next === null) break;
 			const claimed = await claimStarting(next);
 			if (!claimed) continue;

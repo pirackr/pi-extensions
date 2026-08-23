@@ -251,6 +251,7 @@ function makeManifest(agentId: string, revision: number, state: TaskStatus, sequ
 		parentId: "a7k2",
 		agentId,
 		parentAgentId: null,
+		ownershipTreeId: agentId,
 		origin: "00000000-0000-0000-0000-000000000000",
 		groupId: null,
 		description: "worker",

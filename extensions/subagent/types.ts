@@ -321,6 +321,12 @@ export interface AgentManifest {
 	readonly agentId: string;
 	/** Present only for explicitly enabled nested tasks. */
 	readonly parentAgentId: string | null;
+	/**
+	 * Top-level ownership-tree id this task runs in. A top-level task uses its
+	 * own `agentId`; every descendant carries the same root id. Task 9 populates
+	 * this field before publication when nested enqueue is wired.
+	 */
+	readonly ownershipTreeId: string;
 	/** Immutable origin conversation UUID. */
 	readonly origin: string;
 	/** Notification group token, or `null` for foreground tasks. */

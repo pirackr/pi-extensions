@@ -234,6 +234,7 @@ const SAMPLE_MANIFEST: AgentManifest = {
 	parentId: "a7k2",
 	agentId: "q9xm",
 	parentAgentId: null,
+	ownershipTreeId: "q9xm",
 	origin: "00000000-0000-0000-0000-000000000000",
 	groupId: null,
 	description: "worker (do abc)",
@@ -277,15 +278,23 @@ describe("ProfileContribution", () => {
 });
 
 describe("AgentManifest required identity fields", () => {
-	it("always carries schema version, revision, and process-start identity", () => {
-		const { schema, generation, revision, processStart, parentId, agentId } =
-			SAMPLE_MANIFEST;
+	it("always carries schema, process, and ownership-tree identity", () => {
+		const {
+			schema,
+			generation,
+			revision,
+			processStart,
+			parentId,
+			agentId,
+			ownershipTreeId,
+		} = SAMPLE_MANIFEST;
 		expect(schema).toBeTypeOf("number");
 		expect(revision).toBeTypeOf("number");
 		expect(processStart).toBeTypeOf("string");
 		expect(processStart.length).toBeGreaterThan(0);
 		expect(parentId).toBeTypeOf("string");
 		expect(agentId).toBeTypeOf("string");
+		expect(ownershipTreeId).toBe(agentId);
 		// generation is a required serializable token present in the record.
 		expect(generation).toBeTypeOf("string");
 		expect(generation.length).toBeGreaterThan(0);

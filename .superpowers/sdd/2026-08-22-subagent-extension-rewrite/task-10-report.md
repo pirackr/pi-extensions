@@ -228,3 +228,89 @@ None outstanding for the frozen contract: the timeout flush now persists
 `dispatching`→`delivered` on the real event loop via the same `deliver()` path as
 immediate/recovery delivery, closing the durability gap the previous snapshot
 path left open. No test-harness artifact remains.
+
+---
+
+## Task 10 fix round 1: notification ownership gaps (RED → GREEN)
+
+### Scope
+
+Close the two review findings on the live send/mutation paths of
+`extensions/subagent/notifications.ts` while leaving dispatching-before-send,
+result authority, timer semantics, recovery, and consumption serialization
+intact:
+
+- **Finding 1 (wrong-origin straggler after `activeOrigin` change).** `evaluate`
+  and the scheduled flush `deliver()` delivered a group's result even after the
+  active conversation changed (`/new`); every send path must centrally require
+  `group.origin === activeOrigin`. Resuming the original origin must again make
+  pending delivery eligible.
+- **Finding 2 (missing current-manager ownership assert).** `assertManagerCurrent`
+  was only on `turnStart`/`turnEnd`; every registry-locked mutation/dispatch path
+  (`evaluate`, timeout-callback `deliver`, `consume`, `recover`) must assert
+  current manager generation under the lock before mutating/sending and fail
+  closed when stale.
+
+### RED (frozen contract; production file reverted to `3b42f54`)
+
+```
+$ npx vitest run extensions/subagent/__tests__/notifications.test.ts
+⎯⎯⎯⎯⎯⯃ Failed Tests 5 ⎯⎯⎯⎯⎯⯃
+ Test Files  1 failed (1)
+      Tests  5 failed | 13 passed (18)
+```
+
+The 5 failures are exactly the new ownership cases: wrong-origin straggler
+`evaluate`, wrong-origin scheduled flush, and stale-manager `evaluate`/`consume`
+/`recover` (which, on `3b42f54`, mutate/send instead of failing closed).
+
+### Fix (minimum, central)
+
+- **Finding 1 — central origin binding in `deliver()`.** Read the group once at
+  the top of `deliver` and `return` unless `group.origin === activeOrigin()`.
+  This is the single choke point every send path already routes through
+  (`turnEnd`, `evaluate`, the `schedule` flush callback, and `recover`'s
+  re-attempt), so the origin invariant is enforced in one place rather than
+  duplicated across callers. Resuming the original origin sets
+  `activeOrigin` back to `group.origin`, so a previously-suppressed pending
+  delivery becomes eligible again — the existing `/new` resume test covers this.
+- **Finding 2 — `assertManagerCurrent` under the lock.** Added the
+  `assertManagerCurrent()` call as the first statement inside the registry lease
+  of `deliver()`, `consume()`, and `recover()`'s promotion lock, so a stale
+  manager fails closed before any durable write or send. `evaluate`'s only
+  durable mutation flows through `deliver()`, and the timeout callback flows
+  through `deliver()`, so both are now covered without a separate assert. The
+  mid-send promotion lock in `deliver()` is the tail of an already-asserted
+  operation and is left untouched.
+
+No changes to dispatching-before-send, `result.json` authority, the injectable
+`schedule`/`cancelScheduled` flush seam, at-most-once recovery, or consumption
+serialization. No storage/types/manager/scheduler/tmux/runner/entrypoint/UI/
+research/loop/legacy files touched.
+
+### GREEN
+
+```
+$ npx vitest run extensions/subagent/__tests__/notifications.test.ts
+✓ extensions/subagent/__tests__/notifications.test.ts (18 tests) 64ms
+Tests  18 passed (18)
+
+$ npx vitest run extensions/subagent/__tests__/
+✓ types.test.ts (29) ✓ tmux.test.ts (22) ✓ config.test.ts (60)
+✓ identity-storage.test.ts (39) ✓ runner.test.ts (18)
+✓ notifications.test.ts (18) ✓ locks.test.ts (17)
+✓ manager.test.ts (18) ✓ scheduler.test.ts (35)
+Test Files  9 passed (9)   Tests  256 passed (256)
+
+$ npx tsc --noEmit
+(no output — clean)
+
+$ git diff --check
+DIFF_CHECK_OK
+```
+
+### Concerns / open items
+
+None for this fix round. The two remaining Minor items from the review
+(`TERMINAL_STATES` unused constant; `readGroupMembers` O(n²) `find` in the
+comparator) are explicitly deferred per scope and not addressed here.

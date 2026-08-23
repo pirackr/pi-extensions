@@ -321,6 +321,32 @@ describe("NotificationCoordinator groups", () => {
 		expect(previews).toHaveLength(2);
 		expect(previews.map((match) => Array.from(match[1]).length)).toEqual([300, 300]);
 	});
+
+	it("does not deliver a wrong-origin straggler after activeOrigin changes", async () => {
+		const groupId = await coordinator.turnStart(20);
+		await enqueueTerminal("q9xm", groupId, 1, "conversation-a");
+		// active conversation changed (e.g. /new); the straggler settles afterwards
+		activeOrigin = "conversation-b";
+		await store.enqueue(manifest("v4nr", groupId, "conversation-a", 2), {});
+		await store.publishTerminal("v4nr", result("v4nr", nowMs + 1));
+		await coordinator.evaluate("v4nr");
+		expect(sent).toHaveLength(0);
+		expect(await store.readDelivery("q9xm")).toBeNull();
+	});
+
+	it("does not deliver a scheduled flush for a wrong-origin group after activeOrigin changes", async () => {
+		const groupId = await coordinator.turnStart(21);
+		await enqueueTerminal("q9xm", groupId, 1, "conversation-a");
+		await store.enqueue(manifest("v4nr", groupId, "conversation-a", 2), {});
+		await coordinator.turnEnd();
+		expect(scheduled).toHaveLength(1);
+		// origin changes after the flush is scheduled
+		activeOrigin = "conversation-b";
+		nowMs += 30_000;
+		await scheduled[0].callback();
+		expect(sent).toHaveLength(0);
+		expect(await store.readDelivery("q9xm")).toBeNull();
+	});
 });
 
 describe("NotificationCoordinator delivery safety", () => {
@@ -389,6 +415,57 @@ describe("NotificationCoordinator delivery safety", () => {
 		await coordinator.recover();
 		expect(sent).toHaveLength(0);
 		expect(await store.readDelivery("q9xm")).toMatchObject({ state: "delivered" });
+	});
+
+	it("fails closed on a stale manager in evaluate before any durable mutation", async () => {
+		const stale = createNotificationCoordinator(coordinatorDeps({
+			assertManagerCurrent: async () => {
+				throw new Error("manager generation changed");
+			},
+		}));
+		// Seed a real group so evaluate's delivery path reaches the lease.
+		const seeded = createNotificationCoordinator(coordinatorDeps());
+		const groupId = await seeded.turnStart(22);
+		await enqueueTerminal("q9xm", groupId, 1, "conversation-a");
+		await store.enqueue(manifest("v4nr", groupId, "conversation-a", 2), {});
+		await store.publishTerminal("v4nr", result("v4nr", nowMs + 1));
+		await expect(stale.evaluate("q9xm")).rejects.toThrow("manager generation changed");
+		expect(sent).toHaveLength(0);
+		expect(await store.readDelivery("q9xm")).toBeNull();
+	});
+
+	it("fails closed on a stale manager in consume before any durable mutation", async () => {
+		const stale = createNotificationCoordinator(coordinatorDeps({
+			assertManagerCurrent: async () => {
+				throw new Error("manager generation changed");
+			},
+		}));
+		const groupId = "group-stale-consume";
+		await enqueueTerminal("q9xm", groupId, 1, "conversation-a");
+		await expect(stale.consume("q9xm")).rejects.toThrow("manager generation changed");
+		expect(await store.readDelivery("q9xm")).toBeNull();
+	});
+
+	it("fails closed on a stale manager in recover before any durable promotion", async () => {
+		const stale = createNotificationCoordinator(coordinatorDeps({
+			assertManagerCurrent: async () => {
+				throw new Error("manager generation changed");
+			},
+		}));
+		const groupId = "group-stale-recover";
+		await enqueueTerminal("q9xm", groupId, 1, "conversation-a");
+		await store.updateDelivery("q9xm", {
+			groupId,
+			agentIds: ["q9xm"],
+			state: "dispatching",
+			notificationId: "notif-stale",
+			createdAt: nowMs,
+			dispatchedAt: nowMs,
+			consumedAt: null,
+		});
+		await expect(stale.recover()).rejects.toThrow("manager generation changed");
+		const delivery = await store.readDelivery("q9xm");
+		expect(delivery?.state).toBe("dispatching");
 	});
 
 	it("suppresses /new and sends when the original conversation resumes", async () => {

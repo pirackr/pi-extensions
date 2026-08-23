@@ -335,9 +335,17 @@ export function createNotificationCoordinator(
 	async function deliver(groupId: string): Promise<void> {
 		await clearFlushTimer(groupId);
 
+		// Central origin binding: a group that no longer belongs to the active
+		// conversation (for example after a `/new`) never sends, even when a
+		// straggler settles or a scheduled flush fires later. Resuming the
+		// original origin makes pending delivery eligible again.
+		const group = await store.readGroup(groupId);
+		if (!group || group.origin !== activeOrigin()) return;
+
 		let eligible: string[] = [];
 		let notificationId = "";
 		await lock(async () => {
+			await assertManagerCurrent();
 			const memberIds = await readGroupMembers(groupId);
 			for (const id of memberIds) {
 				const terminal = await store.readResult(id);
@@ -451,6 +459,7 @@ export function createNotificationCoordinator(
 
 		async consume(agentId: string): Promise<void> {
 			await lock(async () => {
+				await assertManagerCurrent();
 				const existing = await store.readDelivery(agentId);
 				await store.updateDelivery(agentId, {
 					state: "consumed",
@@ -468,6 +477,7 @@ export function createNotificationCoordinator(
 			// Crash recovery: an in-flight `dispatching` delivery is treated as
 			// already attempted and promoted to `delivered` without resending.
 			await lock(async () => {
+				await assertManagerCurrent();
 				const manifests = await store.scanAll();
 				for (const manifest of manifests) {
 					const delivery = await store.readDelivery(manifest.agentId);

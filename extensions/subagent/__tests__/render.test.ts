@@ -884,3 +884,40 @@ describe("runAgentsCommand terminal actions", () => {
 		expect(notify).toHaveBeenCalledWith("/tmp/proj/artifacts");
 	});
 });
+
+describe("runAgentsCommand nested action picker cancel", () => {
+	it("dismisses the action picker on Escape without getResult, stop, or notify", async () => {
+		const getResult = vi.fn();
+		const stop = vi.fn();
+		const list = vi.fn(
+			async () => [manifest("s3d4", "succeeded", { description: "do finalize" })],
+		);
+		const manager = { list, stop, getResult };
+		const { ctx, components, notify } = makeAgentsSession();
+		let resolved = false;
+		const runner = runAgentsCommand(ctx, manager as unknown as SubagentManager);
+		runner.then(() => {
+			resolved = true;
+		}).catch(() => {});
+		await settle();
+
+		// Navigate to the single terminal task and open its action picker.
+		components[0].handleInput(ESC_DOWN);
+		await settle();
+		components[0].handleInput(ESC_ENTER);
+		await settle();
+
+		// The nested action picker is a distinct SelectList (retrieve + path).
+		expect(components.length).toBeGreaterThan(1);
+
+		// Escape cancels the nested action picker through the real SelectList.
+		components[components.length - 1].handleInput("\x1b");
+		await settle();
+
+		// Cancel dismisses without side effects and lets the command resolve.
+		expect(getResult).not.toHaveBeenCalled();
+		expect(stop).not.toHaveBeenCalled();
+		expect(notify).not.toHaveBeenCalled();
+		expect(resolved).toBe(true);
+	});
+});

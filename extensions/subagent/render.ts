@@ -765,6 +765,11 @@ async function driveSelectList(
 				// only through a direct function call.
 				if (selectable.actions.length > 1) {
 					const action = await pickRowAction(ctx, selectable, selectListTheme);
+					// Cancel in the picker dismisses it: no retrieve/path/stop/attach.
+					if (action === "cancel") {
+						done("exit");
+						return;
+					}
 					await performAgentAction(action, selectable, ctx, manager);
 					done("exit");
 					return;
@@ -800,13 +805,15 @@ async function driveSelectList(
  * Present a nested action picker for a row that offers more than one action
  * (currently a terminal row: `retrieve` + `path`). The picker is a real
  * `SelectList`; the chosen action is returned so the caller dispatches it
- * through the public manager API. Cancelling falls back to `retrieve`.
+ * through the public manager API. Cancelling dismisses the picker without any
+ * side effect (no retrieve/path/stop/attach) — the caller resolves the
+ * command instead of falling back to a retrieval.
  */
 async function pickRowAction(
 	ctx: AgentsCommandContext,
 	selectable: AgentsSelectable,
 	selectListTheme: SelectListTheme,
-): Promise<AgentRowAction> {
+): Promise<AgentRowAction | "cancel"> {
 	const actions = selectable.actions.filter(
 		(action): action is AgentRowAction => action !== "refresh",
 	);
@@ -823,7 +830,7 @@ async function pickRowAction(
 				selectListTheme,
 			);
 			picker.onCancel = () => {
-				done("retrieve");
+				done("cancel");
 			};
 			picker.onSelect = (item) => {
 				done(item.value);

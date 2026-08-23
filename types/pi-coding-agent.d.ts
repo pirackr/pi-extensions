@@ -291,6 +291,19 @@ declare module "@earendil-works/pi-coding-agent" {
 			}>;
 		}): void;
 		registerCommand(name: string, options: RegisteredCommand): void;
+		registerMessageRenderer<T = unknown>(
+			customType: string,
+			renderer: (
+				message: {
+					customType: string;
+					content: string | Array<{ type: string; text: string }>;
+					display: boolean;
+					details?: T;
+				},
+				options: { expanded: boolean; outputPad: number },
+				theme: Theme,
+			) => Component | undefined,
+		): void;
 		registerFlag(
 			name: string,
 			options: {

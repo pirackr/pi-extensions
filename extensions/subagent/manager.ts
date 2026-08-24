@@ -386,7 +386,11 @@ export function createSubagentManager(deps: SubagentManagerDeps): SubagentManage
 		signal: AbortSignal,
 	): Promise<AgentReceipt | ResultResponse> => {
 		ensureMutable();
-		const request = normalizeAgentRequest(input);
+		const raw = normalizeAgentRequest(input);
+		const request = {
+			...raw,
+			subagent_type: raw.subagent_type ?? "general-purpose",
+		};
 		if (mode === "nested-producer" && request.run_in_background) {
 			throw new Error("nested subagents must run in the foreground");
 		}

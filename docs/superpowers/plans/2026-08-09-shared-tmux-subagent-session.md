@@ -1,3 +1,5 @@
+> **ARCHIVED** — Superseded by the durable Agent extension rewrite (2026-08-24). This document is retained for historical reference only.
+
 # Shared tmux Subagent Session Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

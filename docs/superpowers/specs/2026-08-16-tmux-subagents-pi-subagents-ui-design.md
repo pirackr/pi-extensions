@@ -1,3 +1,5 @@
+> **ARCHIVED** — Superseded by the durable Agent extension rewrite (2026-08-24). This document is retained for historical reference only.
+
 # pi-subagents-style UI for tmux subagents — design
 
 ## Goal

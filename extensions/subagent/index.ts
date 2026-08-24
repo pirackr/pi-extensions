@@ -60,6 +60,7 @@ import {
 	type ProfilePolicyAdapter,
 	type ResultResponse,
 	type TaskStatus,
+	type Usage,
 } from "./types.ts";
 
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
@@ -213,20 +214,28 @@ function depthFor(
 
 function widgetRows(manifests: readonly AgentManifest[]): AgentWidgetRow[] {
 	const byId = new Map(manifests.map((item) => [item.agentId, item]));
-	return manifests.map((item) => ({
-		agentId: item.agentId,
-		parentAgentId: item.parentAgentId,
-		depth: depthFor(item, byId),
-		profile: item.profile.name,
-		description: item.description,
-		state: item.state,
-		startedAt: item.startedAt,
-		finishedAt: item.finishedAt,
-		timeoutSeconds: item.timeoutSeconds,
-		toolUses: 0,
-		totalTokens: 0,
-		activity: null,
-	}));
+	return manifests.map((item) => {
+		const live = item as AgentManifest & {
+			activity?: string | null;
+			contextWindow?: number | null;
+			usage?: Usage | null;
+		};
+		return {
+			agentId: item.agentId,
+			parentAgentId: item.parentAgentId,
+			depth: depthFor(item, byId),
+			profile: item.profile.name,
+			description: item.description,
+			state: item.state,
+			startedAt: item.startedAt,
+			finishedAt: item.finishedAt,
+			timeoutSeconds: item.timeoutSeconds,
+			toolUses: live.usage?.toolUses ?? 0,
+			totalTokens: live.usage?.totalTokens ?? 0,
+			contextWindow: live.contextWindow ?? null,
+			activity: live.activity ?? null,
+		};
+	});
 }
 
 function xmlText(value: string): string {

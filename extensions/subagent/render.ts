@@ -282,6 +282,7 @@ export interface AgentWidgetRow {
 	readonly timeoutSeconds: number | null;
 	readonly toolUses: number;
 	readonly totalTokens: number;
+	readonly contextWindow: number | null;
 	readonly activity: string | null;
 }
 
@@ -292,39 +293,68 @@ export interface RenderWidgetOptions {
 	readonly now: number;
 }
 
-/** One line per row, each already truncated to the supplied visible width. */
+/** Multiple lines per row (main line + optional activity preview), truncated to width. */
 export function renderWidgetLines(
 	rows: AgentWidgetRow[],
 	{ width, now }: RenderWidgetOptions,
 ): string[] {
-	return rows.map((row) => formatWidgetRow(row, width, now));
+	const lines: string[] = [];
+	for (let i = 0; i < rows.length; i++) {
+		const row = rows[i];
+		const isLast = i === rows.length - 1 || rows[i + 1]?.depth < row.depth;
+		lines.push(...formatWidgetRow(row, width, now, isLast));
+	}
+	return lines;
+}
+
+function treePrefix(depth: number, isLast: boolean): string {
+	if (depth === 0) return isLast ? "└─ " : "├─ ";
+	const parent = "│  ".repeat(depth - 1);
+	return parent + (isLast ? "└─ " : "├─ ");
+}
+
+function continuationPrefix(depth: number): string {
+	if (depth === 0) return "   ";
+	return "│  ".repeat(depth);
+}
+
+function contextPercent(totalTokens: number, contextWindow: number | null): string {
+	if (!contextWindow || contextWindow <= 0) return "";
+	const pct = Math.round((totalTokens / contextWindow) * 100);
+	return ` (${pct}%)`;
 }
 
 function formatWidgetRow(
 	row: AgentWidgetRow,
 	width: number,
 	now: number,
-): string {
-	const indent = "  ".repeat(Math.max(0, row.depth));
+	isLast: boolean,
+): string[] {
 	const marker = STATE_MARKERS[row.state] ?? "·";
+	const prefix = treePrefix(row.depth, isLast);
 
 	const startedAt = row.startedAt ?? 0;
 	const elapsedMs =
 		row.finishedAt != null ? row.finishedAt - startedAt : now - startedAt;
-
 	const elapsed = formatDurationMs(elapsedMs);
-	const timeout =
-		row.timeoutSeconds != null ? `/${row.timeoutSeconds}s` : "";
-	const tools =
-		`${row.toolUses} ${row.toolUses === 1 ? "tool" : "tools"}`;
-	const tokens = `${compactTokens(row.totalTokens)} tok`;
-	const terminal =
-		row.finishedAt != null ? ` ${row.state}` : "";
 
-	const line =
-		`${indent}${marker} subagent-${row.agentId} ${row.profile} ${row.description} ${elapsed}${timeout} ${tools} ${tokens}${terminal}`;
+	const tools = `${row.toolUses} ${row.toolUses === 1 ? "tool" : "tools"}`;
+	const tokens = `${compactTokens(row.totalTokens)} tokens`;
+	const pct = contextPercent(row.totalTokens, row.contextWindow);
 
-	return truncateToWidth(line, width);
+	const mainLine = `${prefix}${marker} subagent(${row.profile}): ${row.description} · ${elapsed} · ${tools} · ${tokens}${pct}`;
+	const result: string[] = [truncateToWidth(mainLine, width)];
+
+	// Activity preview line
+	if (row.activity && row.activity.length > 0) {
+		const preview = row.activity.length > 60
+			? row.activity.slice(0, 57) + "…"
+			: row.activity;
+		const activityPrefix = continuationPrefix(row.depth);
+		result.push(truncateToWidth(`${activityPrefix}  └─ ${preview}`, width));
+	}
+
+	return result;
 }
 
 // ---------------------------------------------------------------------------

@@ -962,10 +962,15 @@ describe("8. timeout escalates process group", () => {
 
 		clock.advance(31_000);
 		clock.runPending();
+		// Timeout fires: graceful window begins, no signal yet.
+		expect(kill).not.toHaveBeenCalled();
 
+		clock.advance(5_000);
+		clock.runPending();
 		expect(kill).toHaveBeenCalledWith(child.pid, "SIGTERM");
 		expect(kill).not.toHaveBeenCalledWith(child.pid, "SIGKILL");
-		clock.advance(1_000);
+
+		clock.advance(5_000);
 		clock.runPending();
 		expect(kill).toHaveBeenCalledWith(child.pid, "SIGKILL");
 

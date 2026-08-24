@@ -113,12 +113,14 @@ describe("normalizeAgentRequest", () => {
 				subagent_type: "worker",
 			}),
 		).toThrow();
-		expect(() =>
-			normalizeAgentRequest({
-				description: "do abc",
-				prompt: "the whole task",
-			}),
-		).toThrow();
+	});
+
+	it("allows a missing subagent_type (manager defaults it)", () => {
+		const request = normalizeAgentRequest({
+			description: "do abc",
+			prompt: "the whole task",
+		});
+		expect(request.subagent_type).toBeUndefined();
 	});
 
 	it("rejects non-string required fields", () => {

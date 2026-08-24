@@ -7,7 +7,16 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@earendil-works/pi-coding-agent", () => ({
 	CONFIG_DIR_NAME: ".pi",
 	getAgentDir: () => "/tmp/pi-agent-test",
-	parseFrontmatter: () => ({ frontmatter: {}, body: "" }),
+	parseFrontmatter: (content: string) => {
+		const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(content);
+		if (!match) return { frontmatter: {}, body: content };
+		const frontmatter: Record<string, string> = {};
+		for (const line of match[1].split("\n")) {
+			const i = line.indexOf(":");
+			if (i > 0) frontmatter[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+		}
+		return { frontmatter, body: content.slice(match[0].length) };
+	},
 }));
 
 import {
@@ -375,7 +384,7 @@ describe("Task 12 extension integration", () => {
 		const ctx = fakeContext("tui");
 		await emit(h, "session_start", { type: "session_start", reason: "startup" }, ctx);
 		expect(h.calls).toEqual(["initialize", "recover", "activate"]);
-		expect(ctx.ui.widgets.get("subagent-agents")?.join("\n")).toContain("subagent-a001");
+		expect(ctx.ui.widgets.get("subagent-agents")?.join("\n")).toContain("task a001");
 		expect(ctx.ui.statuses.get("subagent-agents")).toContain("1 running");
 	});
 
@@ -430,11 +439,11 @@ describe("Task 12 extension integration", () => {
 		const h = harness({ manifests: [done, live] });
 		const ctx = fakeContext();
 		await emit(h, "session_start", { type: "session_start", reason: "startup" }, ctx);
-		expect(ctx.ui.widgets.get("subagent-agents")?.join("\n")).toContain("subagent-d001");
+		expect(ctx.ui.widgets.get("subagent-agents")?.join("\n")).toContain("task d001");
 		await emit(h, "input", { type: "input", text: "next" }, ctx);
 		const rendered = ctx.ui.widgets.get("subagent-agents")?.join("\n") ?? "";
-		expect(rendered).not.toContain("subagent-d001");
-		expect(rendered).toContain("subagent-a001");
+		expect(rendered).not.toContain("task d001");
+		expect(rendered).toContain("task a001");
 	});
 
 	it("renders compact notification summaries without the result body", () => {

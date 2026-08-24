@@ -353,7 +353,9 @@ export function installSubagentExtension(
 		renderCall: renderers.renderCall as never,
 		renderResult: (result, renderOptions, theme, context) => {
 			const value = result.details as AgentReceipt | ResultResponse | undefined;
-			return value
+			// Error results carry an empty `{}` details payload; render those as
+			// plain content text so the actual error message is shown.
+			return value && typeof value.agentId === "string" && value.agentId
 				? renderers.renderResult(value, renderOptions, theme as never, context)
 				: new Text(result.content.map((part) => part.text).join("\n"), 0, 0);
 		},

@@ -46,12 +46,10 @@ import {
 // ---------------------------------------------------------------------------
 
 const SPINNER_GLYPHS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SPINNER_INTERVAL_MS = 80;
 
+/** Advance one glyph per animation frame (~80ms per step). */
 function spinnerGlyph(frame: number): string {
-	return SPINNER_GLYPHS[
-		Math.floor((frame * SPINNER_INTERVAL_MS) / 1000) % SPINNER_GLYPHS.length
-	];
+	return SPINNER_GLYPHS[Math.abs(frame) % SPINNER_GLYPHS.length];
 }
 
 const STATE_MARKERS: Record<TaskStatus, string> = {
@@ -157,11 +155,14 @@ function labeledRow(key: string, value: string): string {
 
 /** Compact call header: `▸ <profile> (<description>)`. */
 export function renderCall(
-	request: AgentRequest,
+	request: Partial<AgentRequest> | undefined,
 	_context?: unknown,
 	_theme?: unknown,
 ): string {
-	return `▸ ${request.subagent_type} (${request.description})`;
+	// Args may be partially streamed when pi first renders the call; never
+	// print raw `undefined` while individual fields are still arriving.
+	const type = request?.subagent_type ?? "agent";
+	return request?.description ? `▸ ${type} (${request.description})` : `▸ ${type}`;
 }
 
 /** Compact result line for a receipt or foreground completion. */
@@ -176,8 +177,21 @@ export function renderResult(
 	return compactResultText(value);
 }
 
+/** True when the value carries a real receipt/result payload (has an agentId). */
+function isRenderable(value: AgentReceipt | ResultResponse): boolean {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof (value as { agentId?: unknown }).agentId === "string" &&
+		(value as { agentId: string }).agentId.length > 0
+	);
+}
+
 /** The plain compact result line for a receipt or foreground completion. */
 function compactResultText(value: AgentReceipt | ResultResponse): string {
+	// Error results arrive as `{details: {}}` with no agentId; the tool wiring
+	// falls back to the content text before reaching this point.
+	if (!isRenderable(value)) return "⎿ …";
 	const handle = `subagent-${value.agentId}`;
 	if (isForegroundCompletion(value)) return "⎿ Done";
 	if (value.state === "queued") return `⎿ Queued as ${handle}…`;
@@ -223,15 +237,10 @@ function themed(
 export function createToolRenderers() {
 	return {
 		renderCall: (
-			args: AgentRequest,
+			args: Partial<AgentRequest>,
 			theme?: RendererTheme,
 			_context?: unknown,
-		): Text =>
-			new Text(
-				themed(theme, `▸ ${args.subagent_type} (${args.description})`),
-				0,
-				0,
-			),
+		): Text => new Text(themed(theme, renderCall(args)), 0, 0),
 		renderResult: (
 			value: AgentReceipt | ResultResponse,
 			options: { expanded?: boolean } = {},
@@ -365,9 +374,11 @@ function formatWidgetRow(
 		: (STATE_MARKERS[row.state] ?? "·");
 	const prefix = treePrefix(row.depth, isLast);
 
-	const startedAt = row.startedAt ?? 0;
+	const startedAt = row.startedAt;
+	// A not-yet-started row has no meaningful elapsed time; show zero rather
+	// than `now - 0` (a giant number).
 	const elapsedMs =
-		row.finishedAt == null ? now - startedAt : row.finishedAt - startedAt;
+		startedAt == null ? 0 : Math.max(0, (row.finishedAt ?? now) - startedAt);
 	const elapsed = formatDurationMs(elapsedMs);
 
 	const tools = `${row.toolUses} ${row.toolUses === 1 ? "tool" : "tools"}`;

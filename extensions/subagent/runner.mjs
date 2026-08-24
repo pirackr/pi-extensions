@@ -99,18 +99,48 @@ function contentText(message) {
 		.join("");
 }
 
-function toolActivity(name) {
-	const activities = {
-		web_lookup: "searching web",
-		fetch_web: "fetching web page",
-		read: "reading files",
-		ctx_read: "reading files",
-		write: "writing files",
-		edit: "editing files",
-		ctx_shell: "running command",
-		shell: "running command",
-	};
-	return activities[name] ?? `using ${name}`;
+/** Single-line, truncated preview of a string value. */
+function previewText(value, max = 48) {
+	const flat = value.replace(/\s+/g, " ").trim();
+	return flat.length > max ? flat.slice(0, max - 1) + "…" : flat;
+}
+
+/**
+ * Compact hint of what a tool call is operating on: the first meaningful
+ * string argument (path, query, command, …) so the widget shows the real
+ * call instead of a generic verb.
+ */
+function argHint(args) {
+	if (!args || typeof args !== "object") return "";
+	const record = args;
+	const preferred = [
+		"path",
+		"file_path",
+		"query",
+		"command",
+		"pattern",
+		"url",
+		"symbol",
+		"name",
+		"description",
+	];
+	for (const key of [...preferred, ...Object.keys(record)]) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim()) return previewText(value);
+	}
+	return "";
+}
+
+function toolActivity(name, args) {
+	const hint = argHint(args);
+	return hint ? `${name} ${hint}` : name;
+}
+
+/** Last line of the streamed assistant text, for the responding state. */
+function lastTextActivity(text) {
+	const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+	const last = lines[lines.length - 1];
+	return last ? previewText(last, 60) : null;
 }
 
 function totalTokensFrom(value) {
@@ -503,7 +533,9 @@ export async function runTaskMode(requestPath, deps = {}) {
 				appendLog(files.transcript, messageEvent.delta);
 				writeOutput(messageEvent.delta);
 				scheduleStatus({
-					...(activeTool === null ? { activity: "responding" } : {}),
+					...(activeTool === null
+						? { activity: lastTextActivity(streamedText) ?? "responding" }
+						: {}),
 					heartbeatAt: clock.now(),
 					usage: { totalTokens, toolUses, durationMs: clock.now() - startedAt },
 					...(Number.isFinite(streamedCost) ? { cost: Number(streamedCost) } : {}),
@@ -536,7 +568,7 @@ export async function runTaskMode(requestPath, deps = {}) {
 			appendLog(files.transcript, `\n[tool] ${name} ${JSON.stringify(event.args ?? {})}\n`);
 			writeOutput(`\n[tool] ${name}\n`);
 			scheduleStatus({
-				activity: toolActivity(name),
+				activity: toolActivity(name, event.args),
 				tools,
 				toolUses,
 				usage: { totalTokens, toolUses, durationMs: clock.now() - startedAt },

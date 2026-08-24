@@ -169,13 +169,13 @@ export interface NotificationItem {
  * The normalized input contract for the `Agent` tool.
  *
  * `description` is a short UI label (never the whole prompt), `prompt` is the
- * complete task contract, `subagent_type` selects a configured profile, and
- * `run_in_background` defaults to `true`.
+ * complete task contract, `subagent_type` selects a configured profile (defaults
+ * to `"general-purpose"` when omitted), and `run_in_background` defaults to `true`.
  */
 export interface AgentRequest {
 	readonly description: string;
 	readonly prompt: string;
-	readonly subagent_type: string;
+	readonly subagent_type: string | undefined;
 	readonly run_in_background: boolean;
 }
 
@@ -205,14 +205,7 @@ export function normalizeAgentRequest(
 	if (typeof raw.prompt !== "string" || raw.prompt.length === 0) {
 		throw new Error("prompt is required and must be a non-empty string");
 	}
-	if (
-		typeof raw.subagent_type !== "string" ||
-		raw.subagent_type.length === 0
-	) {
-		throw new Error(
-			"subagent_type is required and must be a non-empty string",
-		);
-	}
+	// subagent_type is optional; defaults to "general-purpose" in the manager.
 
 	const runInBackground = normalizeRunInBackground(raw.run_in_background);
 

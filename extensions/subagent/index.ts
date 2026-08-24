@@ -481,6 +481,11 @@ export function installSubagentExtension(
 					origin: ctx.sessionManager.getSessionId(),
 					groupId: null,
 				});
+				// A fresh attach (startup or /reload) must not resurrect agents that
+				// already finished in an earlier session; only live work is shown.
+				for (const item of await runtime.manager.list()) {
+					if (terminal(item.state)) dismissedTerminal.add(item.agentId);
+				}
 				await refreshUI(runtime);
 				await runtime.coordinator?.recover();
 				runtime.activate();

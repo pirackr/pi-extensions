@@ -433,17 +433,22 @@ describe("Task 12 extension integration", () => {
 		expect(h.coordinator.turnEnd).toHaveBeenCalledOnce();
 	});
 
-	it("dismisses completed widget rows on the next input while retaining live rows", async () => {
+	it("hides pre-existing terminal rows at startup and dismisses new ones on input", async () => {
 		const done = manifest("d001", "succeeded");
 		const live = manifest("a001", "running");
 		const h = harness({ manifests: [done, live] });
 		const ctx = fakeContext();
 		await emit(h, "session_start", { type: "session_start", reason: "startup" }, ctx);
-		expect(ctx.ui.widgets.get("subagent-agents")?.join("\n")).toContain("task d001");
-		await emit(h, "input", { type: "input", text: "next" }, ctx);
-		const rendered = ctx.ui.widgets.get("subagent-agents")?.join("\n") ?? "";
+		// Terminal agents from before the attach are never shown…
+		let rendered = ctx.ui.widgets.get("subagent-agents")?.join("\n") ?? "";
 		expect(rendered).not.toContain("task d001");
 		expect(rendered).toContain("task a001");
+		// …and an agent that finishes mid-session stays visible until input.
+		const finishedMidSession = manifest("e001", "succeeded");
+		h.manager.list.mockResolvedValue?.([finishedMidSession, live]);
+		await emit(h, "input", { type: "input", text: "next" }, ctx);
+		rendered = ctx.ui.widgets.get("subagent-agents")?.join("\n") ?? "";
+		expect(rendered).not.toContain("task d001");
 	});
 
 	it("renders compact notification summaries without the result body", () => {

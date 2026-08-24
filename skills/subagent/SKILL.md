@@ -51,6 +51,11 @@ layer that specifies a value wins, except `models` (merged) and `agentDirs`
 through this precedence. Run `/reload` after changing configuration or
 profiles.
 
+The `subagent_type` parameter must match a configured profile name. Available
+profiles depend on your configuration layers; the error message lists them if
+you use an invalid name. Common profiles include `general-purpose` and any
+project-specific profiles defined in `.pi/subagent/config.json`.
+
 ## Trusted project gate
 
 The project layer at `<project>/.pi/subagent/config.json` loads only when the

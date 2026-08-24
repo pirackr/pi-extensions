@@ -284,10 +284,10 @@ describe("validateConfiguration", () => {
 			validateConfiguration({ ...validConfig, maxConcurrent: 65 }),
 		).toThrow("maxConcurrent must be an integer between 1 and 64");
 	});
-	it("throws for non-integer defaultTimeoutSeconds", () => {
+	it("throws for negative defaultTimeoutSeconds", () => {
 		expect(() =>
-			validateConfiguration({ ...validConfig, defaultTimeoutSeconds: 5 }),
-		).toThrow("defaultTimeoutSeconds must be an integer between 10 and 1800");
+			validateConfiguration({ ...validConfig, defaultTimeoutSeconds: -1 }),
+		).toThrow("defaultTimeoutSeconds must be a non-negative integer");
 	});
 	it("throws for empty model alias", () => {
 		expect(() =>
@@ -347,7 +347,7 @@ describe("loadSubagentConfiguration — packaged defaults", () => {
 		expect(config.notificationGroupWaitSeconds).toBe(30);
 		expect(config.soloPreviewCharacters).toBe(500);
 		expect(config.groupPreviewCharacters).toBe(300);
-		expect(config.defaultTimeoutSeconds).toBe(300);
+		expect(config.defaultTimeoutSeconds).toBe(0);
 		expect(config.loadContextFiles).toBe(true);
 		expect(userConfigPath).toBe(
 			path.join("/mock/agent/dir", "subagent", "config.json"),

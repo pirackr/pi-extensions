@@ -75,6 +75,23 @@ const WIDGET_KEY = "subagent-agents";
 const DEFAULT_WIDGET_WIDTH = 100;
 const POLL_MS = 250;
 
+let widgetFrame = 0;
+let spinnerInterval: ReturnType<typeof setInterval> | null = null;
+
+function startSpinnerTimer(refresh: () => Promise<void>) {
+	if (spinnerInterval) return;
+	spinnerInterval = setInterval(() => {
+		refresh();
+	}, 80);
+}
+
+function stopSpinnerTimer() {
+	if (spinnerInterval) {
+		clearInterval(spinnerInterval);
+		spinnerInterval = null;
+	}
+}
+
 type Environment = Readonly<Record<string, string | undefined>>;
 
 export interface RuntimeFactoryContext {
@@ -220,6 +237,7 @@ function widgetRows(manifests: readonly AgentManifest[]): AgentWidgetRow[] {
 			contextWindow?: number | null;
 			usage?: Usage | null;
 		};
+		const isTerminal = TERMINAL_STATES.has(item.state as TaskStatus);
 		return {
 			agentId: item.agentId,
 			parentAgentId: item.parentAgentId,
@@ -233,7 +251,7 @@ function widgetRows(manifests: readonly AgentManifest[]): AgentWidgetRow[] {
 			toolUses: live.usage?.toolUses ?? 0,
 			totalTokens: live.usage?.totalTokens ?? 0,
 			contextWindow: live.contextWindow ?? null,
-			activity: live.activity ?? null,
+			activity: isTerminal ? null : live.activity ?? null,
 		};
 	});
 }
@@ -309,13 +327,20 @@ export function installSubagentExtension(
 		ctx.ui.setWidget(
 			WIDGET_KEY,
 			renderWidgetLines(widgetRows(visible), {
-				frame: 0,
+				frame: widgetFrame++,
 				width: DEFAULT_WIDGET_WIDTH,
 				now: Date.now(),
 			}),
 			{ placement: "aboveEditor" },
 		);
 		ctx.ui.setStatus(WIDGET_KEY, renderFooter(countAgents(all)));
+		// Drive spinner animation while agents are running
+		const counts = countAgents(all);
+		if (counts.running > 0 || counts.queued > 0) {
+			startSpinnerTimer(refreshUI);
+		} else {
+			stopSpinnerTimer();
+		}
 	};
 
 	pi.registerTool({
@@ -494,6 +519,7 @@ export function installSubagentExtension(
 	});
 
 	pi.on("session_shutdown", async () => {
+		stopSpinnerTimer();
 		if (!shutdownPromise) {
 			shutdownPromise = (async () => {
 				const runtime = await runtimeIfStarted();

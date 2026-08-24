@@ -25,13 +25,19 @@ function readText(filePath: string, maxChars: number): string {
 	if (!existsSync(filePath)) return "";
 	try {
 		const raw = readFileSync(filePath, "utf8");
-		return raw.length > maxChars ? raw.slice(0, maxChars) + "\n... (truncated)" : raw;
+		return raw.length > maxChars
+			? raw.slice(0, maxChars) + "\n... (truncated)"
+			: raw;
 	} catch {
 		return "";
 	}
 }
 
-function buildSummaryPrompt(transcript: string, resultOutput: string, terminalReason: string | null): string {
+function buildSummaryPrompt(
+	transcript: string,
+	resultOutput: string,
+	terminalReason: string | null,
+): string {
 	const reasonLine = terminalReason ? `\nStop reason: ${terminalReason}` : "";
 	return `You are a summarizer. Read the following agent transcript and produce a concise summary in 2-3 sentences:
 - What the agent was trying to do
@@ -57,14 +63,17 @@ function spawnSummarizer(
 			deps.nodeBin,
 			[
 				deps.runnerPath.replace(/runner\.mjs$/, "../cli.js"),
-				"--mode", "rpc",
+				"--mode",
+				"rpc",
 				"--no-session",
 				"--no-extensions",
 				"--no-skills",
 				"--no-prompt-templates",
 				"--no-themes",
-				"--model", deps.model,
-				"--tools", "none",
+				"--model",
+				deps.model,
+				"--tools",
+				"none",
 			],
 			{
 				cwd: deps.cwd,
@@ -84,7 +93,11 @@ function spawnSummarizer(
 		const finish = (text: string) => {
 			if (settled) return;
 			settled = true;
-			try { child.kill("SIGTERM"); } catch { /* best effort */ }
+			try {
+				child.kill("SIGTERM");
+			} catch {
+				/* best effort */
+			}
 			resolve(text);
 		};
 
@@ -105,13 +118,19 @@ function spawnSummarizer(
 			}
 		});
 
-		child.stderr.on("data", () => { /* ignore stderr */ });
+		child.stderr.on("data", () => {
+			/* ignore stderr */
+		});
 
 		child.on("error", () => finish(""));
 		child.on("close", () => finish(stdout.trim() || ""));
 
 		// Send the prompt via stdin (Pi RPC protocol)
-		const promptMsg = JSON.stringify({ type: "prompt", id: "sum-1", message: prompt });
+		const promptMsg = JSON.stringify({
+			type: "prompt",
+			id: "sum-1",
+			message: prompt,
+		});
 		child.stdin.write(promptMsg + "\n");
 
 		// Timeout safety: don't let the summarizer run forever

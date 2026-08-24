@@ -30,12 +30,29 @@ import type { SubagentManager } from "./manager.ts";
 
 import type { NotificationItem } from "./notifications.ts";
 
-import { type SelectItem, type SelectListTheme, Container, Key, matchesKey, SelectList, Text } from "@earendil-works/pi-tui";
+import {
+	type SelectItem,
+	type SelectListTheme,
+	Container,
+	Key,
+	matchesKey,
+	SelectList,
+	Text,
+} from "@earendil-works/pi-tui";
 
 // ---------------------------------------------------------------------------
 // State markers — one glyph per lifecycle state. Kept in one place so the
 // widget, the compact tool result, and notification summaries stay consistent.
 // ---------------------------------------------------------------------------
+
+const SPINNER_GLYPHS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_INTERVAL_MS = 80;
+
+function spinnerGlyph(frame: number): string {
+	return SPINNER_GLYPHS[
+		Math.floor((frame * SPINNER_INTERVAL_MS) / 1000) % SPINNER_GLYPHS.length
+	];
+}
 
 const STATE_MARKERS: Record<TaskStatus, string> = {
 	queued: "⏳",
@@ -178,14 +195,20 @@ interface RendererTheme {
  * (as `pi` does at call time) the text is painted; when `theme` is absent or
  * shape-less (as in the RPC/string harness) the raw text is returned verbatim.
  */
-function themed(theme: RendererTheme | unknown | undefined, text: string): string {
+function themed(
+	theme: RendererTheme | unknown | undefined,
+	text: string,
+): string {
 	if (
 		theme &&
 		typeof theme === "object" &&
 		typeof (theme as RendererTheme).fg === "function" &&
 		typeof (theme as RendererTheme).bold === "function"
 	) {
-		return (theme as RendererTheme).fg("toolTitle", (theme as RendererTheme).bold(text));
+		return (theme as RendererTheme).fg(
+			"toolTitle",
+			(theme as RendererTheme).bold(text),
+		);
 	}
 	return text;
 }
@@ -204,7 +227,11 @@ export function createToolRenderers() {
 			theme?: RendererTheme,
 			_context?: unknown,
 		): Text =>
-			new Text(themed(theme, `▸ ${args.subagent_type} (${args.description})`), 0, 0),
+			new Text(
+				themed(theme, `▸ ${args.subagent_type} (${args.description})`),
+				0,
+				0,
+			),
 		renderResult: (
 			value: AgentReceipt | ResultResponse,
 			options: { expanded?: boolean } = {},
@@ -218,11 +245,7 @@ export function createToolRenderers() {
 				}
 				return container;
 			}
-			return new Text(
-				themed(theme, compactResultText(value)),
-				0,
-				0,
-			);
+			return new Text(themed(theme, compactResultText(value)), 0, 0);
 		},
 	};
 }
@@ -254,7 +277,9 @@ function isForegroundCompletion(
 export function expandedToolDetails(receipt: AgentReceipt): string[] {
 	const lines: string[] = [];
 	if (receipt.tmuxWindow && receipt.tmuxSession) {
-		lines.push(labeledRow("Tmux:", `${receipt.tmuxSession}:${receipt.tmuxWindow}`));
+		lines.push(
+			labeledRow("Tmux:", `${receipt.tmuxSession}:${receipt.tmuxWindow}`),
+		);
 		if (receipt.attachCommand) {
 			lines.push(labeledRow("Attach:", receipt.attachCommand));
 		}
@@ -296,29 +321,32 @@ export interface RenderWidgetOptions {
 /** Multiple lines per row (main line + optional activity preview), truncated to width. */
 export function renderWidgetLines(
 	rows: AgentWidgetRow[],
-	{ width, now }: RenderWidgetOptions,
+	{ frame, width, now }: RenderWidgetOptions,
 ): string[] {
 	const lines: string[] = [];
 	for (let i = 0; i < rows.length; i++) {
 		const row = rows[i];
 		const isLast = i === rows.length - 1 || rows[i + 1]?.depth < row.depth;
-		lines.push(...formatWidgetRow(row, width, now, isLast));
+		lines.push(...formatWidgetRow(row, width, now, isLast, frame));
 	}
 	return lines;
 }
 
 function treePrefix(depth: number, isLast: boolean): string {
 	if (depth === 0) return isLast ? "└─ " : "├─ ";
-	const parent = "│  ".repeat(depth - 1);
-	return parent + (isLast ? "└─ " : "├─ ");
+	return "│  ".repeat(depth) + (isLast ? "└─ " : "├─ ");
 }
 
-function continuationPrefix(depth: number): string {
-	if (depth === 0) return "   ";
-	return "│  ".repeat(depth);
+function continuationPrefix(depth: number, parentIsLast: boolean): string {
+	if (depth === 0) return parentIsLast ? "   " : "│  ";
+	const parent = "│  ".repeat(depth);
+	return parent + (parentIsLast ? "   " : "│  ");
 }
 
-function contextPercent(totalTokens: number, contextWindow: number | null): string {
+function contextPercent(
+	totalTokens: number,
+	contextWindow: number | null,
+): string {
 	if (!contextWindow || contextWindow <= 0) return "";
 	const pct = Math.round((totalTokens / contextWindow) * 100);
 	return ` (${pct}%)`;
@@ -329,13 +357,17 @@ function formatWidgetRow(
 	width: number,
 	now: number,
 	isLast: boolean,
+	frame: number,
 ): string[] {
-	const marker = STATE_MARKERS[row.state] ?? "·";
+	const isAnimating = row.state === "running" || row.state === "starting";
+	const marker = isAnimating
+		? spinnerGlyph(frame)
+		: (STATE_MARKERS[row.state] ?? "·");
 	const prefix = treePrefix(row.depth, isLast);
 
 	const startedAt = row.startedAt ?? 0;
 	const elapsedMs =
-		row.finishedAt != null ? row.finishedAt - startedAt : now - startedAt;
+		row.finishedAt == null ? now - startedAt : row.finishedAt - startedAt;
 	const elapsed = formatDurationMs(elapsedMs);
 
 	const tools = `${row.toolUses} ${row.toolUses === 1 ? "tool" : "tools"}`;
@@ -347,10 +379,9 @@ function formatWidgetRow(
 
 	// Activity preview line
 	if (row.activity && row.activity.length > 0) {
-		const preview = row.activity.length > 60
-			? row.activity.slice(0, 57) + "…"
-			: row.activity;
-		const activityPrefix = continuationPrefix(row.depth);
+		const preview =
+			row.activity.length > 60 ? row.activity.slice(0, 57) + "…" : row.activity;
+		const activityPrefix = continuationPrefix(row.depth, isLast);
 		result.push(truncateToWidth(`${activityPrefix}  └─ ${preview}`, width));
 	}
 
@@ -367,14 +398,16 @@ export interface FooterCounts {
 	readonly finished: number;
 }
 
-export function renderFooter({ running, queued, finished }: FooterCounts): string {
+export function renderFooter({
+	running,
+	queued,
+	finished,
+}: FooterCounts): string {
 	return `Agents: ${running} running · ${queued} queued · ${finished} finished`;
 }
 
 /** Bucket durable manifests into running (+starting), queued, and finished. */
-export function countAgents(
-	manifests: readonly AgentManifest[],
-): FooterCounts {
+export function countAgents(manifests: readonly AgentManifest[]): FooterCounts {
 	let running = 0;
 	let queued = 0;
 	let finished = 0;
@@ -394,7 +427,9 @@ export function countAgents(
 // Compact notifications (summary + usage only, never the output body)
 // ---------------------------------------------------------------------------
 
-export function renderNotificationMessage(items: readonly NotificationItem[]): string {
+export function renderNotificationMessage(
+	items: readonly NotificationItem[],
+): string {
 	return items.map(renderNotificationItem).join("\n");
 }
 
@@ -434,14 +469,16 @@ export function classifyAgentRow(manifest: AgentManifest): AgentRowAction {
 /** Actions offered for a row in its lifecycle state. */
 function actionsFor(manifest: AgentManifest): AgentRowAction[] {
 	if (isTerminalState(manifest.state)) return ["retrieve", "path"];
-	if (manifest.state === "running" || manifest.state === "starting") return ["attach"];
+	if (manifest.state === "running" || manifest.state === "starting")
+		return ["attach"];
 	return ["stop"];
 }
 
 /** The exact attach command for a task, or `null` when no window has started. */
-export function attachCommandFor(
-	task: { readonly tmuxSession: string | null; readonly tmuxWindow: string | null },
-): string | null {
+export function attachCommandFor(task: {
+	readonly tmuxSession: string | null;
+	readonly tmuxWindow: string | null;
+}): string | null {
 	if (!task.tmuxWindow || !task.tmuxSession) return null;
 	return `tmux attach -t ${task.tmuxSession} \\; select-window -t ${task.tmuxWindow}`;
 }
@@ -530,12 +567,15 @@ export class AgentsView {
 		this.selectedIndex = 0;
 		const depthBy = buildDepths(manifests);
 		// Stable grouping by state (active tasks first), preserving list order.
-		const ordered = [...manifests].sort((a, b) =>
-			stateGroupIndex(a.state) - stateGroupIndex(b.state),
+		const ordered = [...manifests].sort(
+			(a, b) => stateGroupIndex(a.state) - stateGroupIndex(b.state),
 		);
 		const body: AgentsSelectable[] = ordered.map((manifest) => ({
 			agentId: manifest.agentId,
-			label: applyDepth(depthBy.get(manifest.agentId) ?? 0, `${manifest.profile.name}: ${manifest.description}`),
+			label: applyDepth(
+				depthBy.get(manifest.agentId) ?? 0,
+				`${manifest.profile.name}: ${manifest.description}`,
+			),
 			actions: actionsFor(manifest),
 			state: manifest.state,
 			profile: manifest.profile.name,
@@ -561,7 +601,11 @@ export class AgentsView {
 			...body.map((row) => [row.agentId, row] as const),
 		]);
 		this.items = [
-			{ value: refresh.agentId, label: refresh.label, description: refresh.actions.join(" · ") },
+			{
+				value: refresh.agentId,
+				label: refresh.label,
+				description: refresh.actions.join(" · "),
+			},
 			...body.map((row) => ({
 				value: row.agentId,
 				label: row.label,
@@ -601,7 +645,10 @@ export class AgentsView {
 			// Entering on the refresh sentinel returns the selection to the
 			// bottom; any real row yields its primary action.
 			if (selected.agentId === "__refresh__") return "rerender";
-			return { action: selected.actions[0] as AgentRowAction, id: selected.agentId };
+			return {
+				action: selected.actions[0] as AgentRowAction,
+				id: selected.agentId,
+			};
 		}
 		return "rerender";
 	}
@@ -852,33 +899,31 @@ async function pickRowAction(
 		label: actionLabelFor(action),
 		description: selectable.state,
 	}));
-	return (await ctx.ui.custom<string>(
-		(tui, _theme, _keybindings, done) => {
-			const picker = new SelectList(
-				items,
-				Math.min(items.length, 5),
-				selectListTheme,
-			);
-			picker.onCancel = () => {
-				done("cancel");
-			};
-			picker.onSelect = (item) => {
-				done(item.value);
-			};
-			return {
-				render(width: number): string[] {
-					return picker.render(width);
-				},
-				invalidate(): void {
-					picker.invalidate();
-				},
-				handleInput(data: string): void {
-					picker.handleInput(data);
-					tui.requestRender();
-				},
-			};
-		},
-	)) as AgentRowAction;
+	return (await ctx.ui.custom<string>((tui, _theme, _keybindings, done) => {
+		const picker = new SelectList(
+			items,
+			Math.min(items.length, 5),
+			selectListTheme,
+		);
+		picker.onCancel = () => {
+			done("cancel");
+		};
+		picker.onSelect = (item) => {
+			done(item.value);
+		};
+		return {
+			render(width: number): string[] {
+				return picker.render(width);
+			},
+			invalidate(): void {
+				picker.invalidate();
+			},
+			handleInput(data: string): void {
+				picker.handleInput(data);
+				tui.requestRender();
+			},
+		};
+	})) as AgentRowAction;
 }
 
 /** Human-readable label for a row action, offered inside the action picker. */
@@ -898,9 +943,9 @@ function actionLabelFor(action: AgentRowAction): string {
 }
 
 /** Build the documented `SelectListTheme` from the live `ctx.ui.theme`. */
-function selectListThemeFor(
-	theme: { fg(color: string, text: string): string },
-): SelectListTheme {
+function selectListThemeFor(theme: {
+	fg(color: string, text: string): string;
+}): SelectListTheme {
 	return {
 		selectedPrefix: (text) => style(theme, text),
 		selectedText: (text) => style(theme, text),
@@ -911,7 +956,10 @@ function selectListThemeFor(
 }
 
 /** Paint `text` with the live theme when available, otherwise return it raw. */
-function style(theme: { fg(color: string, text: string): string }, text: string): string {
+function style(
+	theme: { fg(color: string, text: string): string },
+	text: string,
+): string {
 	try {
 		return theme.fg("muted", text);
 	} catch {

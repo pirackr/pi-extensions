@@ -306,8 +306,9 @@ describe("renderWidgetLines", () => {
 			width: 80,
 			now: 12_000,
 		});
+		// Single item at depth 0 → last sibling → └─
 		expect(lines).toEqual([
-			"⠋ subagent-a1b2 general do abc xyz 12.0s/300s 3 tools 1.2k tok",
+			"└─ ⠋ subagent(general): do abc xyz · 12.0s · 3 tools · 1.2k tokens",
 		]);
 	});
 
@@ -317,8 +318,9 @@ describe("renderWidgetLines", () => {
 			width: 80,
 			now: 20_000,
 		});
+		// Depth 1, last sibling → "│  └─"
 		expect(lines).toEqual([
-			"  ✓ subagent-c3d4 summarize cleanup 5.0s 1 tool 500 tok succeeded",
+			"│  └─ ✓ subagent(summarize): cleanup · 5.0s · 1 tool · 500 tokens",
 		]);
 	});
 

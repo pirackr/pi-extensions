@@ -526,11 +526,10 @@ export function loadSubagentConfiguration(
 export function validateConfiguration(config: SubagentConfiguration): void {
 	if (
 		!Number.isInteger(config.defaultTimeoutSeconds) ||
-		config.defaultTimeoutSeconds < 10 ||
-		config.defaultTimeoutSeconds > 1800
+		config.defaultTimeoutSeconds < 0
 	) {
 		throw new Error(
-			"defaultTimeoutSeconds must be an integer between 10 and 1800.",
+			"defaultTimeoutSeconds must be a non-negative integer.",
 		);
 	}
 	if (

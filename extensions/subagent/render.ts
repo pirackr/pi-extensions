@@ -327,12 +327,13 @@ export interface RenderWidgetOptions {
 	readonly now: number;
 }
 
-/** Multiple lines per row (main line + optional activity preview), truncated to width. */
+/** Multiple lines per row (title + main line + optional activity preview), truncated to width. */
 export function renderWidgetLines(
 	rows: AgentWidgetRow[],
 	{ frame, width, now }: RenderWidgetOptions,
 ): string[] {
 	const lines: string[] = [];
+	if (rows.length > 0) lines.push("Agents");
 	for (let i = 0; i < rows.length; i++) {
 		const row = rows[i];
 		const isLast = i === rows.length - 1 || rows[i + 1]?.depth < row.depth;

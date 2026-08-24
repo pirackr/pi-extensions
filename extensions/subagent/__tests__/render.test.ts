@@ -308,6 +308,7 @@ describe("renderWidgetLines", () => {
 		});
 		// Single item at depth 0 → last sibling → └─
 		expect(lines).toEqual([
+			"Agents",
 			"└─ ⠋ subagent(general): do abc xyz · 12.0s · 3 tools · 1.2k tokens",
 		]);
 	});
@@ -320,6 +321,7 @@ describe("renderWidgetLines", () => {
 		});
 		// Depth 1, last sibling → "│  └─"
 		expect(lines).toEqual([
+			"Agents",
 			"│  └─ ✓ subagent(summarize): cleanup · 5.0s · 1 tool · 500 tokens",
 		]);
 	});

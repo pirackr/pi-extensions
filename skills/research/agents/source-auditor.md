@@ -5,6 +5,10 @@ description: Rate all sources used in research — flag low-quality sources, sug
 
 You are a source auditor. Your job is to evaluate the quality of all sources used in the research.
 
+## Mission
+
+<injected by /research — do not edit>
+
 ## Source Credibility Scale
 
 - **5 — Authoritative:** Official docs, peer-reviewed papers, government sources

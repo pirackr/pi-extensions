@@ -127,7 +127,7 @@ describe("research prompt contract", () => {
 			expect(content).toMatch(/<artifact>/);
 		});
 
-		it('every agent: "..." literal in run_subagents examples is a registered profile', () => {
+		it('every subagent_type: "..." literal in Agent examples is a registered profile', () => {
 			const resolvable = new Set([
 				"planner",
 				"scout_research",
@@ -140,16 +140,16 @@ describe("research prompt contract", () => {
 				"source_auditor",
 				"contradiction_resolver",
 			]);
-			const agentLiteralPattern = /agent:\s*["']([^"']+)["']/gi;
+			const subagentTypePattern = /subagent_type:\s*["']([^"']+)["']/gi;
 			const found = new Set<string>();
 			let match: RegExpExecArray | null;
-			while ((match = agentLiteralPattern.exec(content)) !== null) {
+			while ((match = subagentTypePattern.exec(content)) !== null) {
 				found.add(match[1]);
 			}
 			for (const name of found) {
 				expect(
 					resolvable.has(name),
-					`agent literal "${name}" is not a registered profile`,
+					`subagent_type literal "${name}" is not a registered profile`,
 				).toBe(true);
 			}
 		});
@@ -158,39 +158,76 @@ describe("research prompt contract", () => {
 			expect(content).toContain("scout_research");
 			expect(content).toContain("worker");
 			expect(content).toContain("citation_agent");
-			expect(content).toContain('agent: "consolidator"');
-			expect(content).toContain('agent: "fragment_writer"');
+			expect(content).toContain('subagent_type: "consolidator"');
+			expect(content).toContain('subagent_type: "fragment_writer"');
 		});
 
-		it("does not embed per-agent runtime config (model/tools/access/timeout) adjacent to dispatches", () => {
+		it("does not embed per-agent runtime config (model/tools/access/timeout) adjacent to Agent calls", () => {
 			const blockPattern = /```js\s*([\s\S]*?)```/g;
 			let block: RegExpExecArray | null;
 			while ((block = blockPattern.exec(content)) !== null) {
 				const code = block[1];
-				if (code.includes("run_subagents")) {
+				if (code.includes("Agent(")) {
 					expect(
 						code,
-						"run_subagents block must not contain model:",
+						"Agent block must not contain model:",
 					).not.toMatch(/\bmodel:\s*/i);
 					expect(
 						code,
-						"run_subagents block must not contain tools:",
+						"Agent block must not contain tools:",
 					).not.toMatch(/\btools:\s*/i);
 					expect(
 						code,
-						"run_subagents block must not contain access:",
+						"Agent block must not contain access:",
 					).not.toMatch(/\baccess:\s*/i);
 					expect(
 						code,
-						"run_subagents block must not contain timeoutSeconds",
+						"Agent block must not contain timeoutSeconds",
 					).not.toMatch(/\btimeoutSeconds\b/);
 				}
 			}
 		});
 
-		it("does not contain multi-task run_subagents arrays", () => {
-			const multiTask = /tasks:\s*\[\s*\{[\s\S]*?\},\s*\{/i;
-			expect(content).not.toMatch(multiTask);
+		it("uses foreground Agent calls (run_in_background: false) for research dispatch", () => {
+			const blockPattern = /```js\s*([\s\S]*?)```/g;
+			let block: RegExpExecArray | null;
+			while ((block = blockPattern.exec(content)) !== null) {
+				const code = block[1];
+				if (code.includes("Agent(") && code.includes("subagent_type:")) {
+					expect(
+						code,
+						"Research Agent calls must use run_in_background: false",
+					).toMatch(/run_in_background:\s*false/);
+				}
+			}
+		});
+
+		it("does not use run_subagents in Agent-based dispatch examples", () => {
+			const blockPattern = /```js\s*([\s\S]*?)```/g;
+			let block: RegExpExecArray | null;
+			while ((block = blockPattern.exec(content)) !== null) {
+				const code = block[1];
+				if (code.includes("Agent(")) {
+					expect(
+						code,
+						"Agent block must not contain run_subagents",
+					).not.toMatch(/run_subagents/);
+				}
+			}
+		});
+
+		it("does not use legacy batch fields (tasks, return_mode, retain_artifacts, result_path) in Agent calls", () => {
+			const blockPattern = /```js\s*([\s\S]*?)```/g;
+			let block: RegExpExecArray | null;
+			while ((block = blockPattern.exec(content)) !== null) {
+				const code = block[1];
+				if (code.includes("Agent(")) {
+					expect(code, "Agent block must not contain tasks:").not.toMatch(/\btasks:\s*\[/);
+					expect(code, "Agent block must not contain return_mode:").not.toMatch(/\breturn_mode:/);
+					expect(code, "Agent block must not contain retain_artifacts:").not.toMatch(/\bretain_artifacts:/);
+					expect(code, "Agent block must not contain result_path:").not.toMatch(/\bresult_path:/);
+				}
+			}
 		});
 
 		it("contains valid org heading markers", () => {
@@ -220,6 +257,15 @@ describe("research prompt contract", () => {
 
 			it("contains artifact block instructions", () => {
 				expect(content).toMatch(/<artifact>/);
+			});
+
+			it("is a self-contained task contract (mentions the mission or a placeholder)", () => {
+				// Each role prompt must be self-contained — it should reference
+				// the mission or have an injection point for it
+				expect(
+					content.toLowerCase(),
+					"Role prompt must reference mission or have injection point",
+				).toMatch(/mission|<injected|research mission|\[mission/);
 			});
 		});
 	}

@@ -15,7 +15,7 @@ pi-extensions/
 │   └── web-search/
 │       └── index.ts         # Extension — registers pi tools
 ├── skills/                  # Pi auto-discovers SKILL.md directories here
-│   ├── subagent/            # Delegation policy for run_subagents
+│   ├── subagent/            # Delegation policy for the Agent tool
 │   └── web-search/
 │       └── SKILL.md         # Skill — agent guidance
 └── subagents/               # Bundled declarative agent profiles
@@ -34,22 +34,27 @@ pi install ~/Working/grinder/pi-extensions
 
 No `npm install` needed — `pi install` registers the path in settings and auto-discovers resources on the next run or `/reload`.
 
-## Tmux Subagents
+## Subagents
 
-The `run_subagents` tool launches one or more independent Pi processes in a private tmux session. Bundled profiles provide `scout`, `worker`, `reviewer`, and `tester`; profile files control prompts, models, tools, access, and timeouts without changing the supervisor.
+The `Agent` tool launches independent Pi subagents managed by the subagent
+extension. Each `Agent` call runs one subagent; background execution defaults to `true`, so it returns a durable receipt with a four-character agent id (instead of waiting). Retrieve the outcome with `get_subagent_result`, and use `stop_subagent` to cancel queued or running work.
+
+Bundled profiles provide `scout`, `worker`, `reviewer`, and `tester`; profile files control prompts, models, tools, access, and timeouts without changing the runtime.
 
 Requirements:
 
 - `tmux` and Node.js available on `PATH`
 - Provider extensions and models referenced by the active configuration
 
-Use one task for a single agent or multiple non-overlapping tasks for parallel work. Agents with shell or write access must not share a Git worktree. During a run, attach using the session command reported by the tool.
+Use one call for a single agent or multiple non-overlapping calls for parallel work. Agents with shell or write access must not share a Git worktree. Attach to a live run using the tmux command reported in the receipt.
 
-Bundled defaults live in `config/tmux-subagent.json` and `subagents/*.md`. Override them without modifying the package:
+Bundled defaults live in `config/subagent.json` and
+`extensions/subagent/subagents/*.md`. Override them without modifying the
+package:
 
-- User configuration: `$PI_AGENT_DIR/tmux-subagent/config.json` (normally `~/.pi/agent/tmux-subagent/config.json`)
-- User profiles: `$PI_AGENT_DIR/tmux-subagent/agents/*.md` (normally `~/.pi/agent/tmux-subagent/agents/*.md`)
-- Project configuration: `<project>/.pi/tmux-subagent/config.json` — trusted projects only; highest precedence
+- User configuration: `$PI_AGENT_DIR/subagent/config.json` (normally `~/.pi/agent/subagent/config.json`)
+- User profiles: `$PI_AGENT_DIR/subagent/agents/*.md` (normally `~/.pi/agent/subagent/agents/*.md`)
+- Project configuration: `<project>/.pi/subagent/config.json` — trusted projects only; highest precedence
 - Additional profile directories: `agentDirs` in user or project configuration
 
 Configuration values override bundled values (project > user > bundled). User profiles override bundled profiles with the same `name`. Run `/reload` after changing configuration or profiles.
@@ -79,13 +84,14 @@ Example configuration:
   "toolAccess": {},
   "agentDirs": [],
   "loadContextFiles": true,
-  "maxTasks": 4,
-  "defaultTimeoutSeconds": 300,
-  "retainArtifacts": "on_failure"
+  "maxConcurrent": 4,
+  "defaultTimeoutSeconds": 300
 }
 ```
 
 `$PI_AGENT_DIR` resolves through Pi's active agent directory, including `PI_CODING_AGENT_DIR` overrides. Setting `childExtensions` in user configuration replaces the bundled list. Register extension-provided tools in `toolAccess` with their minimum `read`, `shell`, or `write` capability before using them in a profile.
+
+Because background runs are asynchronous and durable, results survive a `/reload` or a crash: re-fetch a finished agent's output with `get_subagent_result` after recovery rather than relaunching it.
 
 Example profile:
 

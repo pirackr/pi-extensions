@@ -1,9 +1,4 @@
 {
-  "models": {
-    "strong": "x-preview-f-free",
-    "eval": "mimo-v2.5-free",
-    "light": "x-preview-f-free"
-  },
   "childExtensions": [
     "../extensions/web-search/index.ts"
   ],
@@ -13,7 +8,7 @@
   },
   "agentDirs": [],
   "loadContextFiles": true,
-  "defaultTimeoutSeconds": 300,
+  "defaultTimeoutSeconds": 0,
   "webSearchMaxLookups": 0,
   "webSearchMaxFetches": 0,
   "maxConcurrent": 10,

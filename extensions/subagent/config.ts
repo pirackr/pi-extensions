@@ -197,7 +197,7 @@ const DEFAULTS = {
 	notificationGroupWaitSeconds: 30,
 	soloPreviewCharacters: 500,
 	groupPreviewCharacters: 300,
-	defaultTimeoutSeconds: 300,
+	defaultTimeoutSeconds: 0,
 	loadContextFiles: true,
 };
 
@@ -454,7 +454,7 @@ export function loadSubagentConfiguration(
 				bundled.defaultTimeoutSeconds ??
 				DEFAULTS.defaultTimeoutSeconds,
 			"defaultTimeoutSeconds",
-			{ min: 10, max: 1800 },
+			{ min: 0 },
 		),
 		webSearchMaxLookups: normalizeWebSearchBudget(
 			project?.webSearchMaxLookups ??
@@ -812,7 +812,7 @@ export function discoverProfiles(
 		normalizeScalarNumber(
 			contribution.profile.timeoutSeconds,
 			`external profile "${contribution.profile.name}" timeoutSeconds`,
-			{ min: 10, max: 1800 },
+			{ min: 0 },
 		);
 		const name = contribution.profile.name;
 		const existing = nameOwner.get(name);

@@ -686,10 +686,16 @@ export async function runTaskMode(requestPath, deps = {}) {
 	scheduleHeartbeat();
 	if (request.profile.timeoutSeconds !== null && request.profile.timeoutSeconds > 0) {
 		timeoutTimer = clock.setTimeout(() => {
-			terminate(
-				"timed_out",
-				`Timed out after ${request.profile.timeoutSeconds} seconds`,
-			);
+			// Graceful shutdown: fetch the last assistant text before killing,
+			// so the result includes whatever the agent was working on.
+			beginAuthoritativeRequests({ stopReason: "timeout" });
+			const gracefulMs = 5_000;
+			clock.setTimeout(() => {
+				terminate(
+					"timed_out",
+					`Timed out after ${request.profile.timeoutSeconds} seconds`,
+				);
+			}, gracefulMs);
 		}, request.profile.timeoutSeconds * 1_000);
 	}
 	startupRequestId = send({ type: "get_state" });

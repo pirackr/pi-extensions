@@ -2,12 +2,6 @@
   "defaultProgram": "skills/research/program.md",
   "defaultProfile": "standard",
   "defaultProvider": null,
-  "models": {
-    "strong": "x-preview-f-free",
-    "eval": "mimo-v2.5-free",
-    "light": "x-preview-f-free",
-    "fast": "XYZAILab_XYZ-Aquila-mini-GGUF-Q4_K_M"
-  },
   "defaults": {
     "maxIterations": 10,
     "maxTokens": 200000,
@@ -24,7 +18,7 @@
       "minSources": 15,
       "maxScouts": 3,
       "maxFetchers": 1,
-      "verification": ["judge"]
+      "verification": []
     },
     "standard": {
       "minRounds": 5,
@@ -32,7 +26,7 @@
       "minSources": 30,
       "maxScouts": 8,
       "maxFetchers": 4,
-      "verification": ["judge"]
+      "verification": []
     },
     "intermediate": {
       "minRounds": 10,
@@ -40,7 +34,7 @@
       "minSources": 40,
       "maxScouts": 12,
       "maxFetchers": 6,
-      "verification": ["judge", "citation_agent", "source_auditor"]
+      "verification": []
     },
     "deep": {
       "minRounds": 20,
@@ -48,7 +42,7 @@
       "minSources": 250,
       "maxScouts": 32,
       "maxFetchers": 16,
-      "verification": ["judge", "citation_agent", "source_auditor", "contradiction_resolver"]
+      "verification": []
     },
     "open-ended": {
       "minRounds": 5,
@@ -56,146 +50,10 @@
       "minSources": 30,
       "maxScouts": 8,
       "maxFetchers": 4,
-      "verification": ["judge"]
+      "verification": []
     }
   },
-  "roles": {
-    "planner": {
-      "description": "Plan research sub-questions and initialize score tracking",
-      "model": "strong",
-      "thinking": "high",
-      "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
-      "access": "read",
-      "timeoutSeconds": 600,
-      "promptPath": "../skills/research/agents/planner.md",
-      "resultFormat": "markdown",
-      "totalDispatch": 5,
-      "concurrentDispatch": 1,
-      "maxSearches": 5,
-      "maxFetches": 5,
-      "retention": "artifact"
-    },
-    "scout_research": {
-      "description": "Discover and evaluate sources — finds URLs, assesses credibility, returns findings and a scored source list",
-      "model": "fast",
-      "thinking": "high",
-      "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
-      "access": "read",
-      "timeoutSeconds": 1800,
-      "promptPath": "../skills/research/agents/scout.md",
-      "resultFormat": "markdown",
-      "totalDispatch": 30,
-      "concurrentDispatch": 8,
-      "maxSearches": 30,
-      "maxFetches": 30,
-      "retention": "artifact"
-    },
-    "fetcher": {
-      "description": "Deep read of URLs — extracts full content, summarizes key findings, flags credibility issues",
-      "model": "strong",
-      "thinking": "low",
-      "tools": ["read", "web_lookup", "fetch_web"],
-      "access": "read",
-      "timeoutSeconds": 720,
-      "promptPath": "../skills/research/agents/fetcher.md",
-      "resultFormat": "markdown",
-      "totalDispatch": 30,
-      "concurrentDispatch": 4,
-      "maxSearches": 10,
-      "maxFetches": 30,
-      "retention": "ephemeral"
-    },
-    "consolidator": {
-      "description": "Consolidate newly gathered research into the shared knowledge base",
-      "model": "strong",
-      "thinking": "high",
-      "tools": ["read", "grep", "find", "ls", "write", "edit"],
-      "access": "write",
-      "timeoutSeconds": 900,
-      "promptPath": "../skills/research/agents/consolidator.md",
-      "resultFormat": "markdown",
-      "totalDispatch": 20,
-      "concurrentDispatch": 1,
-      "maxSearches": 0,
-      "maxFetches": 0,
-      "retention": "artifact"
-    },
-    "fragment_writer": {
-      "description": "Write org-mode report fragments with claim-level citations from the consolidated knowledge base",
-      "model": "strong",
-      "thinking": "high",
-      "tools": ["read", "grep", "find", "ls"],
-      "access": "read",
-      "timeoutSeconds": 1200,
-      "promptPath": "../skills/research/agents/fragment-writer.md",
-      "resultFormat": "markdown",
-      "totalDispatch": 20,
-      "concurrentDispatch": 4,
-      "maxSearches": 0,
-      "maxFetches": 0,
-      "retention": "artifact"
-    },
-    "judge": {
-      "description": "Evaluate draft research report against credibility rubric — returns pass/fail with specific findings",
-      "model": "eval",
-      "thinking": "medium",
-      "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
-      "access": "read",
-      "timeoutSeconds": 1200,
-      "promptPath": "../skills/research/agents/judge.md",
-      "resultFormat": "markdown",
-      "totalDispatch": 10,
-      "concurrentDispatch": 1,
-      "maxSearches": 10,
-      "maxFetches": 10,
-      "retention": "artifact"
-    },
-    "citation_agent": {
-      "description": "Map claims to exact source locations — returns claim→URL→snippet mapping",
-      "model": "strong",
-      "thinking": "low",
-      "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
-      "access": "read",
-      "timeoutSeconds": 720,
-      "promptPath": "../skills/research/agents/citation-agent.md",
-      "resultFormat": "markdown",
-      "totalDispatch": 20,
-      "concurrentDispatch": 4,
-      "maxSearches": 20,
-      "maxFetches": 20,
-      "retention": "ephemeral"
-    },
-    "source_auditor": {
-      "description": "Rate all sources used in research — flag low-quality sources, suggest replacements",
-      "model": "strong",
-      "thinking": "low",
-      "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
-      "access": "read",
-      "timeoutSeconds": 720,
-      "promptPath": "../skills/research/agents/source-auditor.md",
-      "resultFormat": "markdown",
-      "totalDispatch": 15,
-      "concurrentDispatch": 3,
-      "maxSearches": 15,
-      "maxFetches": 15,
-      "retention": "artifact"
-    },
-    "contradiction_resolver": {
-      "description": "Investigate and resolve contradictions between sources — returns resolution or flags as unresolved",
-      "model": "light",
-      "thinking": "low",
-      "tools": ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
-      "access": "read",
-      "timeoutSeconds": 960,
-      "promptPath": "../skills/research/agents/contradiction-resolver.md",
-      "resultFormat": "markdown",
-      "totalDispatch": 10,
-      "concurrentDispatch": 2,
-      "maxSearches": 10,
-      "maxFetches": 10,
-      "retention": "ephemeral"
-    }
-  },
+  "roles": {},
   "capabilities": {
     "web-search": {
       "name": "web-search",

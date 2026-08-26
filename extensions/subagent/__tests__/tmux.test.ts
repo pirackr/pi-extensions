@@ -220,6 +220,38 @@ describe("createAgentWindow", () => {
 		expect(calls.some((c) => c[0] === "new-window")).toBe(false);
 	});
 
+	it("recreates a vanished parent session before creating the window", async () => {
+		const { exec, calls } = spyExec((args) => {
+			if (args[0] === "has-session") throw new Error("can't find session");
+			if (args[0] === "list-windows") return { stdout: "", stderr: "" };
+			return { stdout: "", stderr: "" };
+		});
+		const client = createTmuxClient(exec, PARENT);
+
+		await client.createAgentWindow({
+			agentId: "q9xm",
+			cwd: "/tmp/x",
+			launchCommand: "noop",
+		});
+
+		// The detached keeper was created before the window spawn.
+		const createdSession = calls.find((c) => c[0] === "new-session");
+		expect(createdSession).toEqual([
+			"new-session",
+			"-d",
+			"-s",
+			SESSION,
+			"-n",
+			"main",
+		]);
+		const created = calls.find((c) => c[0] === "new-window");
+		expect(created).toBeDefined();
+		// Session creation precedes the window creation.
+		expect(calls.indexOf(createdSession!)).toBeLessThan(
+			calls.indexOf(created!),
+		);
+	});
+
 	it("rejects an invalid agent id via createAgentWindowInput before deriving a name", () => {
 		expect(() =>
 			createAgentWindowInput({

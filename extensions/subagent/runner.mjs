@@ -411,8 +411,15 @@ export async function runTaskMode(requestPath, deps = {}) {
 	}
 
 	function terminate(state, reason) {
-		if (terminalIntent || settled) return;
-		terminalIntent = { state, reason };
+		if (settled) return;
+		if (terminalIntent) {
+			// The intent was already claimed synchronously (e.g. by the timeout
+			// path before the graceful window elapses). A matching terminate
+			// call must still escalate the kill below; a different state loses.
+			if (terminalIntent.state !== state) return;
+		} else {
+			terminalIntent = { state, reason };
+		}
 		if (child?.pid) {
 			try {
 				killProcessGroup(child.pid, "SIGTERM");
@@ -722,6 +729,15 @@ export async function runTaskMode(requestPath, deps = {}) {
 			// so the result includes whatever the agent was working on.
 			beginAuthoritativeRequests({ stopReason: "timeout" });
 			const gracefulMs = 5_000;
+			// Claim the terminal intent synchronously: a child that closes during
+			// the graceful window must publish timed_out, never succeeded
+			// (maybeFinishAfterClose honours terminalIntent first).
+			if (!terminalIntent && !settled) {
+				terminalIntent = {
+					state: "timed_out",
+					reason: `Timed out after ${request.profile.timeoutSeconds} seconds`,
+				};
+			}
 			clock.setTimeout(() => {
 				terminate(
 					"timed_out",

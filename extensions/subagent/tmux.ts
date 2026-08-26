@@ -197,6 +197,11 @@ class TmuxClientImpl implements TmuxClient {
 		}
 		// Abort before touching tmux if the lifecycle signal fires first.
 		signal?.throwIfAborted();
+		// The parent session may have disappeared since the extension resolved
+		// its identity (e.g. the tmux server restarted); recreate the detached
+		// keeper so the spawn target always exists instead of failing with
+		// "can't find window".
+		await this.ensureParentSession();
 		// Detached full window: created off-screen and never focused. The cwd and
 		// launch command are passed as distinct argv elements so hostile paths or
 		// shell metacharacters never reach a shell interpreter.

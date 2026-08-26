@@ -436,19 +436,19 @@ export async function validateStartupContract(
 	}
 
 	// Compute hard ceilings
-	const maxConcurrentAttempts = Object.values(config.roles).reduce(
-		(sum, r) => sum + r.concurrentDispatch,
-		0,
-	);
-	const maxAttemptsPerTask = Math.max(
-		...Object.values(config.roles).map((r) => r.totalDispatch),
-	);
+	const roleEntries = Object.entries(config.roles);
+	const maxConcurrentAttempts = roleEntries.length > 0
+		? roleEntries.reduce((sum, [, r]) => sum + r.concurrentDispatch, 0)
+		: 1; // Default: 1 concurrent for general-purpose
+	const maxAttemptsPerTask = roleEntries.length > 0
+		? Math.max(...roleEntries.map(([, r]) => r.totalDispatch))
+		: 100; // Default: 100 attempts for general-purpose
 	const hardTimeoutSeconds = 1800; // 30 minutes
 
-	// Validate hard ceilings are sufficient
-	if (maxConcurrentAttempts < Object.keys(config.roles).length) {
+	// Validate hard ceilings are sufficient (skip when using general-purpose fallback)
+	if (roleEntries.length > 0 && maxConcurrentAttempts < roleEntries.length) {
 		throw new Error(
-			`Insufficient concurrent capacity: ${maxConcurrentAttempts} < ${Object.keys(config.roles).length} roles.`,
+			`Insufficient concurrent capacity: ${maxConcurrentAttempts} < ${roleEntries.length} roles.`,
 		);
 	}
 	if (hardTimeoutSeconds < 60) {

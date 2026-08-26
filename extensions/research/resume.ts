@@ -468,7 +468,6 @@ function isResolvedContractSnapshot(value: unknown): value is ResolvedRunContrac
 function isFrozenConfigSnapshot(value: unknown): value is FrozenConfig {
   return isRecord(value) &&
     isRecord(value.roles) &&
-    Object.keys(value.roles).length > 0 &&
     typeof value.hardTimeoutSeconds === "number" &&
     Number.isFinite(value.hardTimeoutSeconds);
 }

@@ -316,6 +316,16 @@ export function installSubagentExtension(
 		return runtimePromise;
 	};
 
+	// Terminal agents leave the widget; their results stay retrievable via
+	// /agents and get_subagent_result.
+	const dismissTerminalAgents = async (
+		runtime: ExtensionRuntime,
+	): Promise<void> => {
+		for (const item of await runtime.manager.list()) {
+			if (terminal(item.state)) dismissedTerminal.add(item.agentId);
+		}
+	};
+
 	const refreshUI = async (
 		runtimeOverride?: ExtensionRuntime,
 	): Promise<void> => {
@@ -330,6 +340,7 @@ export function installSubagentExtension(
 				frame: widgetFrame++,
 				width: DEFAULT_WIDGET_WIDTH,
 				now: Date.now(),
+				color: true,
 			}),
 			{ placement: "aboveEditor" },
 		);
@@ -367,6 +378,10 @@ export function installSubagentExtension(
 					"Nested subagents must run in the foreground; set run_in_background to false.",
 				);
 			}
+			// A new spawn starts a fresh display generation: everything already
+			// finished from an earlier batch is dismissed so the widget only shows
+			// live work plus the new spawn.
+			await dismissTerminalAgents(runtime);
 			const response = await runtime.manager.enqueue(
 				request,
 				{
@@ -483,9 +498,7 @@ export function installSubagentExtension(
 				});
 				// A fresh attach (startup or /reload) must not resurrect agents that
 				// already finished in an earlier session; only live work is shown.
-				for (const item of await runtime.manager.list()) {
-					if (terminal(item.state)) dismissedTerminal.add(item.agentId);
-				}
+				await dismissTerminalAgents(runtime);
 				await refreshUI(runtime);
 				await runtime.coordinator?.recover();
 				runtime.activate();
@@ -517,9 +530,7 @@ export function installSubagentExtension(
 		activeContext = ctx;
 		const runtime = await runtimeIfStarted();
 		if (runtime && ctx.mode === "tui") {
-			for (const item of await runtime.manager.list()) {
-				if (terminal(item.state)) dismissedTerminal.add(item.agentId);
-			}
+			await dismissTerminalAgents(runtime);
 			await refreshUI();
 		}
 		return { action: "continue" as const };

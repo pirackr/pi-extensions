@@ -3414,13 +3414,12 @@ describe("resolveResearchConfig — models alias map (Task 15)", () => {
 		expect(() => resolveResearchConfig([layer])).toThrow("Credential field");
 	});
 
-	it("ships research-owned aliases and the generic subagent child runtime", async () => {
+	it("ships generic subagent child runtime with simplified config", async () => {
 		const { loadPackagedConfig } = await import("../extensions/research/config.ts");
 		const packaged = loadPackagedConfig();
 
-		expect(Object.keys(packaged.models)).toEqual(
-			expect.arrayContaining(["strong", "eval", "light", "fast"]),
-		);
+		// Config simplified: no research-owned model aliases (roles use general-purpose)
+		expect(Object.keys(packaged.models)).toHaveLength(0);
 		expect(
 			packaged.childExtensions.some((entry) =>
 				entry.endsWith("/extensions/subagent/index.ts"),

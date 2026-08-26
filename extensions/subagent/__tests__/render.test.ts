@@ -337,6 +337,40 @@ describe("renderWidgetLines", () => {
 			expect(visibleWidthTestOnly(line)).toBeLessThanOrEqual(40);
 		}
 	});
+
+	it("omits the tree glyph from activity preview lines", () => {
+		const lines = renderWidgetLines(
+			[{ ...RUNNING, activity: "ctx_read src/foo.ts" }],
+			{ frame: 0, width: 120, now: 12_000 },
+		);
+		// Title + main status line + activity preview. The main line keeps its
+		// └─ glyph; only the preview line drops it.
+		expect(lines).toHaveLength(3);
+		expect(lines[1]).toContain("└─");
+		expect(lines[2]).not.toContain("└─");
+		expect(lines[2]).toContain("ctx_read src/foo.ts");
+	});
+
+	it("paints ANSI colors only when requested", () => {
+		const rows = [{ ...RUNNING, state: "succeeded" as TaskStatus, activity: "done" }];
+		const plain = renderWidgetLines(rows, { frame: 0, width: 120, now: 12_000 });
+		const painted = renderWidgetLines(rows, {
+			frame: 0,
+			width: 120,
+			now: 12_000,
+			color: true,
+		});
+		expect(plain.join("\n")).not.toContain("\x1b[");
+		expect(painted[0]).toContain("\x1b[1m"); // bold title
+		expect(painted[1]).toContain("\x1b[32m"); // green success marker
+		expect(painted[2]).toContain("\x1b[2m"); // dim activity
+		// Coloring must not change the visible width.
+		for (let i = 0; i < plain.length; i++) {
+			expect(visibleWidthTestOnly(painted[i])).toBe(
+				visibleWidthTestOnly(plain[i]),
+			);
+		}
+	});
 });
 
 // Visible-width helper (ignores ANSI escapes) shared by the width test.

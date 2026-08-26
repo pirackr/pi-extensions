@@ -47,6 +47,30 @@ import {
 
 const SPINNER_GLYPHS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/** Minimal ANSI SGR palette used when widget coloring is enabled. */
+const ANSI = {
+	reset: "\x1b[0m",
+	bold: "\x1b[1m",
+	dim: "\x1b[2m",
+	red: "\x1b[31m",
+	green: "\x1b[32m",
+	yellow: "\x1b[33m",
+	cyan: "\x1b[36m",
+} as const;
+
+/** Wrap `text` in an SGR code when coloring is enabled. */
+function paint(enabled: boolean | undefined, code: string, text: string): string {
+	return enabled ? `${code}${text}${ANSI.reset}` : text;
+}
+
+/** Color for a lifecycle-state marker glyph. */
+function stateColor(state: TaskStatus): string {
+	if (state === "succeeded") return ANSI.green;
+	if (state === "failed" || state === "interrupted") return ANSI.red;
+	if (state === "timed_out") return ANSI.yellow;
+	return "";
+}
+
 /** Advance one glyph per animation frame (~80ms per step). */
 function spinnerGlyph(frame: number): string {
 	return SPINNER_GLYPHS[Math.abs(frame) % SPINNER_GLYPHS.length];
@@ -325,19 +349,27 @@ export interface RenderWidgetOptions {
 	readonly frame: number;
 	readonly width: number;
 	readonly now: number;
+	/**
+	 * Paint the widget with ANSI colors (bold title, green/red/yellow state
+	 * markers, dim activity preview). Defaults to false so the pure string
+	 * output stays deterministic for tests and RPC.
+	 */
+	readonly color?: boolean;
 }
 
 /** Multiple lines per row (title + main line + optional activity preview), truncated to width. */
 export function renderWidgetLines(
 	rows: AgentWidgetRow[],
-	{ frame, width, now }: RenderWidgetOptions,
+	{ frame, width, now, color }: RenderWidgetOptions,
 ): string[] {
 	const lines: string[] = [];
-	if (rows.length > 0) lines.push("Agents");
+	if (rows.length > 0) {
+		lines.push(paint(color, ANSI.bold, "Agents"));
+	}
 	for (let i = 0; i < rows.length; i++) {
 		const row = rows[i];
 		const isLast = i === rows.length - 1 || rows[i + 1]?.depth < row.depth;
-		lines.push(...formatWidgetRow(row, width, now, isLast, frame));
+		lines.push(...formatWidgetRow(row, width, now, isLast, frame, color));
 	}
 	return lines;
 }
@@ -368,11 +400,16 @@ function formatWidgetRow(
 	now: number,
 	isLast: boolean,
 	frame: number,
+	color?: boolean,
 ): string[] {
 	const isAnimating = row.state === "running" || row.state === "starting";
-	const marker = isAnimating
+	const markerGlyph = isAnimating
 		? spinnerGlyph(frame)
 		: (STATE_MARKERS[row.state] ?? "·");
+	const markerColor = stateColor(row.state);
+	const marker = markerColor
+		? paint(color, markerColor, markerGlyph)
+		: markerGlyph;
 	const prefix = treePrefix(row.depth, isLast);
 
 	const startedAt = row.startedAt;
@@ -386,15 +423,22 @@ function formatWidgetRow(
 	const tokens = `${compactTokens(row.totalTokens)} tokens`;
 	const pct = contextPercent(row.totalTokens, row.contextWindow);
 
-	const mainLine = `${prefix}${marker} subagent(${row.profile}): ${row.description} · ${elapsed} · ${tools} · ${tokens}${pct}`;
+	const label = `subagent(${row.profile}): ${row.description}`;
+	const mainLine = `${prefix}${marker} ${paint(color, ANSI.bold, label)} · ${elapsed} · ${paint(color, ANSI.cyan, tools)} · ${tokens}${pct}`;
 	const result: string[] = [truncateToWidth(mainLine, width)];
 
-	// Activity preview line
+	// Activity preview line — indented under the row via the continuation
+	// prefix (no tree glyph), painted dim when coloring is enabled.
 	if (row.activity && row.activity.length > 0) {
 		const preview =
 			row.activity.length > 60 ? row.activity.slice(0, 57) + "…" : row.activity;
 		const activityPrefix = continuationPrefix(row.depth, isLast);
-		result.push(truncateToWidth(`${activityPrefix}  └─ ${preview}`, width));
+		result.push(
+			truncateToWidth(
+				`${activityPrefix}  ${paint(color, ANSI.dim, preview)}`,
+				width,
+			),
+		);
 	}
 
 	return result;

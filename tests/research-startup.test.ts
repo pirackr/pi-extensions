@@ -1187,7 +1187,7 @@ describe("F9: Mid-flow failure cleanup", () => {
 // ===========================================================================
 
 describe("F10: Empty roles edge case", () => {
-	it("handles config.roles = {} — no roles to validate", async () => {
+	it("handles config.roles = {} — no roles to validate, uses general-purpose defaults", async () => {
 		const config = baseConfig();
 		config.roles = {};
 		const models = fakeModelRegistry({
@@ -1200,9 +1200,9 @@ describe("F10: Empty roles edge case", () => {
 
 		expect(contract).toBeDefined();
 		expect(Object.keys(contract.resolvedModels)).toHaveLength(0);
-		// Hard ceilings should still be computed (sum over empty = 0)
-		expect(contract.hardCeilings.maxConcurrentAttempts).toBe(0);
-		// This should succeed because 0 concurrent capacity >= 0 roles
+		// Hard ceilings default to 1 concurrent for general-purpose fallback
+		expect(contract.hardCeilings.maxConcurrentAttempts).toBe(1);
+		expect(contract.hardCeilings.maxAttemptsPerTask).toBe(100);
 	});
 
 	it("throws on insufficient capacity when roles exist but concurrentDispatch = 0", async () => {

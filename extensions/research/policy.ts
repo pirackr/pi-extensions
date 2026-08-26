@@ -298,18 +298,23 @@ export class ResearchPolicy {
 		const roleNames = Object.keys(this.frozenConfig.roles);
 
 		// F2: Enforce manifest role whitelist — reject non-manifest providers
-		if (plan.providerId !== null && !roleNames.includes(plan.providerId)) {
+		if (plan.providerId !== null && roleNames.length > 0 && !roleNames.includes(plan.providerId)) {
 			throw new Error(
 				`Provider '${plan.providerId}' is not a manifest role. Allowed: ${roleNames.join(", ")}`,
 			);
 		}
 
-		const providerId = plan.providerId ?? (roleNames.length > 0 ? roleNames[0] : null);
-		if (!providerId) {
-			throw new Error("No manifest roles configured for this workspace.");
-		}
-
+		// When roles is empty, use "general-purpose" as the default provider
+		const providerId = plan.providerId ?? (roleNames.length > 0 ? roleNames[0] : "general-purpose");
 		const role = this.frozenConfig.roles[providerId];
+
+		// Default role config when using general-purpose fallback (no roles defined)
+		const effectiveRole = role ?? {
+			timeoutSeconds: 300,
+			retention: "ephemeral" as const,
+			maxSearches: 0,
+			maxFetches: 0,
+		};
 
 		// F3: Strip caller operational overrides and inject frozen settings
 		const attempts: ResolvedAttempt[] = [];
@@ -320,18 +325,17 @@ export class ResearchPolicy {
 				index: i,
 				taskInfo: {
 					role: providerId,
-					timeoutSeconds: role.timeoutSeconds,
-					retention: role.retention,
-					maxSearches: role.maxSearches,
-					maxFetches: role.maxFetches,
+					timeoutSeconds: effectiveRole.timeoutSeconds,
+					retention: effectiveRole.retention,
+					maxSearches: effectiveRole.maxSearches,
+					maxFetches: effectiveRole.maxFetches,
 				},
 			});
 		}
 
 		// F5: maxConcurrentAttempts = max per-role concurrentDispatch (a concurrency count, not seconds)
-		const maxConcurrent = Math.max(
-			...Object.values(this.frozenConfig.roles).map((r) => r.concurrentDispatch),
-		);
+		const roleDispatches = Object.values(this.frozenConfig.roles).map((r) => r.concurrentDispatch);
+		const maxConcurrent = roleDispatches.length > 0 ? Math.max(...roleDispatches) : 1;
 
 		return {
 			providerId,
@@ -359,16 +363,29 @@ export class ResearchPolicy {
 		}
 
 		const roleInfo = (attempt.taskInfo as Record<string, string | undefined> | undefined);
-		const roleKey = roleInfo?.role ?? Object.keys(this.frozenConfig.roles)[0] ?? "scout";
+		const roleKey = roleInfo?.role ?? Object.keys(this.frozenConfig.roles)[0] ?? "general-purpose";
 		const role = this.frozenConfig.roles[roleKey];
-		if (!role) {
+
+		// When roles are defined, enforce whitelist — reject non-manifest roles
+		const roleNames = Object.keys(this.frozenConfig.roles);
+		if (roleNames.length > 0 && !role) {
 			return undefined;
 		}
+
+		// Default role when using general-purpose fallback (no roles defined)
+		const effectiveRole = role ?? {
+			timeoutSeconds: 300,
+			retention: "ephemeral" as const,
+			maxSearches: 0,
+			maxFetches: 0,
+			concurrentDispatch: 1,
+			totalDispatch: 100,
+		};
 
 		// Serialize through lock
 		let result: AttemptReservation | undefined;
 		this.reserveLock = this.reserveLock.then(async () => {
-			result = await this._doReserve(roleKey, role, attempt);
+			result = await this._doReserve(roleKey, effectiveRole, attempt);
 		});
 		await this.reserveLock;
 
@@ -377,7 +394,7 @@ export class ResearchPolicy {
 
 	private async _doReserve(
 		roleKey: string,
-		role: ResolvedRole,
+		role: ResolvedRole | { timeoutSeconds: number; retention: string; maxSearches: number; maxFetches: number; concurrentDispatch: number; totalDispatch: number },
 		attempt: ResolvedAttempt,
 	): Promise<AttemptReservation | undefined> {
 		// Get or create the process-local bucket used only to locate live
@@ -390,8 +407,8 @@ export class ResearchPolicy {
 		}
 
 		// F4: Provider-wide concurrent ceiling = sum of all role concurrentDispatch.
-		const providerCeiling = Object.values(this.frozenConfig.roles)
-			.reduce((sum, r) => sum + r.concurrentDispatch, 0);
+		const roleDispatches = Object.values(this.frozenConfig.roles).map((r) => r.concurrentDispatch);
+		const providerCeiling = roleDispatches.length > 0 ? roleDispatches.reduce((sum, d) => sum + d, 0) : 1;
 		const reservationId = `res-${createHash("sha256")
 			.update(JSON.stringify([roleKey, attempt.planId, attempt.attemptId]))
 			.digest("hex")}`;
@@ -542,7 +559,7 @@ export class ResearchPolicy {
 		result: AttemptResult,
 	): Promise<ArtifactMetadata | undefined> {
 		const roleInfo = (reservation.attempt.taskInfo as Record<string, string | undefined> | undefined);
-		const roleKey = roleInfo?.role ?? Object.keys(this.frozenConfig.roles)[0] ?? "scout";
+		const roleKey = roleInfo?.role ?? Object.keys(this.frozenConfig.roles)[0] ?? "general-purpose";
 		const role = this.frozenConfig.roles[roleKey];
 
 		// F8: Validate frozen role schema — JSON output must be serializable.

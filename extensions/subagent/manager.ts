@@ -2,7 +2,6 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
 import type { RunnerInvocation, RunnerRequest } from "./runner.mjs";
-import { summarizeAgent, type SummarizerDeps } from "./summarizer.ts";
 import { allocateShortId, type CollisionCheck } from "./identity.ts";
 import {
 	acquireManagerLease as acquireLease,
@@ -240,28 +239,6 @@ export function createSubagentManager(deps: SubagentManagerDeps): SubagentManage
 		);
 	};
 
-	const summarizeIfNeeded = async (
-		agentId: string,
-		terminal: TerminalResult,
-	): Promise<TerminalResult> => {
-		if (
-			(terminal.state === "timed_out" || terminal.state === "failed") &&
-			!terminal.output
-		) {
-			const dir = artifactDir(deps.store, agentId);
-			const summary = await summarizeAgent(dir, {
-				nodeBin: deps.nodePath ?? process.execPath,
-				runnerPath: deps.runnerScriptPath,
-				model: "lemonade/Ornith-1.5-35B-A3B-GGUF-Q4_K_M",
-				cwd: process.cwd(),
-			});
-			if (summary) {
-				return { ...terminal, output: summary };
-			}
-		}
-		return terminal;
-	};
-
 	const responseFor = async (
 		agentId: string,
 		task: AgentManifest | null,
@@ -287,11 +264,10 @@ export function createSubagentManager(deps: SubagentManagerDeps): SubagentManage
 		const state = terminal?.state ?? task?.state ?? "failed";
 		const consumed = terminal !== null ? await consumeResult(agentId, signal) : false;
 		const elapsedBase = task?.startedAt ?? task?.queuedAt ?? null;
-		const summarized = terminal ? await summarizeIfNeeded(agentId, terminal) : null;
 		return {
 			agentId,
 			state,
-			result: summarized ?? terminal,
+			result: terminal,
 			activity: terminal ? null : live?.activity ?? null,
 			elapsedMs: terminal ? null : elapsedBase === null ? null : Math.max(0, now() - elapsedBase),
 			usage: terminal?.usage ?? live?.usage ?? null,

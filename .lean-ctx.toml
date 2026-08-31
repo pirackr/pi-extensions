@@ -1,0 +1,3 @@
+# Local lean-ctx override — only affects this folder (pi-extensions)
+# Global is compression_level = "lite" (CRP off). This enables replace-mode behavior locally.
+compression_level = "max"

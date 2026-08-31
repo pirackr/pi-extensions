@@ -98,7 +98,8 @@ const modelsDevInfo = {
 
 describe("getVisibleModels", () => {
 	it("keeps only free models in anonymous mode", () => {
-		const models = getVisibleModels(undefined, modelsDevInfo, true);
+		const { chat, responses } = getVisibleModels(undefined, modelsDevInfo, true);
+		const models = [...chat, ...responses];
 		expect(models.map((m) => m.id).sort()).toEqual(
 			["big-pickle", "deepseek-v4-flash-free"].sort(),
 		);
@@ -106,34 +107,35 @@ describe("getVisibleModels", () => {
 	});
 
 	it("keeps paid models when authenticated", () => {
-		const models = getVisibleModels(undefined, modelsDevInfo, false);
-		const ids = models.map((m) => m.id);
+		const { chat, responses } = getVisibleModels(undefined, modelsDevInfo, false);
+		const ids = [...chat, ...responses].map((m) => m.id);
 		expect(ids).toContain("kimi-k2.6");
 		expect(ids).not.toContain("glm-5");
 	});
 
 	it("drops deprecated models", () => {
-		const models = getVisibleModels(undefined, modelsDevInfo, false);
-		expect(models.map((m) => m.id)).not.toContain("glm-5");
+		const { chat, responses } = getVisibleModels(undefined, modelsDevInfo, false);
+		expect([...chat, ...responses].map((m) => m.id)).not.toContain("glm-5");
 	});
 
 	it("narrows to the live /zen/v1/models set", () => {
 		const visible = new Set(["big-pickle", "deepseek-v4-flash-free"]);
-		const models = getVisibleModels(visible, modelsDevInfo, false);
-		expect(models.map((m) => m.id).sort()).toEqual(
+		const { chat, responses } = getVisibleModels(visible, modelsDevInfo, false);
+		expect([...chat, ...responses].map((m) => m.id).sort()).toEqual(
 			["big-pickle", "deepseek-v4-flash-free"].sort(),
 		);
 	});
 
 	it("falls back to the static free subset offline in anonymous mode", () => {
-		const models = getVisibleModels(undefined, undefined, true);
+		const { chat, responses } = getVisibleModels(undefined, undefined, true);
+		const models = [...chat, ...responses];
 		expect(models.length).toBeGreaterThan(0);
 		for (const m of models) expect(m.cost?.input).toBe(0);
 	});
 
 	it("returns the full static catalog offline when authenticated", () => {
-		const models = getVisibleModels(undefined, undefined, false);
-		expect(models.length).toBe(staticModels.length);
+		const { chat, responses } = getVisibleModels(undefined, undefined, false);
+		expect([...chat, ...responses].length).toBe(staticModels.length);
 	});
 });
 
@@ -192,35 +194,38 @@ const fullModelsDevInfo = {
 
 describe("buildModelFromModelsDev", () => {
 	it("builds a ProviderModelConfig from models.dev data", () => {
-		const model = buildModelFromModelsDev(
+		const result = buildModelFromModelsDev(
 			"big-pickle",
 			fullModelsDevInfo["big-pickle"],
 		);
-		expect(model).toEqual({
-			id: "big-pickle",
-			name: "Big Pickle",
-			reasoning: true,
-			input: ["text"],
-			contextWindow: 200000,
-			maxTokens: 128000,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		expect(result).toEqual({
+			model: {
+				id: "big-pickle",
+				name: "Big Pickle",
+				reasoning: true,
+				input: ["text"],
+				contextWindow: 200000,
+				maxTokens: 128000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			},
+			apiType: "openai-completions",
 		});
 	});
 
 	it("sets deepseekCompat for deepseek model IDs", () => {
-		const model = buildModelFromModelsDev(
+		const result = buildModelFromModelsDev(
 			"deepseek-v4-pro",
 			fullModelsDevInfo["deepseek-v4-pro"],
 		);
-		expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
+		expect(result?.model.compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
 	});
 
 	it("does not set deepseekCompat for non-deepseek models", () => {
-		const model = buildModelFromModelsDev(
+		const result = buildModelFromModelsDev(
 			"big-pickle",
 			fullModelsDevInfo["big-pickle"],
 		);
-		expect(model.compat).toBeUndefined();
+		expect(result?.model.compat).toBeUndefined();
 	});
 
 	it("returns undefined for missing models.dev entry", () => {
@@ -228,11 +233,46 @@ describe("buildModelFromModelsDev", () => {
 	});
 
 	it("maps modalities.input to input array", () => {
-		const model = buildModelFromModelsDev(
+		const result = buildModelFromModelsDev(
 			"x-preview-f-free",
 			fullModelsDevInfo["x-preview-f-free"],
 		);
-		expect(model.input).toEqual(["text", "image", "video"]);
+		expect(result?.model.input).toEqual(["text", "image", "video"]);
+	});
+
+	it("detects Responses API requirement from provider.npm", () => {
+		const museSparkInfo = {
+			name: "Muse Spark 1.2",
+			reasoning: false,
+			modalities: { input: ["text"], output: ["text"] },
+			limit: { context: 128000, output: 8192 },
+			status: "available",
+			cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+			provider: { npm: "@ai-sdk/openai" },
+		};
+		const result = buildModelFromModelsDev("muse-spark-1.2-contributor-free", museSparkInfo);
+		expect(result?.apiType).toBe("openai-responses");
+	});
+
+	it("defaults to chat completions for @ai-sdk/openai-compatible", () => {
+		const openaiCompatInfo = {
+			name: "Some Model",
+			status: "available",
+			cost: { input: 0, output: 0 },
+			provider: { npm: "@ai-sdk/openai-compatible" },
+		};
+		const result = buildModelFromModelsDev("some-model", openaiCompatInfo);
+		expect(result?.apiType).toBe("openai-completions");
+	});
+
+	it("defaults to chat completions when provider.npm is missing", () => {
+		const noProviderInfo = {
+			name: "No Provider Model",
+			status: "available",
+			cost: { input: 0, output: 0 },
+		};
+		const result = buildModelFromModelsDev("no-provider-model", noProviderInfo);
+		expect(result?.apiType).toBe("openai-completions");
 	});
 });
 
@@ -240,14 +280,15 @@ describe("getVisibleModels dynamic", () => {
 	it("builds models from Zen IDs + models.dev, not from staticModels", () => {
 		// Only Ox Alpha and Big Pickle are on Zen; Kimi is not
 		const visibleIds = new Set(["big-pickle", "x-preview-f-free"]);
-		const models = getVisibleModels(visibleIds, fullModelsDevInfo, false);
-		const ids = models.map((m) => m.id).sort();
+		const { chat, responses } = getVisibleModels(visibleIds, fullModelsDevInfo, false);
+		const ids = [...chat, ...responses].map((m) => m.id).sort();
 		expect(ids).toEqual(["big-pickle", "x-preview-f-free"].sort());
 	});
 
 	it("includes new models not in staticModels when on Zen", () => {
 		const visibleIds = new Set(["x-preview-f-free"]);
-		const models = getVisibleModels(visibleIds, fullModelsDevInfo, false);
+		const { chat, responses } = getVisibleModels(visibleIds, fullModelsDevInfo, false);
+		const models = [...chat, ...responses];
 		expect(models).toHaveLength(1);
 		expect(models[0].id).toBe("x-preview-f-free");
 		expect(models[0].name).toBe("Ox Alpha Free");
@@ -256,13 +297,14 @@ describe("getVisibleModels dynamic", () => {
 
 	it("drops deprecated models from Zen set", () => {
 		const visibleIds = new Set(["big-pickle", "glm-5"]);
-		const models = getVisibleModels(visibleIds, fullModelsDevInfo, false);
-		expect(models.map((m) => m.id)).not.toContain("glm-5");
+		const { chat, responses } = getVisibleModels(visibleIds, fullModelsDevInfo, false);
+		expect([...chat, ...responses].map((m) => m.id)).not.toContain("glm-5");
 	});
 
 	it("filters to free models in anonymous mode", () => {
 		const visibleIds = new Set(["big-pickle", "x-preview-f-free", "deepseek-v4-pro"]);
-		const models = getVisibleModels(visibleIds, fullModelsDevInfo, true);
+		const { chat, responses } = getVisibleModels(visibleIds, fullModelsDevInfo, true);
+		const models = [...chat, ...responses];
 		const ids = models.map((m) => m.id).sort();
 		expect(ids).toEqual(["big-pickle", "x-preview-f-free"].sort());
 		for (const m of models) expect(m.cost?.input).toBe(0);
@@ -270,13 +312,14 @@ describe("getVisibleModels dynamic", () => {
 
 	it("falls back to staticModels when models.dev is unavailable", () => {
 		const visibleIds = new Set(["big-pickle", "x-preview-f-free"]);
-		const models = getVisibleModels(visibleIds, undefined, false);
+		const { chat, responses } = getVisibleModels(visibleIds, undefined, false);
 		// x-preview-f-free is not in staticModels, so only big-pickle survives
-		expect(models.map((m) => m.id)).toEqual(["big-pickle"]);
+		expect([...chat, ...responses].map((m) => m.id)).toEqual(["big-pickle"]);
 	});
 
 	it("falls back to staticModels when Zen API is unavailable", () => {
-		const models = getVisibleModels(undefined, fullModelsDevInfo, false);
+		const { chat, responses } = getVisibleModels(undefined, fullModelsDevInfo, false);
+		const models = [...chat, ...responses];
 		// Without Zen IDs, should use staticModels filtered by models.dev
 		expect(models.length).toBeGreaterThan(0);
 		expect(models.map((m) => m.id)).toContain("big-pickle");
@@ -285,7 +328,47 @@ describe("getVisibleModels dynamic", () => {
 
 	it("applies deepseekCompat dynamically for deepseek IDs from Zen", () => {
 		const visibleIds = new Set(["deepseek-v4-pro"]);
-		const models = getVisibleModels(visibleIds, fullModelsDevInfo, false);
-		expect(models[0].compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
+		const { chat } = getVisibleModels(visibleIds, fullModelsDevInfo, false);
+		expect(chat[0].compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
+	});
+
+	it("routes @ai-sdk/openai models to the responses bucket", () => {
+		const modelsDevWithMuseSpark = {
+			...fullModelsDevInfo,
+			"muse-spark-1.2-contributor-free": {
+				name: "Muse Spark 1.2",
+				reasoning: false,
+				modalities: { input: ["text"], output: ["text"] },
+				limit: { context: 128000, output: 8192 },
+				status: "available",
+				cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+				provider: { npm: "@ai-sdk/openai" },
+			},
+		};
+		const visibleIds = new Set([
+			"big-pickle",
+			"muse-spark-1.2-contributor-free",
+		]);
+		const { chat, responses } = getVisibleModels(visibleIds, modelsDevWithMuseSpark, false);
+		expect(chat.map((m) => m.id)).toEqual(["big-pickle"]);
+		expect(responses.map((m) => m.id)).toEqual(["muse-spark-1.2-contributor-free"]);
+	});
+
+	it("routes @ai-sdk/openai-compatible models to the chat bucket", () => {
+		const modelsDevWithCompat = {
+			...fullModelsDevInfo,
+			"some-openai-compat-model": {
+				name: "Some Compat Model",
+				status: "available",
+				cost: { input: 0, output: 0 },
+				provider: { npm: "@ai-sdk/openai-compatible" },
+			},
+		};
+		const visibleIds = new Set(["big-pickle", "some-openai-compat-model"]);
+		const { chat, responses } = getVisibleModels(visibleIds, modelsDevWithCompat, false);
+		const chatIds = chat.map((m) => m.id);
+		const responseIds = responses.map((m) => m.id);
+		expect(chatIds).toContain("some-openai-compat-model");
+		expect(responseIds).not.toContain("some-openai-compat-model");
 	});
 });

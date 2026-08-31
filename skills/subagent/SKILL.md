@@ -13,7 +13,8 @@ Three tools form the entire public API:
   agent id (for example `a7k2`). Pass `run_in_background: false` only when you
   truly need a foreground agent.
 - **get_subagent_result** — inspect live state or retrieve and consume a
-  durable terminal result by agent id.
+  durable terminal result. Takes exactly `agent_id` (the four-character id
+  from the receipt) plus an optional boolean `wait`; nothing else.
 - **stop_subagent** — cancel queued work or request cancellation of a running
   subagent.
 
@@ -43,6 +44,24 @@ consumed once, so call it after the agent finishes rather than before.
 Every agent is identified by a four-character lowercase id such as `a7k2`. Use
 it verbatim for `get_subagent_result` and `stop_subagent`.
 
+## Choosing subagent_type
+
+`subagent_type` must be a configured **profile name** — never a model name,
+provider name, or anything you invent.
+
+- If no specific profile matches the task, **omit `subagent_type` entirely**;
+  it defaults to the `general-purpose` profile. Passing
+  `subagent_type: "general-purpose"` explicitly is equally correct.
+- Never guess a profile name. An unrecognized name fails immediately; the
+  error message lists every available profile — retry with one of those names
+  (or omit the parameter).
+- Run `/agents` or check `.pi/subagent/config.json` if you need the profile
+  list before dispatching.
+
+The same discipline applies to result retrieval: `get_subagent_result` and
+`stop_subagent` accept only the `agent_id` string from the receipt — never the
+whole receipt object, a run directory path, or a description.
+
 ## Configuration
 
 Configuration is layered **packaged < user < trusted project**: the highest
@@ -51,7 +70,8 @@ layer that specifies a value wins, except `models` (merged) and `agentDirs`
 through this precedence. Run `/reload` after changing configuration or
 profiles.
 
-The `subagent_type` parameter must match a configured profile name. Available
+When supplied, the `subagent_type` parameter must match a configured profile
+name (see *Choosing subagent_type* above). Available
 profiles depend on your configuration layers; the error message lists them if
 you use an invalid name. Common profiles include `general-purpose` and any
 project-specific profiles defined in `.pi/subagent/config.json`.

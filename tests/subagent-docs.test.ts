@@ -20,6 +20,10 @@ describe("subagent skill documentation", () => {
 	it("mentions get_subagent_result", () => {
 		expect(content).toMatch(/get_subagent_result/);
 	});
+	it("names general-purpose as the fallback profile", () => {
+		expect(content).toMatch(/general-purpose/);
+	});
+
 
 	it("mentions stop_subagent", () => {
 		expect(content).toMatch(/stop_subagent/);

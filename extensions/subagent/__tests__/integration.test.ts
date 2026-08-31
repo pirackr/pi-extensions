@@ -360,6 +360,14 @@ describe("Task 12 extension integration", () => {
 			signal,
 		);
 	});
+it("leaves subagent_type optional so callers can omit it", async () => {
+	const h = harness();
+	const ctx = fakeContext();
+	await emit(h, "session_start", { type: "session_start", reason: "startup" }, ctx);
+	const tool = h.tools.get("Agent");
+	expect(tool.parameters.required ?? []).not.toContain("subagent_type");
+});
+
 
 	it("wires all manager operations and returns complete foreground output", async () => {
 		const h = harness();
@@ -450,6 +458,23 @@ describe("Task 12 extension integration", () => {
 		rendered = ctx.ui.widgets.get("subagent-agents")?.join("\n") ?? "";
 		expect(rendered).not.toContain("task d001");
 	});
+	it("hides agents from an earlier batch once a new background batch spawns", async () => {
+		const staleRunning = { ...manifest("s001", "running"), groupId: "turn-1-nonce" };
+		const h = harness({ manifests: [staleRunning] });
+		const ctx = fakeContext();
+		await emit(h, "session_start", { type: "session_start", reason: "startup" }, ctx);
+		expect(ctx.ui.widgets.get("subagent-agents")?.join("\n")).toContain("task s001");
+		// A later turn spawns a new batch; the previous batch leaves the
+		// widget even while still running.
+		await emit(h, "turn_start", { type: "turn_start", turnIndex: 2 }, ctx);
+		await h.tools.get("Agent").execute("bg", {
+			description: "bg",
+			prompt: "bg prompt",
+			subagent_type: "worker",
+		}, signal, undefined, ctx);
+		expect(ctx.ui.widgets.get("subagent-agents")?.join("\n")).not.toContain("task s001");
+	});
+
 
 	it("renders compact notification summaries without the result body", () => {
 		const h = harness();

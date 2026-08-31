@@ -16,9 +16,15 @@
 // Models are built dynamically from the live Zen API (GET /zen/v1/models) combined
 // with models.dev metadata — new models appear automatically without code changes.
 // A static catalog is kept as fallback when live endpoints are unreachable.
-// Only models served over the OpenAI-compatible /chat/completions endpoint are
-// registered (that covers every free model and the DeepSeek/MiniMax/GLM/Kimi
-// families). Claude/GPT/Gemini lines need other streaming APIs and are omitted.
+//
+// The gateway supports two API protocols:
+//   - /chat/completions (OpenAI-compatible) — most models
+//   - /responses (OpenAI Responses API) — models marked in models.dev with
+//     `provider.npm: "@ai-sdk/openai"` instead of `@ai-sdk/openai-compatible`
+//
+// Two providers are registered: "opencode-zen" for chat completions models,
+// and "opencode-zen-responses" for Responses API models (e.g. muse-spark).
+// Claude/GPT/Gemini lines need other streaming APIs and are omitted.
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -224,7 +230,31 @@ interface ModelsDevModelInfo {
 		cache_read?: number | null;
 		cache_write?: number | null;
 	} | null;
+	provider?: {
+		npm?: string | null;
+	} | null;
 }
+
+/**
+ * The two API protocols the Zen gateway supports:
+ * - "openai-completions" → /chat/completions (most models)
+ * - "openai-responses"  → /responses (muse-spark, etc.)
+ */
+export type ZenApiType = "openai-completions" | "openai-responses";
+
+/** Sentinel for models whose API type is unknown (defaults to chat completions). */
+const DEFAULT_API_TYPE: ZenApiType = "openai-completions";
+
+/**
+ * Models.dev marks certain models with `provider.npm: "@ai-sdk/openai"` which
+ * means they only work through the Responses API (`/responses` endpoint), not
+ * the Chat Completions API (`/chat/completions`). This set holds those npm
+ * package names so we can route correctly.
+ *
+ * `@ai-sdk/openai-compatible` → Chat Completions (the default)
+ * `@ai-sdk/openai`            → Responses API
+ */
+const RESPONSES_API_NPM_PACKAGES = new Set(["@ai-sdk/openai"]);
 
 function isFreeModel(info: ModelsDevModelInfo | undefined): boolean {
 	const input = info?.cost?.input;
@@ -306,12 +336,21 @@ export async function fetchModelsDevInfo(): Promise<
 /**
  * Build a ProviderModelConfig from models.dev metadata.
  * Returns undefined when the model isn't in models.dev.
+ *
+ * Also determines the API type: models.dev marks certain models with
+ * `provider.npm: "@ai-sdk/openai"` — those need the Responses API
+ * (`/responses`) instead of Chat Completions (`/chat/completions`).
  */
 export function buildModelFromModelsDev(
 	id: string,
 	info: ModelsDevModelInfo | undefined,
-): ProviderModelConfig | undefined {
+): { model: ProviderModelConfig; apiType: ZenApiType } | undefined {
 	if (!info) return undefined;
+	const npm = info.provider?.npm?.trim();
+	const apiType: ZenApiType =
+		npm && RESPONSES_API_NPM_PACKAGES.has(npm)
+			? "openai-responses"
+			: DEFAULT_API_TYPE;
 	const model: ProviderModelConfig = {
 		id,
 		name: info.name ?? id,
@@ -329,57 +368,83 @@ export function buildModelFromModelsDev(
 	if (id.startsWith("deepseek-")) {
 		model.compat = deepseekCompat;
 	}
-	return model;
+	return { model, apiType };
 }
 
 /**
- * Build the provider model list dynamically:
- * - When both Zen IDs and models.dev are available: build from Zen ∩ models.dev
- * - When Zen IDs are unavailable: fall back to staticModels filtered by models.dev
- * - When models.dev is unavailable: fall back to staticModels filtered by Zen IDs
- * - When neither is available: return staticModels (anonymous mode filters later)
- * - deprecated models are always dropped
- * - anonymous/public mode keeps only free models (cost.input === 0)
+ * Build the provider model lists dynamically, grouped by API protocol:
+ *
+ * - "chat" models use `/chat/completions` (the vast majority)
+ * - "responses" models use `/responses` (muse-spark, etc. — marked in models.dev
+ *   with `provider.npm: "@ai-sdk/openai"` instead of `@ai-sdk/openai-compatible`)
+ *
+ * Fallback chain when live data is partially unavailable:
+ * - Both Zen IDs + models.dev → build from intersection, API type from models.dev
+ * - Only models.dev → filter staticModels by models.dev status, API type from models.dev
+ * - Only Zen IDs → filter staticModels by Zen IDs, all default to chat completions
+ * - Neither → staticModels as-is, all chat completions
+ *
+ * deprecated models are always dropped.
+ * anonymous/public mode keeps only free models (cost.input === 0).
  */
 export function getVisibleModels(
 	visibleIds?: Set<string>,
 	modelsDevInfo?: Record<string, ModelsDevModelInfo>,
 	anonymousMode = false,
-): ProviderModelConfig[] {
-	let models: ProviderModelConfig[];
+): { chat: ProviderModelConfig[]; responses: ProviderModelConfig[] } {
+	const chat: ProviderModelConfig[] = [];
+	const responses: ProviderModelConfig[] = [];
 
 	if (visibleIds && modelsDevInfo) {
 		// Dynamic: build from Zen IDs + models.dev metadata
-		models = [];
 		for (const id of visibleIds) {
 			const info = modelsDevInfo[id];
 			if (!info || info.status === "deprecated") continue;
 			const built = buildModelFromModelsDev(id, info);
-			if (built) models.push(built);
+			if (built) {
+				(built.apiType === "openai-responses" ? responses : chat).push(
+					built.model,
+				);
+			}
 		}
 	} else if (modelsDevInfo) {
 		// Zen unavailable: filter staticModels by models.dev
-		models = staticModels.filter(
-			(m) => modelsDevInfo[m.id]?.status !== "deprecated",
-		);
+		for (const m of staticModels) {
+			if (modelsDevInfo[m.id]?.status === "deprecated") continue;
+			const built = buildModelFromModelsDev(m.id, modelsDevInfo[m.id]);
+			if (built) {
+				(built.apiType === "openai-responses" ? responses : chat).push(
+					built.model,
+				);
+			} else {
+				chat.push(m);
+			}
+		}
 	} else if (visibleIds) {
-		// models.dev unavailable: filter staticModels by Zen IDs
-		models = staticModels.filter((m) => visibleIds.has(m.id));
+		// models.dev unavailable: filter staticModels by Zen IDs, all chat
+		for (const m of staticModels) {
+			if (visibleIds.has(m.id)) chat.push(m);
+		}
 	} else {
-		// Both unavailable: use static catalog as-is
-		models = [...staticModels];
+		// Both unavailable: use static catalog as-is, all chat
+		chat.push(...staticModels);
 	}
+
+	const filterFree = (models: ProviderModelConfig[]) => {
+		if (modelsDevInfo) {
+			return models.filter((m) => isFreeModel(modelsDevInfo[m.id]));
+		}
+		return models.filter((m) => m.cost?.input === 0);
+	};
 
 	if (anonymousMode) {
-		if (modelsDevInfo) {
-			models = models.filter((m) => isFreeModel(modelsDevInfo[m.id]));
-		} else {
-			models = models.filter((m) => m.cost?.input === 0);
-		}
+		return { chat: filterFree(chat), responses: filterFree(responses) };
 	}
 
-	return models;
+	return { chat, responses };
 }
+
+export const RESPONSES_PROVIDER_NAME = "opencode-zen-responses";
 
 export default async function (pi: ExtensionAPI): Promise<void> {
 	const apiKey = resolveApiKey(join(process.env["HOME"] ?? "", ".pi", "agent", "auth.json"));
@@ -389,12 +454,31 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		fetchModelsDevInfo(),
 	]);
 
+	const { chat, responses } = getVisibleModels(visibleIds, modelsDevInfo, anonymous);
+
+	const headers = opencodeHeaders();
+
+	// Register the chat completions provider (the vast majority of models)
 	pi.registerProvider(PROVIDER_NAME, {
 		name: "OpenCode Zen",
 		baseUrl: BASE_URL,
 		api: "openai-completions",
 		apiKey,
-		headers: opencodeHeaders(),
-		models: getVisibleModels(visibleIds, modelsDevInfo, anonymous),
+		headers,
+		models: chat,
 	});
+
+	// Register the Responses API provider only when models actually need it.
+	// Models like muse-spark require the /responses endpoint and will 500
+	// if sent to /chat/completions.
+	if (responses.length > 0) {
+		pi.registerProvider(RESPONSES_PROVIDER_NAME, {
+			name: "OpenCode Zen (Responses API)",
+			baseUrl: BASE_URL,
+			api: "openai-responses",
+			apiKey,
+			headers,
+			models: responses,
+		});
+	}
 }

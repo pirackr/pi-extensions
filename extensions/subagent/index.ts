@@ -11,15 +11,9 @@ import type {
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import {
-	discoverProfiles,
-	loadSubagentConfiguration,
-} from "./config.ts";
+import { discoverProfiles, loadSubagentConfiguration } from "./config.ts";
 import { projectSlug, resolveParentIdentity } from "./identity.ts";
-import {
-	acquireManagerLease,
-	type ManagerLease,
-} from "./locks.ts";
+import { acquireManagerLease, type ManagerLease } from "./locks.ts";
 import {
 	createSubagentManager,
 	type ManagerCallContext,
@@ -114,7 +108,7 @@ export interface ExtensionRuntime {
 	coordinator: NotificationCoordinator | null;
 	initialize(context: ManagerCallContext): Promise<void>;
 	activate(): void;
-	shutdown(): Promise<void>;
+	shutdown(reason?: string): Promise<void>;
 }
 
 export interface InstallSubagentOptions {
@@ -144,29 +138,40 @@ const AgentParameters = Type.Object(
 			minLength: 1,
 			description: "Complete, self-contained task contract.",
 		}),
-		subagent_type: Type.String({
-			minLength: 1,
-			description: "Configured subagent profile name.",
-		}),
-		run_in_background: Type.Optional(Type.Boolean({
-			description: "Return a durable receipt instead of waiting. Defaults to true.",
-		})),
+		subagent_type: Type.Optional(
+			Type.String({
+				minLength: 1,
+				description:
+					'Configured subagent profile name (e.g. "general-purpose"), never a model name. Omit to use the default "general-purpose" profile.',
+			}),
+		),
+		run_in_background: Type.Optional(
+			Type.Boolean({
+				description:
+					"Return a durable receipt instead of waiting. Defaults to true.",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
 
+const AGENT_ID_DESCRIPTION =
+	'Four-character agent id from the Agent receipt (e.g. "a7k2").';
+
 const GetResultParameters = Type.Object(
 	{
-		agent_id: Type.String({ minLength: 1 }),
-		wait: Type.Optional(Type.Boolean({
-			description: "Wait interruptibly for a terminal result. Defaults to false.",
-		})),
+		agent_id: Type.String({ minLength: 1, description: AGENT_ID_DESCRIPTION }),
+		wait: Type.Optional(
+			Type.Boolean({
+				description: "Wait interruptibly for a terminal result. Defaults to false.",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
 
 const StopParameters = Type.Object(
-	{ agent_id: Type.String({ minLength: 1 }) },
+	{ agent_id: Type.String({ minLength: 1, description: AGENT_ID_DESCRIPTION }) },
 	{ additionalProperties: false },
 );
 
@@ -202,10 +207,12 @@ function resultText(response: ResultResponse): string {
 
 function toolResult(value: AgentReceipt | ResultResponse) {
 	return {
-		content: [{
-			type: "text" as const,
-			text: isResultResponse(value) ? resultText(value) : receiptText(value),
-		}],
+		content: [
+			{
+				type: "text" as const,
+				text: isResultResponse(value) ? resultText(value) : receiptText(value),
+			},
+		],
 		details: value,
 	};
 }
@@ -251,7 +258,7 @@ function widgetRows(manifests: readonly AgentManifest[]): AgentWidgetRow[] {
 			toolUses: live.usage?.toolUses ?? 0,
 			totalTokens: live.usage?.totalTokens ?? 0,
 			contextWindow: live.contextWindow ?? null,
-			activity: isTerminal ? null : live.activity ?? null,
+			activity: isTerminal ? null : (live.activity ?? null),
 		};
 	});
 }
@@ -330,7 +337,7 @@ export function installSubagentExtension(
 		runtimeOverride?: ExtensionRuntime,
 	): Promise<void> => {
 		const ctx = activeContext;
-		const runtime = runtimeOverride ?? await runtimeIfStarted();
+		const runtime = runtimeOverride ?? (await runtimeIfStarted());
 		if (!ctx || !runtime || ctx.mode !== "tui") return;
 		const all = await runtime.manager.list();
 		const visible = all.filter((item) => !dismissedTerminal.has(item.agentId));
@@ -378,10 +385,19 @@ export function installSubagentExtension(
 					"Nested subagents must run in the foreground; set run_in_background to false.",
 				);
 			}
-			// A new spawn starts a fresh display generation: everything already
-			// finished from an earlier batch is dismissed so the widget only shows
-			// live work plus the new spawn.
-			await dismissTerminalAgents(runtime);
+			// A new background spawn scopes the widget to its batch: agents
+			// outside the new agent's notification group — earlier batches,
+			// terminal or still running — are hidden so the widget shows only
+			// this batch. Foreground spawns keep the terminal-only dismissal.
+			if (request.run_in_background) {
+				for (const item of await runtime.manager.list()) {
+					if (item.groupId !== currentGroupId) {
+						dismissedTerminal.add(item.agentId);
+					}
+				}
+			} else {
+				await dismissTerminalAgents(runtime);
+			}
 			const response = await runtime.manager.enqueue(
 				request,
 				{
@@ -399,15 +415,10 @@ export function installSubagentExtension(
 	pi.registerTool({
 		name: "get_subagent_result",
 		label: "Get subagent result",
-		description: "Inspect live state or retrieve and consume a durable terminal result.",
+		description:
+			"Inspect live state or retrieve and consume a durable terminal result.",
 		parameters: GetResultParameters,
-		execute: async (
-			_toolCallId,
-			raw,
-			signal,
-			_onUpdate,
-			_ctx,
-		) => {
+		execute: async (_toolCallId, raw, signal, _onUpdate, _ctx) => {
 			const params = raw as { agent_id: string; wait?: boolean };
 			const runtime = await requireRuntime();
 			const response = await runtime.manager.getResult(
@@ -422,7 +433,8 @@ export function installSubagentExtension(
 	pi.registerTool({
 		name: "stop_subagent",
 		label: "Stop subagent",
-		description: "Cancel queued work or request cancellation of a running subagent.",
+		description:
+			"Cancel queued work or request cancellation of a running subagent.",
 		parameters: StopParameters,
 		execute: async (_toolCallId, raw) => {
 			const params = raw as { agent_id: string };
@@ -458,9 +470,12 @@ export function installSubagentExtension(
 			ctx.ui.notify(
 				items.length === 0
 					? "No subagents."
-					: items.map((item) =>
-						`subagent-${item.agentId} ${item.profile.name}: ${item.description} [${item.state}]`
-					).join("\n"),
+					: items
+							.map(
+								(item) =>
+									`subagent-${item.agentId} ${item.profile.name}: ${item.description} [${item.state}]`,
+							)
+							.join("\n"),
 			);
 		},
 	});
@@ -468,12 +483,14 @@ export function installSubagentExtension(
 	pi.registerMessageRenderer(
 		"subagent-notification",
 		(message, renderOptions, theme: Theme) => {
-			const items = typeof message.content === "string"
-				? notificationItems(message.content)
-				: [];
-			const text = items.length > 0
-				? renderNotificationMessage(items)
-				: "Subagent task update";
+			const items =
+				typeof message.content === "string"
+					? notificationItems(message.content)
+					: [];
+			const text =
+				items.length > 0
+					? renderNotificationMessage(items)
+					: "Subagent task update";
 			return new Text(theme.fg("muted", text), renderOptions.outputPad, 0);
 		},
 	);
@@ -536,12 +553,13 @@ export function installSubagentExtension(
 		return { action: "continue" as const };
 	});
 
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (event: unknown) => {
 		stopSpinnerTimer();
+		const reason = (event as { reason?: string } | undefined)?.reason;
 		if (!shutdownPromise) {
 			shutdownPromise = (async () => {
 				const runtime = await runtimeIfStarted();
-				if (runtime) await runtime.shutdown();
+				if (runtime) await runtime.shutdown(reason);
 				const ctx = activeContext;
 				if (ctx?.mode === "tui") {
 					ctx.ui.setWidget(WIDGET_KEY, undefined);
@@ -578,9 +596,7 @@ function piInvocation(): { command: string; args: string[] } {
 	};
 }
 
-function childConfig<T extends { childExtensions: string[] }>(
-	config: T,
-): T {
+function childConfig<T extends { childExtensions: string[] }>(config: T): T {
 	const own = join(EXTENSION_DIR, "index.ts");
 	return {
 		...config,
@@ -605,7 +621,8 @@ function resolvedCall(
 		contributions: Array<{ owner: string; adapter: ProfilePolicyAdapter }>;
 	} = { contributions: [] };
 	pi.events.emit("subagent:register-policy-adapters", adapterEnvelope);
-	const policyAdapters: Record<string, ProfilePolicyAdapter> = Object.create(null);
+	const policyAdapters: Record<string, ProfilePolicyAdapter> =
+		Object.create(null);
 	for (const contribution of adapterEnvelope.contributions) {
 		if (!policyAdapters[contribution.owner]) {
 			policyAdapters[contribution.owner] = contribution.adapter;
@@ -678,6 +695,8 @@ export async function createProductionRuntime(
 	let identity;
 	let mode: ExtensionRuntime["mode"];
 	let currentAgentId: string | undefined;
+	let startupTmuxSession: string | null = null;
+	let initialSessionId: string | null = null;
 
 	if (factory.nested) {
 		const nested = nestedEnvironment(env);
@@ -695,6 +714,11 @@ export async function createProductionRuntime(
 		const canonicalCwd = await realpath(context.cwd).catch(() => context.cwd);
 		const slug = projectSlug(canonicalCwd);
 		const current = await tmuxSession(tmuxExec, env);
+		startupTmuxSession = current;
+		initialSessionId = env.PI_SESSION_ID ?? null;
+		if (initialSessionId !== null && !/^[a-z0-9]{4}$/.test(initialSessionId)) {
+			initialSessionId = null;
+		}
 		identity = await resolveParentIdentity({
 			cwd: canonicalCwd,
 			projectSlug: slug,
@@ -718,9 +742,8 @@ export async function createProductionRuntime(
 	const tmux = createTmuxClient(tmuxExec, identity.id);
 	const managerLockPath = join(identity.artifactRoot, "manager.lock");
 	const registryLockPath = join(identity.artifactRoot, "registry.lock");
-	const owner = mode === "manager"
-		? `parent-${identity.id}`
-		: `nested-${currentAgentId}`;
+	const owner =
+		mode === "manager" ? `parent-${identity.id}` : `nested-${currentAgentId}`;
 	const deferred = deferredSchedulerFactory();
 	let managerLease: ManagerLease | null = null;
 	const scheduled = new Set<ReturnType<typeof setTimeout>>();
@@ -815,7 +838,7 @@ export async function createProductionRuntime(
 			};
 			pollTimer = setTimeout(() => void poll(), POLL_MS);
 		},
-		async shutdown() {
+		async shutdown(reason?: string) {
 			if (stopped) return;
 			stopped = true;
 			if (pollTimer) clearTimeout(pollTimer);
@@ -823,6 +846,39 @@ export async function createProductionRuntime(
 			for (const handle of scheduled) clearTimeout(handle);
 			scheduled.clear();
 			await manager.shutdown();
+			// When pi was NOT spawned by `tmuxify pi`, it owns the detached
+			// `pi-<id>` session it created for subagents. On real process exit
+			// (`reason === "quit"`), that session has no wrapper to clean it up
+			// so the extension must destroy it — otherwise subagent windows
+			// linger after the main process is gone. When pi IS inside its own
+			// `pi-<id>` session (the tmuxify case), the Fish wrapper owns
+			// cleanup and we must NOT kill the session here; that event also
+			// fires for `/reload`, `/new`, etc. where killing would destroy a
+			// live session. We only kill when the manager lease is held (i.e.
+			// we are not an observer) and pi was not launched via tmuxify.
+			// tmuxify is identified by BOTH conditions: the startup tmux session
+			// equals the resolved identity AND the initial PI_SESSION_ID env
+			// matches that identity. Without tmuxify the extension creates a
+			// detached pi-<id> session (outside tmux or inside an unrelated
+			// outer session) that would otherwise leak; the old check
+			// `startup !== identity` missed the case where pi is inside a
+			// leaked pi-xxxx session without a matching env, which also needs
+			// cleanup.
+			const launchedViaTmuxify =
+				startupTmuxSession === identity.tmuxSession &&
+				initialSessionId === identity.id;
+			if (
+				reason === "quit" &&
+				mode === "manager" &&
+				managerLease &&
+				!launchedViaTmuxify
+			) {
+				try {
+					await tmux.killSession();
+				} catch {
+					// Best-effort: tmux may be missing or the session already gone.
+				}
+			}
 		},
 	};
 

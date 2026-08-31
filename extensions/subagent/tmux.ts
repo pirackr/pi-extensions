@@ -128,6 +128,8 @@ export interface TmuxClient {
 	): Promise<boolean>;
 	/** Build the session-scoped tmux target for a window name. */
 	targetFor(name: string): string;
+	/** Kill the parent tmux session owned by this client, if it exists. */
+	killSession(): Promise<boolean>;
 	/**
 	 * Build the exact, human-readable attach display text for a window. This is
 	 * display-only: it is never executed through a shell by this client.
@@ -259,6 +261,15 @@ class TmuxClientImpl implements TmuxClient {
 		assertAgentWindowName(name);
 		// Display-only attach text: never executed through a shell here.
 		return `tmux attach -t ${this.sessionName} \\; select-window -t ${name}`;
+	}
+
+	async killSession(): Promise<boolean> {
+		try {
+			await this.exec(["kill-session", "-t", this.sessionName]);
+			return true;
+		} catch {
+			return false;
+		}
 	}
 
 	private async sessionExists(): Promise<boolean> {

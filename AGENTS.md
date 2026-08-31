@@ -94,10 +94,21 @@ Dependencies: `@mozilla/readability` + `linkedom` (DOMParser doesn't exist in No
 
 ## opencode-zen extension
 
-`extensions/opencode-zen/index.ts` registers an `opencode-zen` provider so pi can use OpenCode Zen's hosted models — including the free tier (`deepseek-v4-flash-free`, `nemotron-3-ultra-free`, `big-pickle`, ...) with no account. This is how the opencode CLI itself works: it authenticates anonymously with the shared credential `public` plus opencode client headers (`x-opencode-client`, `x-opencode-session`, `x-opencode-project`, `x-opencode-request`) and a CLI User-Agent; the Zen gateway grants the free models, rate-limited.
+`extensions/opencode-zen/index.ts` registers two providers so pi can use OpenCode Zen's hosted models — including the free tier (`deepseek-v4-flash-free`, `nemotron-3-ultra-free`, `big-pickle`, `muse-spark-1.2-contributor-free`, ...) with no account. This is how the opencode CLI itself works: it authenticates anonymously with the shared credential `public` plus opencode client headers (`x-opencode-client`, `x-opencode-session`, `x-opencode-project`, `x-opencode-request`) and a CLI User-Agent; the Zen gateway grants the free models, rate-limited.
+
+### Two API protocols
+
+The Zen gateway serves two API protocols:
+
+- **`/chat/completions`** (OpenAI-compatible) — registered as `opencode-zen` (`api: "openai-completions"`). Covers most models: DeepSeek, MiniMax, GLM, Kimi, Nemotron, Big Pickle, etc.
+- **`/responses`** (OpenAI Responses API) — registered as `opencode-zen-responses` (`api: "openai-responses"`). Used by models whose models.dev metadata has `provider.npm: "@ai-sdk/openai"` instead of `@ai-sdk/openai-compatible`. Currently: `muse-spark-1.2-contributor-free` (free) and `muse-spark-1.2` (paid).
+
+The routing is automatic: models.dev's `provider.npm` field determines which bucket a model lands in. Models needing the Responses API will 500 if sent to `/chat/completions`.
+
+### Config and key resolution
 
 - Key resolution: `OPENCODE_API_KEY` env → `auth.json` `opencode-zen` entry → anonymous `public`. Anonymous mode filters the catalog to free models (models.dev `cost.input === 0`).
-- `baseUrl` `https://opencode.ai/zen/v1`, `api: "openai-completions"` — only models served over `/chat/completions` are registered (all free models plus the DeepSeek/MiniMax/GLM/Kimi paid families). Claude/GPT/Gemini lines need other streaming APIs and are omitted.
+- `baseUrl` `https://opencode.ai/zen/v1` — shared by both providers.
 - Model list is refined at load: live `GET /zen/v1/models` narrows, models.dev `status: deprecated` drops, anonymous mode keeps free only. `staticModels` in the file is the offline fallback — refresh it when the Zen catalog rotates.
 - Data caveat: free models are limited-time promos and some log data for model improvement (see opencode.ai/docs/zen).
 

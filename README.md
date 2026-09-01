@@ -1,232 +1,154 @@
 # Pi Extensions
 
-Pi extensions and skills workspace. Uses [convention directories](https://pi.dev/docs/latest/packages) for auto-discovery.
+A Pi package of production extensions, skills, and a planning prompt. It adds
+subagent orchestration, web research, autonomous research loops, adaptive
+compaction, completion notifications, and OpenCode Zen models.
 
-## Structure
-
-```
-pi-extensions/
-├── config/
-│   └── tmux-subagent.json   # Bundled model and runtime defaults
-├── package.json
-├── README.md
-├── extensions/              # Pi auto-discovers *.ts and */index.ts here
-│   ├── tmux-subagent/       # Tmux-backed Pi subprocess supervisor
-│   └── web-search/
-│       └── index.ts         # Extension — registers pi tools
-├── skills/                  # Pi auto-discovers SKILL.md directories here
-│   ├── subagent/            # Delegation policy for the Agent tool
-│   └── web-search/
-│       └── SKILL.md         # Skill — agent guidance
-└── subagents/               # Bundled declarative agent profiles
-```
+> Extensions execute with your user permissions. Review this package and only
+> install sources you trust.
 
 ## Install
 
-```bash
-# Project-local (adds to .pi/settings.json)
-cd your-project
-pi install -l ../pi-extensions
+```sh
+# Install globally (default): ~/.pi/agent/settings.json
+pi install /absolute/path/to/pi-extensions
 
-# Or global (adds to ~/.pi/agent/settings.json)
-pi install ~/Working/grinder/pi-extensions
+# Install for one trusted project: .pi/settings.json
+cd /path/to/project
+pi install -l /absolute/path/to/pi-extensions
+
+# Try a single extension without installing the package
+pi -e /absolute/path/to/pi-extensions/extensions/web-search/index.ts
 ```
 
-No `npm install` needed — `pi install` registers the path in settings and auto-discovers resources on the next run or `/reload`.
+Pi auto-discovers `extensions/`, `skills/`, and `prompts/`. After changing a
+local installation, run `/reload` in Pi. Git and npm package installs resolve
+runtime dependencies automatically; for repository development, install them
+with `npm install`.
+
+## Included resources
+
+| Resource | What it provides |
+| --- | --- |
+| `extensions/subagent` | Durable, tmux-backed Pi subagents with scheduling, profiles, and a TUI status widget. |
+| `extensions/web-search` | `web_lookup` and `fetch_web` tools with direct-provider routing, validation, retries, and shared rate limits. |
+| `extensions/loop` (with research modules) | `/loop` for general autonomous programs and `/research` for retained, evidence-driven research runs. |
+| `extensions/auto-compact` | Per-model context thresholds and a `/auto-compact` status command. |
+| `extensions/ntfy` | Opt-in session completion notifications via `/ntfy`. |
+| `extensions/opencode-zen` | OpenCode Zen model providers, including anonymous free-tier discovery. |
+| `skills/` | `customize-pi`, `grill-me`, `handoff`, `org2pdf`, `research`, `subagent`, and `web-search`. |
+| `prompts/plan.md` | The `/plan` implementation-planning prompt. |
 
 ## Subagents
 
-The `Agent` tool launches independent Pi subagents managed by the subagent
-extension. Each `Agent` call runs one subagent; background execution defaults to `true`, so it returns a durable receipt with a four-character agent id (instead of waiting). Retrieve the outcome with `get_subagent_result`, and use `stop_subagent` to cancel queued or running work.
+The subagent extension registers three model-callable tools:
 
-Bundled profiles provide `scout`, `worker`, `reviewer`, and `tester`; profile files control prompts, models, tools, access, and timeouts without changing the runtime.
+- `Agent` — queue one independently scoped subagent. Background execution is
+  the default and returns a durable four-character receipt ID.
+- `get_subagent_result` — inspect a run or retrieve and consume its terminal
+  result; pass `wait: true` to wait for completion.
+- `stop_subagent` — cancel queued work or request cancellation of a running
+  agent.
 
-Requirements:
+Use `/agents` to inspect and control durable agents in the TUI. Agents run in
+tmux, so `tmux` and Node.js must be on `PATH`. Subagents with shell or write
+access must use separate worktrees when they run concurrently.
 
-- `tmux` and Node.js available on `PATH`
-- Provider extensions and models referenced by the active configuration
+The bundled default profile is `general-purpose` at
+`extensions/subagent/subagents/general-purpose.md`. Configuration is layered
+from packaged defaults, user settings, and (for trusted projects) project
+settings:
 
-Use one call for a single agent or multiple non-overlapping calls for parallel work. Agents with shell or write access must not share a Git worktree. Attach to a live run using the tmux command reported in the receipt.
+| Layer | Configuration | Profiles |
+| --- | --- | --- |
+| Packaged | `config/subagent.json` | `extensions/subagent/subagents/*.md` |
+| User | `$PI_AGENT_DIR/subagent/config.json` | `$PI_AGENT_DIR/subagent/agents/*.md` |
+| Trusted project | `<project>/.pi/subagent/config.json` | project-provided profile directories |
 
-Bundled defaults live in `config/subagent.json` and
-`extensions/subagent/subagents/*.md`. Override them without modifying the
-package:
+`$PI_AGENT_DIR` is normally `~/.pi/agent`. The project layer has highest
+precedence; models are merged and additional `agentDirs` are combined. Run
+`/reload` after changing configuration or profiles.
 
-- User configuration: `$PI_AGENT_DIR/subagent/config.json` (normally `~/.pi/agent/subagent/config.json`)
-- User profiles: `$PI_AGENT_DIR/subagent/agents/*.md` (normally `~/.pi/agent/subagent/agents/*.md`)
-- Project configuration: `<project>/.pi/subagent/config.json` — trusted projects only; highest precedence
-- Additional profile directories: `agentDirs` in user or project configuration
+## Web search
 
-Configuration values override bundled values (project > user > bundled). User profiles override bundled profiles with the same `name`. Run `/reload` after changing configuration or profiles.
+`web_lookup` searches the web and `fetch_web` extracts a public page. The
+default search chain is **TinyFish → Exa → DuckDuckGo**; the first engine that
+returns results wins. Tavily is available only when explicitly requested.
+TinyFish, Exa, and Tavily use `TINYFISH_API_KEY`, `EXA_API_KEY`, and
+`TAVILY_API_KEY`, respectively; DuckDuckGo needs no key.
 
-The project layer is the way to give a single project different subagent models without touching global config — e.g. re-alias research models for one repo:
+- `web_lookup({ query, limit, engine, advancedOptions })`
+- `fetch_web({ url, max_chars, advancedOptions })`
 
-```json
-{
-  "models": {
-    "strong": "x-preview-f-free",
-    "eval": "mimo-v2.5-free"
-  }
-}
+API keys resolve from the environment or the repository-root `.env` file and
+are never accepted as tool inputs. Search limits and retries are coordinated
+across Pi and subagent processes in `$PI_AGENT_DIR/cache/web-search/`.
+
+Configuration is supplied by `config/web-search.json`; users can override it
+with `$PI_AGENT_DIR/web-search.json`. Provider-specific advanced options are
+strictly validated. See [docs/web-search-provider-options.md](docs/web-search-provider-options.md)
+for the complete option reference.
+
+## Autonomous loops and research
+
+`/loop` runs a mission against a program file until its completion condition,
+round limit, token budget, or no-progress limit is reached:
+
+```text
+/loop [--program <path>] [--max-rounds N] [--tokens N] [--no-progress N|off] <mission>
 ```
 
-It only applies when the project is trusted (`ctx.isProjectTrusted()`), and is resolved at each dispatch, so no reload is needed mid-session.
+Use `/loop status`, `/loop pause`, `/loop resume`, or `/loop clear` to manage
+the active loop. `complete_loop` is available to the model only for marking a
+run complete after the program's completion condition is actually satisfied.
 
-Example configuration:
+`/research` applies the bundled research program, uses the subagent and web
+search integrations, and creates a retained workspace under the project
+root's `.research/` directory:
 
-```json
-{
-  "models": {
-    "fast": "provider/fast-model-id",
-    "strong": "provider/strong-model-id"
-  },
-  "childExtensions": [],
-  "toolAccess": {},
-  "agentDirs": [],
-  "loadContextFiles": true,
-  "maxConcurrent": 4,
-  "defaultTimeoutSeconds": 300
-}
+```text
+/research --profile standard "Compare N100 and Ryzen 7 7730U for a homelab"
 ```
 
-`$PI_AGENT_DIR` resolves through Pi's active agent directory, including `PI_CODING_AGENT_DIR` overrides. Setting `childExtensions` in user configuration replaces the bundled list. Register extension-provided tools in `toolAccess` with their minimum `read`, `shell`, or `write` capability before using them in a profile.
+Research profiles are `quick`, `standard`, `intermediate`, `deep`, and
+`open-ended`; they set source, round, and dispatch limits in
+`config/research.json`. A research workspace stores its immutable manifest,
+mutable state, sources and notes, intermediate reports, verification evidence,
+and final cited `report.org`. Use `/research list`, `status`, `pause`,
+`resume`, or `clear` to operate on retained workspaces.
 
-Because background runs are asynchronous and durable, results survive a `/reload` or a crash: re-fetch a finished agent's output with `get_subagent_result` after recovery rather than relaunching it.
+Research never resumes automatically after a session restart. Resume it only
+with the explicit `/research resume` command. The `research_checkpoint` tool
+is exposed only during an active user-started research run.
 
-Example profile:
+## Auto-compaction and notifications
 
-```markdown
----
-name: scout
-description: Bounded codebase reconnaissance
-model: fast
-thinking: high
-tools: read,grep,find,ls
-access: read
-timeoutSeconds: 180
----
+### Auto-compaction
 
-System prompt for the agent.
+The auto-compaction extension evaluates context use after a run settles and
+applies the first matching per-model policy. Policies may use a percentage of
+the model context window or an absolute token threshold. Manual `/compact` and
+overflow recovery are never blocked.
+
+Configuration precedence is packaged `config/auto-compact.json`, then
+`$PI_AGENT_DIR/auto-compact/config.json`, then trusted-project
+`.pi/auto-compact.json`. Run `/auto-compact` to inspect the active policy,
+threshold, source layer, warnings, and controller state.
+
+### ntfy
+
+The ntfy extension sends `Task finished` only after you enable it for the
+current session:
+
+```text
+/ntfy          # show status
+/ntfy on       # enable completion notifications
+/ntfy off      # disable them
+/ntfy test     # send a test notification
 ```
 
-`model` resolves through the configured `models` aliases and may also be a literal model identifier. `thinking` optionally fixes the Pi reasoning level instead of inheriting ambient settings. Valid access levels are `read`, `shell`, and `write`; profiles cannot declare less access than their tools require. Access controls worktree scheduling, not OS sandboxing: a `bash`-enabled profile can modify files even when its prompt says not to. Child skills and ambient extensions are disabled; `loadContextFiles` controls whether repository `AGENTS.md` and `CLAUDE.md` instructions remain available. Because project-controlled profiles can grant shell access, project profile discovery is intentionally not automatic.
-
-## Auto-Compact
-
-The auto-compaction extension automatically compacts a session when context usage reaches a configurable per-model threshold. Thresholds may be expressed as a percentage of the active model's context window or as an absolute token count, and may be customized with ordered `provider/model-id` glob rules. The extension works both earlier and later than Pi's built-in compaction threshold while preserving manual `/compact`, Pi's overflow recovery, Pi's normal summary generation, and Pi's existing `keepRecentTokens` behavior.
-
-The extension operates without model-context messages or interactive prompts. In UI-capable modes it reports automatic compaction start, completion, and failure through notifications.
-
-### Configuration
-
-Configuration is layered from three sources, ordered lowest → highest precedence:
-
-1. **Packaged defaults**: `config/auto-compact.json` in the extension package. Invalid packaged configuration is fatal (package defect).
-2. **User configuration**: `$PI_AGENT_DIR/auto-compact/config.json` (normally `~/.pi/agent/auto-compact/config.json`). Invalid user configuration is ignored atomically while lower valid layers remain active.
-3. **Project configuration**: `<cwd>/${CONFIG_DIR_NAME}/auto-compact.json` (loaded only when `ctx.isProjectTrusted()` is true; the implementation uses Pi's exported `CONFIG_DIR_NAME` rather than hardcoding `.pi`). Invalid project configuration is ignored atomically. An untrusted project is reported as inactive by `/auto-compact`.
-
-Configuration values override bundled defaults. Invalid optional layers degrade safely with visible diagnostics (logged as `Ignored:` and `Warning:` lines in `/auto-compact` output).
-
-### Schema
-
-The packaged default:
-
-```json
-{
-  "enabled": true,
-  "default": { "percent": 80 },
-  "rules": []
-}
-```
-
-A user or project file may be partial:
-
-```json
-{
-  "default": { "percent": 80 },
-  "rules": [
-    {
-      "match": "anthropic/claude-*",
-      "percent": 75
-    },
-    {
-      "match": "openai/gpt-5.4",
-      "tokens": 180000
-    },
-    {
-      "match": "google/gemini-*",
-      "enabled": false
-    }
-  ]
-}
-```
-
-Top-level fields:
-
-- `enabled`: optional boolean. The highest-precedence layer that specifies `enabled` wins.
-- `default`: optional threshold object containing exactly one of `percent` or `tokens`.
-- `rules`: optional ordered array of complete model rules.
-
-Rule fields:
-
-- `match`: required non-empty glob matched against the case-sensitive canonical key `provider/model-id` (e.g. `anthropic/claude-sonnet-4-20250514`). Uses `minimatch` semantics — case-sensitive, no basename matching.
-- `enabled`: optional boolean, defaulting to `true`.
-- `percent`: context-usage percentage greater than `0` and at most `100`.
-- `tokens`: positive integer context-usage threshold in tokens.
-
-An enabled rule must contain exactly one of `percent` or `tokens`. A disabled rule must contain neither. Unknown fields are rejected.
-
-### Precedence and First-Match
-
-- Layers are retained rather than deep-merged: rules arrays are not combined across layers.
-- Global extension enablement is determined by the highest-precedence layer that specifies `enabled`.
-- Resolution searches project rules first, then user rules, then packaged rules — the first matching rule wins and is used atomically (no field-merging with lower layers).
-- If no rule matches, the highest-precedence specified `default` threshold is used.
-- Percentage thresholds are floored: `effectiveThresholdTokens = floor(contextWindow * percent / 100)`.
-- An absolute token threshold larger than the model's context window is not silently clamped; `/auto-compact` reports a warning instead.
-
-### Disabled Rules
-
-- A rule with `enabled: false` cancels auto-compaction for that model — Pi's threshold compaction is blocked for the matched model.
-- A global `enabled: false` (in any layer) leaves Pi's built-in compaction behavior entirely untouched; the extension is inert.
-
-### Manual Compaction and Overflow Recovery
-
-Manual `/compact` invocations and Pi's overflow recovery are never blocked by this extension. Pi continues to own summary generation, cut-point selection, file tracking, and `keepRecentTokens`.
-
-### Behavior
-
-The extension triggers its own compaction **after a run fully settles** (the `agent_settled` point, once per prompt run), never from `turn_end` — `turn_end` fires *inside* an active agent run, and compaction's internal abort would kill the live run. A resumed session that already exceeds its threshold compacts immediately at startup. A short cooldown plus the in-flight dedup prevents double compaction when Pi's native auto-compaction wins the race.
-
-When the custom threshold is *later* than Pi's built-in threshold (`contextWindow − reserveTokens`), Pi's native compaction keeps firing at its own threshold in the band between the two, and the extension cancels those attempts as premature — you will see an `Auto-compaction cancelled` status until usage reaches the custom threshold, at which point Pi's compaction is allowed through. If that band is noisy, align the thresholds: lower the extension's `percent`/`tokens`, or raise Pi's `compaction.reserveTokens` in `settings.json` so both fire at the same point.
-
-### Reloading Configuration
-
-Configuration changes take effect through Pi's normal `/reload` flow. The extension re-reads configuration from all layers on each session start and model change.
-
-### Status Command
-
-`/auto-compact` (takes no arguments) reports:
-
-- whether the extension is globally enabled or disabled;
-- the active `provider/model-id` and context window;
-- current token and percentage usage, when known;
-- the matched rule pattern, its source layer, and the effective token threshold (or `disabled`);
-- controller state: armed (awaiting threshold), in-flight (compaction triggered), or disarmed;
-- loaded configuration paths;
-- ignored configuration paths and the reason (e.g. "project not trusted", "invalid configuration");
-- configuration warnings; and
-- the most recent compaction error, if any.
-
-The status command is UI-guarded: when UI is available the report is emitted through Pi's extension UI; it does not use `pi.sendMessage()` and therefore does not consume model context.
-
-When no model or usage is available, the report explicitly marks those values as unavailable rather than guessing.
-
-## ntfy Notifications
-
-The ntfy extension sends a notification after Pi fully settles following a prompt. It is session-local and disabled by default.
-
-Configure a topic in `$PI_AGENT_DIR/ntfy/config.json` (normally `~/.pi/agent/ntfy/config.json`):
+Configure a topic in `$PI_AGENT_DIR/ntfy/config.json` (normally
+`~/.pi/agent/ntfy/config.json`):
 
 ```json
 {
@@ -236,54 +158,46 @@ Configure a topic in `$PI_AGENT_DIR/ntfy/config.json` (normally `~/.pi/agent/ntf
 }
 ```
 
-Environment variables override file settings: `NTFY_SERVER`, `NTFY_TOPIC`, and `NTFY_TOKEN`. `NTFY_TOPIC` may be either a topic name or a full HTTP(S) topic URL. No project-local configuration is read.
+`NTFY_SERVER`, `NTFY_TOPIC`, and `NTFY_TOKEN` override that file. No
+project-local ntfy configuration is read.
 
-Commands:
+## OpenCode Zen provider
 
-- `/ntfy` — show status without exposing the token.
-- `/ntfy on` — enable completion notifications for the current session.
-- `/ntfy off` — disable completion notifications.
-- `/ntfy test` — send a test notification even while notifications are off.
+The OpenCode Zen extension registers `opencode-zen` for chat-completions
+models and `opencode-zen-responses` for models requiring the OpenAI Responses
+API. It refreshes the visible model list from the Zen gateway and models.dev;
+deprecated models are excluded.
 
-Every new, resumed, forked, or reloaded session starts with notifications off. Completion messages contain only `Pi · <project>` and `Task finished`; prompts, responses, files, and transcripts are never sent.
+Credentials resolve in this order: `OPENCODE_API_KEY`, the `opencode-zen`
+entry in Pi's `auth.json`, then the anonymous `public` credential. Anonymous
+mode exposes only currently free models and is rate-limited. The Zen catalog
+can change without notice.
 
-## Add a New Extension
+## Develop and verify
 
-```bash
-# 1. Create extension code
-mkdir extensions/my-ext
-cat > extensions/my-ext/index.ts << 'EOF'
-import { Type } from "typebox";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+```sh
+npm install
+npm test
 
-export default function (pi: ExtensionAPI) {
-  pi.registerTool({
-    name: "my_tool",
-    label: "My Tool",
-    description: "Does something useful",
-    parameters: Type.Object({ input: Type.String() }),
-    async execute(_id, params) {
-      return { content: [{ type: "text", text: params.input }] };
-    },
-  });
-}
-EOF
-
-# 2. Create skill guidance
-mkdir skills/my-ext
-cat > skills/my-ext/SKILL.md << 'EOF'
----
-name: my-ext
-description: Does something useful. Use when...
----
-
-# My Ext
-
-Usage instructions here.
-EOF
-
-# 3. Reload in pi
-/reload
+# Register this checkout in the current project's Pi settings.
+pi install -l /absolute/path/to/pi-extensions
+# Then use /reload in Pi after editing a resource.
 ```
 
-Done — pi auto-discovers both the extension and skill.
+TypeScript is loaded directly by Pi through jiti; there is no build step.
+Tests use Vitest and live under `tests/`.
+
+## Repository layout
+
+```text
+config/       Packaged defaults for extensions
+extensions/   Pi extension entry points and implementation
+skills/       Auto-discovered SKILL.md guidance
+prompts/      Auto-discovered prompt templates
+docs/         Design notes and provider-option reference
+tests/        Vitest unit, integration, and smoke tests
+types/        Local TypeScript declarations
+```
+
+For Pi package installation, resource filtering, and security details, see the
+[Pi package documentation](https://pi.dev/docs/latest/packages).

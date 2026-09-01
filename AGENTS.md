@@ -32,6 +32,7 @@ Frontmatter drives behaviour: `name` + `description` are required, and `disable-
 
 The pattern here is that an extension and a skill of the same name are two halves of one feature:
 
+- `extensions/web-search/index.ts` registers the callable tools (`web_lookup`, `fetch_web`). The search tool is deliberately **not** named `web_search` — that name collides with Anthropic's reserved server-side `web_search_20250305` tool type and can break tool-calling through non-Anthropic compatibility shims.
 - `skills/web-search/SKILL.md` carries the *judgment* — engine-selection heuristics, when to fetch vs. search, prompt-injection safety rules, error-recovery table. None of that belongs in a tool description.
 
 When adding a feature, decide which half it needs. Guidance-only additions (`customize-pi`, `subagent`, `handoff`, `grill-me`) are skills with no extension.
@@ -91,6 +92,7 @@ Direct API calls — no `open-websearch`, no `npx`, no daemon. Architecture:
 
 Dependencies: `@mozilla/readability` + `linkedom` (DOMParser doesn't exist in Node — that's why linkedom, not the plan's original approach) + `typebox`. Tests in `tests/web-search.test.ts` (run with `npx vitest run`; note the `vi.mock('node:fs')` that neutralizes the real `.env` so tests are deterministic).
 
+**Compatibility note**: `web_search` is Anthropic's reserved name for its built-in server-side web search tool (`web_search_20250305`). Compatibility shims may mishandle a client-defined tool with that name when proxying to a non-Anthropic backend. Use `web_lookup` instead, and avoid other reserved server-tool names such as `computer`, `bash`, `text_editor`/`str_replace_editor`, and `code_execution`.
 
 ## opencode-zen extension
 

@@ -1,4 +1,5 @@
 .pi/
+.superpowers/
 .worktrees/
 node_modules/
 scratchpad/

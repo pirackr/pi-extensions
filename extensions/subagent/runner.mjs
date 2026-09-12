@@ -31,7 +31,10 @@ function processStartIdentity(pid) {
 	try {
 		const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
 		const closeParen = stat.lastIndexOf(")");
-		const fieldsAfterCommand = stat.slice(closeParen + 2).trim().split(/\s+/);
+		const fieldsAfterCommand = stat
+			.slice(closeParen + 2)
+			.trim()
+			.split(/\s+/);
 		return fieldsAfterCommand[19] ?? `${pid}`;
 	} catch {
 		return `${pid}`;
@@ -136,16 +139,33 @@ function toolActivity(name, args) {
 	return hint ? `${name} ${hint}` : name;
 }
 
+/** Pretty, bounded payload for the live tmux window. */
+function toolPaneDetail(value, max = 4_000) {
+	let detail;
+	try {
+		detail = JSON.stringify(value ?? {}, null, 2);
+	} catch {
+		detail = String(value);
+	}
+	return detail.length > max
+		? `${detail.slice(0, max - 16)}\n… [truncated]`
+		: detail;
+}
+
 /** Last line of the streamed assistant text, for the responding state. */
 function lastTextActivity(text) {
-	const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+	const lines = text
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
 	const last = lines[lines.length - 1];
 	return last ? previewText(last, 60) : null;
 }
 
 function totalTokensFrom(value) {
 	if (!value || typeof value !== "object") return 0;
-	const tokens = value.tokens && typeof value.tokens === "object" ? value.tokens : value;
+	const tokens =
+		value.tokens && typeof value.tokens === "object" ? value.tokens : value;
 	const total = tokens.total ?? tokens.totalTokens;
 	if (Number.isFinite(total)) return Number(total);
 	return [tokens.input, tokens.output, tokens.cacheRead, tokens.cacheWrite]
@@ -167,7 +187,8 @@ function buildArguments(request) {
 	args.push("--no-skills", "--no-prompt-templates", "--no-themes");
 	if (!request.loadContextFiles) args.push("--no-context-files");
 	if (request.profile.model) args.push("--model", request.profile.model);
-	if (request.profile.thinking) args.push("--thinking", request.profile.thinking);
+	if (request.profile.thinking)
+		args.push("--thinking", request.profile.thinking);
 	if (request.profile.tools?.length) {
 		args.push("--tools", request.profile.tools.join(","));
 	}
@@ -221,7 +242,14 @@ function baseStatus(request, now, processStart) {
 export async function runTaskMode(requestPath, deps = {}) {
 	const requestFile = path.resolve(requestPath);
 	const taskDirectory = path.dirname(requestFile);
-	const request = JSON.parse(readFileSync(requestFile, "utf8"));
+	let request;
+	try {
+		request = JSON.parse(readFileSync(requestFile, "utf8"));
+	} catch (error) {
+		throw new Error(`failed to read subagent request ${requestFile}`, {
+			cause: error,
+		});
+	}
 	const clock = deps.clock ?? realClock();
 	const spawn = deps.spawn ?? nodeSpawn;
 	const killProcessGroup =
@@ -248,7 +276,8 @@ export async function runTaskMode(requestPath, deps = {}) {
 		transcript: path.join(taskDirectory, "transcript.log"),
 		cancel: path.join(taskDirectory, "control", "cancel"),
 	};
-	for (const log of [files.events, files.stderr, files.transcript]) ensureLog(log);
+	for (const log of [files.events, files.stderr, files.transcript])
+		ensureLog(log);
 
 	const startedAt = clock.now();
 	const processStart = processStartIdentity(process.pid);
@@ -348,10 +377,21 @@ export async function runTaskMode(requestPath, deps = {}) {
 	}
 
 	function clearTimers() {
-		for (const timer of [cancelTimer, heartbeatTimer, timeoutTimer, killTimer, statsTimer]) {
+		for (const timer of [
+			cancelTimer,
+			heartbeatTimer,
+			timeoutTimer,
+			killTimer,
+			statsTimer,
+		]) {
 			if (timer !== undefined) clock.clearTimeout(timer);
 		}
-		cancelTimer = heartbeatTimer = timeoutTimer = killTimer = statsTimer = undefined;
+		cancelTimer =
+			heartbeatTimer =
+			timeoutTimer =
+			killTimer =
+			statsTimer =
+				undefined;
 	}
 
 	function publishTerminal(state, reason) {
@@ -359,7 +399,8 @@ export async function runTaskMode(requestPath, deps = {}) {
 		settled = true;
 		clearTimers();
 		flushLiveStatus();
-		for (const log of [files.events, files.stderr, files.transcript]) flushFile(log);
+		for (const log of [files.events, files.stderr, files.transcript])
+			flushFile(log);
 		const finishedAt = clock.now();
 		const output = authoritativeText || fallbackText || streamedText;
 		const result = {
@@ -441,7 +482,7 @@ export async function runTaskMode(requestPath, deps = {}) {
 	}
 
 	function finishAuthoritativeRequests() {
-		if (!authoritativePending || (!statsDone || !textDone)) return;
+		if (!authoritativePending || !statsDone || !textDone) return;
 		authoritativePending = false;
 		if (statsTimer !== undefined) clock.clearTimeout(statsTimer);
 		statsTimer = undefined;
@@ -474,7 +515,10 @@ export async function runTaskMode(requestPath, deps = {}) {
 	function handleResponse(event) {
 		if (event.id === startupRequestId) {
 			if (!event.success) {
-				terminate("failed", `Pi RPC startup failed: ${event.error ?? "unknown error"}`);
+				terminate(
+					"failed",
+					`Pi RPC startup failed: ${event.error ?? "unknown error"}`,
+				);
 				return;
 			}
 			const contextWindow = event.data?.model?.contextWindow ?? null;
@@ -535,7 +579,10 @@ export async function runTaskMode(requestPath, deps = {}) {
 			if (streamedTokens > 0) totalTokens = Math.max(totalTokens, streamedTokens);
 			const streamedCost = event.usage?.cost?.total ?? event.usage?.cost ?? null;
 			const messageEvent = event.assistantMessageEvent;
-			if (messageEvent?.type === "text_delta" && typeof messageEvent.delta === "string") {
+			if (
+				messageEvent?.type === "text_delta" &&
+				typeof messageEvent.delta === "string"
+			) {
 				streamedText += messageEvent.delta;
 				appendLog(files.transcript, messageEvent.delta);
 				writeOutput(messageEvent.delta);
@@ -555,7 +602,8 @@ export async function runTaskMode(requestPath, deps = {}) {
 			const text = contentText(event.message);
 			if (text) {
 				fallbackText = text;
-				if (!streamedText.endsWith(text)) appendLog(files.transcript, `\n${text}\n`);
+				if (!streamedText.endsWith(text))
+					appendLog(files.transcript, `\n${text}\n`);
 			}
 			totalTokens = Math.max(totalTokens, totalTokensFrom(event.message.usage));
 			stopReason = event.message.stopReason ?? stopReason;
@@ -572,8 +620,11 @@ export async function runTaskMode(requestPath, deps = {}) {
 			activeTool = name;
 			const current = readStatus();
 			const tools = Array.from(new Set([...(current.tools ?? []), name]));
-			appendLog(files.transcript, `\n[tool] ${name} ${JSON.stringify(event.args ?? {})}\n`);
-			writeOutput(`\n[tool] ${name}\n`);
+			appendLog(
+				files.transcript,
+				`\n[tool] ${name} ${JSON.stringify(event.args ?? {})}\n`,
+			);
+			writeOutput(`\n[tool] ${name}\n${toolPaneDetail(event.args)}\n`);
 			scheduleStatus({
 				activity: toolActivity(name, event.args),
 				tools,
@@ -587,12 +638,17 @@ export async function runTaskMode(requestPath, deps = {}) {
 			activeTool = null;
 			const resultSummary = contentText(event.result).trim();
 			if (resultSummary) {
-				const compactSummary = resultSummary.length > 500
-					? `${resultSummary.slice(0, 497)}...`
-					: resultSummary;
+				const compactSummary =
+					resultSummary.length > 500
+						? `${resultSummary.slice(0, 497)}...`
+						: resultSummary;
+				const outcome = event.isError ? "error" : "result";
 				appendLog(
 					files.transcript,
-					`[tool ${event.isError ? "error" : "result"}] ${String(event.toolName ?? "tool")}: ${compactSummary}\n`,
+					`[tool ${outcome}] ${String(event.toolName ?? "tool")}: ${compactSummary}\n`,
+				);
+				writeOutput(
+					`[tool ${outcome}] ${String(event.toolName ?? "tool")}\n${compactSummary}\n`,
 				);
 			}
 			scheduleStatus({
@@ -654,7 +710,8 @@ export async function runTaskMode(requestPath, deps = {}) {
 					let reason = "Cancelled by request";
 					try {
 						const marker = JSON.parse(readFileSync(files.cancel, "utf8"));
-						if (typeof marker.reason === "string" && marker.reason) reason = marker.reason;
+						if (typeof marker.reason === "string" && marker.reason)
+							reason = marker.reason;
 					} catch {
 						// Existence of the durable regular-file marker is authoritative.
 					}
@@ -700,7 +757,9 @@ export async function runTaskMode(requestPath, deps = {}) {
 		return done;
 	}
 
-	child.stdout.on("data", (chunk) => consumeDecoded(decoder.write(Buffer.from(chunk))));
+	child.stdout.on("data", (chunk) =>
+		consumeDecoded(decoder.write(Buffer.from(chunk))),
+	);
 	child.stdout.on("end", endStdout);
 	child.stderr.on("data", (chunk) => {
 		const text = Buffer.from(chunk).toString("utf8");
@@ -708,7 +767,10 @@ export async function runTaskMode(requestPath, deps = {}) {
 		writeError(text);
 	});
 	child.on("error", (error) => {
-		appendLog(files.stderr, `${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+		appendLog(
+			files.stderr,
+			`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+		);
 		terminate(
 			"failed",
 			`Pi RPC process error: ${error instanceof Error ? error.message : String(error)}`,
@@ -723,7 +785,10 @@ export async function runTaskMode(requestPath, deps = {}) {
 
 	scheduleCancellationPoll();
 	scheduleHeartbeat();
-	if (request.profile.timeoutSeconds !== null && request.profile.timeoutSeconds > 0) {
+	if (
+		request.profile.timeoutSeconds !== null &&
+		request.profile.timeoutSeconds > 0
+	) {
 		timeoutTimer = clock.setTimeout(() => {
 			// Graceful shutdown: fetch the last assistant text before killing,
 			// so the result includes whatever the agent was working on.
@@ -761,14 +826,19 @@ export async function runTaskMode(requestPath, deps = {}) {
 export async function main(argv = process.argv.slice(2), deps = {}) {
 	const requestPath = argv[0];
 	if (!requestPath) {
-		(deps.stderr ?? process.stderr).write("Usage: node runner.mjs <request.json>\n");
+		(deps.stderr ?? process.stderr).write(
+			"Usage: node runner.mjs <request.json>\n",
+		);
 		process.exitCode = 2;
 		return;
 	}
 	await runTaskMode(requestPath, deps);
 	try {
 		const status = JSON.parse(
-			readFileSync(path.join(path.dirname(path.resolve(requestPath)), "status.json"), "utf8"),
+			readFileSync(
+				path.join(path.dirname(path.resolve(requestPath)), "status.json"),
+				"utf8",
+			),
 		);
 		process.exitCode = status.state === "succeeded" ? 0 : 1;
 	} catch {
@@ -776,10 +846,14 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
 	}
 }
 
-const directPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : null;
+const directPath = process.argv[1]
+	? pathToFileURL(path.resolve(process.argv[1])).href
+	: null;
 if (directPath === import.meta.url) {
 	main().catch((error) => {
-		process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+		process.stderr.write(
+			`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+		);
 		process.exitCode = 1;
 	});
 }

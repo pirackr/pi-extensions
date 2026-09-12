@@ -10,19 +10,22 @@ Search the web and fetch page content using direct API calls. Zero setup — no 
 
 ## How It Works
 
-Two tools are available:
+Two client fallback tools are always available:
 
 - **`web_lookup`** — Searches the web using a smart fallback chain: TinyFish first, then Exa, then DuckDuckGo. Pass `engine` to force a specific engine.
 - **`fetch_web`** — Fetch a URL and extract readable content. Prefers TinyFish (Markdown) and falls back to Mozilla Readability (HTML).
+
+For supported models on the official OpenAI API and ChatGPT Codex Responses endpoints, provider-native web search is enabled automatically. On the official Anthropic Messages endpoint, provider-native web search and web fetch are enabled. No configuration is required. Gateways and proxies—including OpenRouter and OpenCode Zen—continue to use the client tools. DeepSeek continues to use the client tools because Pi's built-in official DeepSeek model currently uses a transport different from DeepSeek's documented native-search integration.
 
 ## Decision Rules
 
 Follow this priority order when the user asks for web information:
 
-1. **Direct URL fetch first** — If the user gives a specific public URL, use `fetch_web` instead of searching.
-2. **Focused search second** — If the user asks for current information, broad discovery, or comparisons, run a single `web_lookup` query.
-3. **Deep read only when needed** — If a search result looks promising but the snippet is insufficient, use `fetch_web` on that result URL.
-4. **Stop early** — Do not fetch many pages for a simple factual answer. Deepen only the top 1–2 most relevant results.
+1. **Prefer native capabilities** — On supported official OpenAI or Anthropic models, let the provider-native search/fetch tool run first.
+2. **Fallback on failure** — If native search/fetch errors, returns empty or insufficient information, or cannot handle the URL, use `web_lookup` or `fetch_web`.
+3. **Direct URL fetch** — If the user gives a specific public URL and native fetch is unavailable, use `fetch_web` instead of searching.
+4. **Focused search** — On unsupported providers, run a single `web_lookup` query for current information, discovery, or comparisons.
+5. **Deep read only when needed** — Fetch only the top 1–2 promising results when snippets are insufficient.
 
 ## Engine Selection
 
@@ -91,7 +94,7 @@ See `docs/web-search-provider-options.md` for the complete field-by-field refere
 ## Config Paths
 
 | Path | Purpose |
-|---|---|
+| --- | --- |
 | `$PI_AGENT_DIR/web-search.json` | User override (deep-merged with packaged defaults) |
 | `~/.pi/agent/web-search.json` | Usual default location for the above |
 | `$PI_AGENT_DIR/cache/web-search/` | Shared rate-limit coordinator state |

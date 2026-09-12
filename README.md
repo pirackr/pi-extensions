@@ -71,8 +71,13 @@ precedence; models are merged and additional `agentDirs` are combined. Run
 
 ## Web search
 
+Supported models on the official OpenAI API and ChatGPT Codex Responses
+endpoints automatically get native web search; supported models on the official
+Anthropic Messages endpoint get native web search and fetch. No configuration is required. Gateways,
+proxies, and the current built-in DeepSeek transport use the client fallbacks.
+
 `web_lookup` searches the web and `fetch_web` extracts a public page. The
-default search chain is **TinyFish → Exa → DuckDuckGo**; the first engine that
+default fallback chain is **TinyFish → Exa → DuckDuckGo**; the first engine that
 returns results wins. Tavily is available only when explicitly requested.
 TinyFish, Exa, and Tavily use `TINYFISH_API_KEY`, `EXA_API_KEY`, and
 `TAVILY_API_KEY`, respectively; DuckDuckGo needs no key.

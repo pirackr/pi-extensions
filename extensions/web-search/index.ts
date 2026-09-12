@@ -9,6 +9,11 @@ import {
 } from "./options/tinyfish.ts";
 import { ExaSearchOptionsSchema } from "./options/exa.ts";
 import { TavilySearchOptionsSchema } from "./options/tavily.ts";
+import {
+	augmentNativeWebToolsIfNeeded,
+	getNativeWebStatus,
+	resolveNativeWebCapabilities,
+} from "./native.ts";
 
 export const fetchStrategies: import("./types.ts").FetchStrategy[] = [];
 
@@ -25,6 +30,83 @@ function parseBudgetFlag(value: boolean | string | undefined): number {
 }
 
 const PI_TOOL_OUTPUT_SAFETY_LIMIT = 100_000;
+const NATIVE_WEB_STATUS_KEY = "web-search";
+const NATIVE_WEB_GUIDANCE_MARKER = "[web-search native-first routing]";
+const NATIVE_WEB_FALLBACK_GUIDANCE = `${NATIVE_WEB_GUIDANCE_MARKER}
+Use a verified provider-native web tool first when one is available. If native search or fetch fails, returns empty or insufficient information, or does not preserve usable citations/source metadata, use the client fallback tools web_lookup or fetch_web. Do not retry a failed native operation indefinitely; continue with the fallback result and cite its URLs. The fallback tools remain available on every provider.`;
+
+function appendNativeWebGuidance(systemPrompt: string): string {
+	return systemPrompt.includes(NATIVE_WEB_GUIDANCE_MARKER)
+		? systemPrompt
+		: `${systemPrompt}${systemPrompt ? "\n\n" : ""}${NATIVE_WEB_FALLBACK_GUIDANCE}`;
+}
+
+type NativeHookContext = {
+	model?: Parameters<typeof resolveNativeWebCapabilities>[0];
+	ui?: { setStatus?: (key: string, text: string | undefined) => void };
+};
+
+type NativeEventHandler = (event: unknown, context: unknown) => unknown;
+
+function nativeContext(value: unknown): NativeHookContext {
+	return typeof value === "object" && value !== null
+		? (value as NativeHookContext)
+		: {};
+}
+
+function registerNativeWebHooks(pi: ExtensionAPI): void {
+	// SAFETY: newer Pi runtimes expose these documented events; the structural
+	// adapter keeps this package compatible with older compile-time declarations.
+	const on = (
+		pi as unknown as {
+			on?: (event: string, handler: NativeEventHandler) => void;
+		}
+	).on;
+	if (typeof on !== "function") return;
+
+	on.call(pi, "before_provider_request", (event, context) => {
+		const payload =
+			typeof event === "object" && event !== null
+				? (event as { payload?: unknown }).payload
+				: undefined;
+		return augmentNativeWebToolsIfNeeded(
+			payload,
+			resolveNativeWebCapabilities(nativeContext(context).model),
+		);
+	});
+
+	on.call(pi, "before_agent_start", (event) => {
+		const systemPrompt =
+			typeof event === "object" &&
+			event !== null &&
+			typeof (event as { systemPrompt?: unknown }).systemPrompt === "string"
+				? (event as { systemPrompt: string }).systemPrompt
+				: "";
+		return { systemPrompt: appendNativeWebGuidance(systemPrompt) };
+	});
+
+	on.call(pi, "session_start", (_event, context) => {
+		const ctx = nativeContext(context);
+		ctx.ui?.setStatus?.(NATIVE_WEB_STATUS_KEY, getNativeWebStatus(ctx.model));
+	});
+
+	on.call(pi, "model_select", (event, context) => {
+		const selectedModel =
+			typeof event === "object" && event !== null
+				? (event as { model?: Parameters<typeof resolveNativeWebCapabilities>[0] })
+						.model
+				: undefined;
+		const ctx = nativeContext(context);
+		ctx.ui?.setStatus?.(
+			NATIVE_WEB_STATUS_KEY,
+			getNativeWebStatus(selectedModel ?? ctx.model),
+		);
+	});
+
+	on.call(pi, "session_shutdown", (_event, context) => {
+		nativeContext(context).ui?.setStatus?.(NATIVE_WEB_STATUS_KEY, undefined);
+	});
+}
 
 function budgetLine(used: number, max: number): string {
 	return `[Search budget: ${used}/${max} calls used — ${max - used} remaining]`;
@@ -41,6 +123,9 @@ export default function (pi: ExtensionAPI) {
 			"Hard cap on fetch_web calls per process. Passed by the tmux-subagent runner; 0/unset = unlimited.",
 		type: "string",
 	});
+
+	registerNativeWebHooks(pi);
+
 	// Per-process counters: each subagent runs in its own pi process, so this
 	// closure state is naturally a per-subagent budget.
 	let lookupCalls = 0;
@@ -64,8 +149,7 @@ export default function (pi: ExtensionAPI) {
 			query: Type.String({ description: "Search query string" }),
 			limit: Type.Optional(
 				Type.Number({
-					description:
-						"Max results per engine, 1-50. Defaults to 20 if omitted.",
+					description: "Max results per engine, 1-50. Defaults to 20 if omitted.",
 				}),
 			),
 			engine: Type.Optional(
@@ -182,8 +266,7 @@ export default function (pi: ExtensionAPI) {
 
 			let content = result.content;
 			if (params.max_chars && content.length > params.max_chars) {
-				content =
-					content.slice(0, params.max_chars) + "\n\n[Content truncated]";
+				content = content.slice(0, params.max_chars) + "\n\n[Content truncated]";
 			}
 			if (content.length > PI_TOOL_OUTPUT_SAFETY_LIMIT) {
 				content =

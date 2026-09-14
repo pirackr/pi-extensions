@@ -73,7 +73,7 @@ export interface RunnerRequest {
 	readonly childExtensions: readonly string[];
 	/** Whether repository context files stay enabled (`--no-context-files` when false). */
 	readonly loadContextFiles: boolean;
-	/** Hard cap on web_lookup calls (0 disables the flag). */
+	/** Hard cap on web_search calls (0 disables the flag). */
 	readonly webSearchMaxLookups: number;
 	/** Hard cap on fetch_web calls (0 disables the flag). */
 	readonly webSearchMaxFetches: number;

@@ -84,9 +84,9 @@ export const NATIVE_WEB_COMPATIBILITY: Readonly<
 		api: "anthropic-messages",
 		endpoint: "https://api.anthropic.com",
 		search: true,
-		fetch: true,
+		fetch: false,
 		verified: true,
-		reason: "Official Anthropic Messages native web search and fetch.",
+		reason: "Official Anthropic Messages native web search. Fetch remains client-routed.",
 	},
 	deepseek: {
 		api: "anthropic-messages",
@@ -114,14 +114,7 @@ export const NATIVE_WEB_TOOL_DEFINITIONS = Object.freeze({
 		{
 			type: "web_search_20250305",
 			name: "web_search",
-			max_uses: 3,
-		},
-		{
-			type: "web_fetch_20250910",
-			name: "web_fetch",
-			max_uses: 3,
-			max_content_tokens: 10_000,
-			citations: { enabled: true },
+			max_uses: 1,
 		},
 	]),
 	// DeepSeek's documented native-search path is Anthropic-compatible, but
@@ -211,7 +204,7 @@ function supportsOpenAIModel(modelId: string | undefined): boolean {
 function supportsAnthropicModel(modelId: string | undefined): boolean {
 	return (
 		!!modelId &&
-		/^claude-(?:3|haiku|sonnet|opus|fable|mythos)(?:-|$)/i.test(modelId)
+		/^claude-(?:3-(?:5-(?:haiku|sonnet)|7-sonnet)|(?:haiku|sonnet|opus)-4)(?:[.-]|$)/i.test(modelId)
 	);
 }
 
@@ -439,4 +432,120 @@ export function getNativeWebStatus(
 	return resolveNativeWebCapabilities(model)
 		? "web: native+fallback"
 		: "web: extension";
+}
+
+const NATIVE_TIMEOUT_MS = 20_000;
+const MAX_NATIVE_TEXT = 50_000;
+const MAX_TITLE = 200;
+const MAX_URL = 2_048;
+const MAX_SNIPPET = 1_000;
+
+export interface NativeSearchContext {
+	model?: NativeWebModelContext;
+	modelRegistry?: {
+		complete(model: unknown, context: unknown, options?: Record<string, unknown>): Promise<any>;
+	};
+}
+
+export interface NativeSearchOutcome {
+	response?: import("./types.ts").SearchResponse;
+	usage?: unknown;
+	failure?: { engine: string; error: string };
+}
+
+function nativeAbortError(): Error {
+	const error = new Error("web_search cancelled");
+	error.name = "AbortError";
+	return error;
+}
+
+function nativePayload(payload: unknown, capabilities: NativeWebCapabilities): Record<string, unknown> {
+	if (!isRecord(payload)) throw new Error("invalid native search payload");
+	const tools = getNativeWebToolDefinitions(capabilities);
+	if (capabilities.api === "anthropic-messages") {
+		// Pi may add adaptive thinking even without a reasoning option. Forced
+		// tool choice is incompatible with it; this isolated extraction call
+		// deliberately omits thinking and effort configuration.
+		const { thinking: _thinking, output_config: _outputConfig, ...request } = payload;
+		return { ...request, tools, tool_choice: { type: "any" } };
+	}
+	return { ...payload, tools, tool_choice: "required" };
+}
+
+function validatedNativeResults(text: string, limit: number): import("./types.ts").SearchResult[] | undefined {
+	if (!text || text.length > MAX_NATIVE_TEXT) return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return undefined;
+	}
+	if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > 50) return undefined;
+	const results: import("./types.ts").SearchResult[] = [];
+	for (const item of parsed) {
+		if (!isRecord(item)) return undefined;
+		const title = typeof item.title === "string" ? item.title.trim() : "";
+		const rawUrl = typeof item.url === "string" ? item.url.trim() : "";
+		const snippet = typeof item.snippet === "string" ? item.snippet.trim() : "";
+		if (!title || title.length > MAX_TITLE || !rawUrl || rawUrl.length > MAX_URL || !snippet || snippet.length > MAX_SNIPPET) return undefined;
+		try {
+			const url = new URL(rawUrl);
+			if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) return undefined;
+		} catch {
+			return undefined;
+		}
+		results.push({ title, url: rawUrl, snippet, engine: "native" });
+	}
+	return results.slice(0, limit);
+}
+
+/** One isolated provider-native search attempt. Invalid output is a normal miss. */
+export async function tryNativeSearch(
+	query: string,
+	limit: number,
+	ctx: NativeSearchContext | undefined,
+	callerSignal?: AbortSignal,
+): Promise<NativeSearchOutcome> {
+	const capabilities = resolveNativeWebCapabilities(ctx?.model);
+	if (!capabilities?.search || !ctx?.model || !ctx.modelRegistry?.complete) return {};
+	if (callerSignal?.aborted) throw nativeAbortError();
+
+	const timeoutSignal = AbortSignal.timeout(NATIVE_TIMEOUT_MS);
+	const signal = callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal;
+	const prompt = `Search the web for the query below using the provided native web search tool exactly once. Return ONLY a JSON array, with no markdown or commentary. Each item must be {"title":"...","url":"https://...","snippet":"..."}. Include explicit absolute HTTP(S) URLs and a non-empty factual snippet. Return at most ${limit} items.\n\nQuery: ${query}`;
+	let answer: any;
+	try {
+		answer = await ctx.modelRegistry.complete(
+			ctx.model,
+			{
+				systemPrompt: "You are a bounded web search result extractor.",
+				messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+				tools: [],
+			},
+			{
+				signal,
+				maxRetries: 0,
+				timeoutMs: NATIVE_TIMEOUT_MS,
+				maxTokens: 2_000,
+				onPayload: (payload: unknown) => nativePayload(payload, capabilities),
+			},
+		);
+	} catch {
+		if (callerSignal?.aborted) throw nativeAbortError();
+		return { failure: { engine: `native:${capabilities.provider}`, error: timeoutSignal.aborted ? "native search timed out" : "native search failed" } };
+	}
+	if (callerSignal?.aborted) throw nativeAbortError();
+	if (timeoutSignal.aborted || answer?.stopReason === "aborted" || answer?.stopReason === "error" || typeof answer?.errorMessage === "string") {
+		return { usage: answer?.usage, failure: { engine: `native:${capabilities.provider}`, error: timeoutSignal.aborted ? "native search timed out" : "native search failed" } };
+	}
+	const text = Array.isArray(answer?.content)
+		? answer.content.filter((part: any) => part?.type === "text" && typeof part.text === "string").map((part: any) => part.text).join("")
+		: "";
+	const results = validatedNativeResults(text, limit);
+	if (!results) return { usage: answer?.usage, failure: { engine: `native:${capabilities.provider}`, error: "native search returned no usable results with source URLs" } };
+	for (const result of results) result.engine = `native:${capabilities.provider}`;
+	return {
+		response: { query, results, engines: [`native:${capabilities.provider}`], partialFailures: [] },
+		usage: answer?.usage,
+	};
 }

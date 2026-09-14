@@ -8,7 +8,7 @@
 > placeholder below.
 >
 > **Subagent-first execution:** the coordinator never does research work — no
-> direct `web_lookup`/`fetch_web`, no reading report corpora. All planning,
+> direct `web_search`/`fetch_web`, no reading report corpora. All planning,
 > search, fetch, consolidation, synthesis, and verification run in subagents.
 > The coordinator dispatches each role via one foreground `Agent()` call
 > (with `run_in_background: false`) and writes the returned `<artifact>`/
@@ -563,7 +563,7 @@ Return a <coordinator-summary> block, then the <artifact> block.`,
 
 Judge the research report against the credibility rubric. Evaluate claim
 quality, triangulation, contradictions, and completeness. Re-verify any
-disputed claim against its cited source with web_lookup/fetch_web — do not
+disputed claim against its cited source with web_search/fetch_web — do not
 accept a claim at face value because the draft states it.
 
 In the JSON artifact, set runId to the run's REAL id (read it from

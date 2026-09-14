@@ -58,7 +58,7 @@
     "web-search": {
       "name": "web-search",
       "paths": ["../extensions/web-search/index.ts"],
-      "requiredTools": ["web_lookup", "fetch_web"]
+      "requiredTools": ["web_search", "fetch_web"]
     },
     "subagent": {
       "name": "subagent",

@@ -9,11 +9,12 @@ import {
 } from "./options/tinyfish.ts";
 import { ExaSearchOptionsSchema } from "./options/exa.ts";
 import { TavilySearchOptionsSchema } from "./options/tavily.ts";
+import { getNativeWebStatus, tryNativeSearch } from "./native.ts";
 import {
-	augmentNativeWebToolsIfNeeded,
-	getNativeWebStatus,
-	resolveNativeWebCapabilities,
-} from "./native.ts";
+	validateExaSearchOptions,
+	validateTavilySearchOptions,
+	validateTinyFishSearchOptions,
+} from "./options/validate.ts";
 
 export const fetchStrategies: import("./types.ts").FetchStrategy[] = [];
 
@@ -31,81 +32,55 @@ function parseBudgetFlag(value: boolean | string | undefined): number {
 
 const PI_TOOL_OUTPUT_SAFETY_LIMIT = 100_000;
 const NATIVE_WEB_STATUS_KEY = "web-search";
-const NATIVE_WEB_GUIDANCE_MARKER = "[web-search native-first routing]";
-const NATIVE_WEB_FALLBACK_GUIDANCE = `${NATIVE_WEB_GUIDANCE_MARKER}
-Use a verified provider-native web tool first when one is available. If native search or fetch fails, returns empty or insufficient information, or does not preserve usable citations/source metadata, use the client fallback tools web_lookup or fetch_web. Do not retry a failed native operation indefinitely; continue with the fallback result and cite its URLs. The fallback tools remain available on every provider.`;
 
-function appendNativeWebGuidance(systemPrompt: string): string {
-	return systemPrompt.includes(NATIVE_WEB_GUIDANCE_MARKER)
-		? systemPrompt
-		: `${systemPrompt}${systemPrompt ? "\n\n" : ""}${NATIVE_WEB_FALLBACK_GUIDANCE}`;
-}
-
-type NativeHookContext = {
-	model?: Parameters<typeof resolveNativeWebCapabilities>[0];
+type StatusContext = {
+	model?: Parameters<typeof getNativeWebStatus>[0];
 	ui?: { setStatus?: (key: string, text: string | undefined) => void };
 };
 
-type NativeEventHandler = (event: unknown, context: unknown) => unknown;
-
-function nativeContext(value: unknown): NativeHookContext {
-	return typeof value === "object" && value !== null
-		? (value as NativeHookContext)
-		: {};
-}
-
-function registerNativeWebHooks(pi: ExtensionAPI): void {
-	// SAFETY: newer Pi runtimes expose these documented events; the structural
-	// adapter keeps this package compatible with older compile-time declarations.
-	const on = (
-		pi as unknown as {
-			on?: (event: string, handler: NativeEventHandler) => void;
-		}
-	).on;
-	if (typeof on !== "function") return;
-
-	on.call(pi, "before_provider_request", (event, context) => {
-		const payload =
-			typeof event === "object" && event !== null
-				? (event as { payload?: unknown }).payload
-				: undefined;
-		return augmentNativeWebToolsIfNeeded(
-			payload,
-			resolveNativeWebCapabilities(nativeContext(context).model),
-		);
-	});
-
-	on.call(pi, "before_agent_start", (event) => {
-		const systemPrompt =
-			typeof event === "object" &&
-			event !== null &&
-			typeof (event as { systemPrompt?: unknown }).systemPrompt === "string"
-				? (event as { systemPrompt: string }).systemPrompt
-				: "";
-		return { systemPrompt: appendNativeWebGuidance(systemPrompt) };
-	});
-
-	on.call(pi, "session_start", (_event, context) => {
-		const ctx = nativeContext(context);
+function registerNativeWebStatus(pi: ExtensionAPI): void {
+	if (typeof pi.on !== "function") return;
+	pi.on("session_start", (_event, context) => {
+		const ctx = context as StatusContext;
 		ctx.ui?.setStatus?.(NATIVE_WEB_STATUS_KEY, getNativeWebStatus(ctx.model));
 	});
-
-	on.call(pi, "model_select", (event, context) => {
-		const selectedModel =
-			typeof event === "object" && event !== null
-				? (event as { model?: Parameters<typeof resolveNativeWebCapabilities>[0] })
-						.model
-				: undefined;
-		const ctx = nativeContext(context);
-		ctx.ui?.setStatus?.(
-			NATIVE_WEB_STATUS_KEY,
-			getNativeWebStatus(selectedModel ?? ctx.model),
-		);
+	pi.on("model_select", (event, context) => {
+		const ctx = context as StatusContext;
+		ctx.ui?.setStatus?.(NATIVE_WEB_STATUS_KEY, getNativeWebStatus(event.model ?? ctx.model));
 	});
-
-	on.call(pi, "session_shutdown", (_event, context) => {
-		nativeContext(context).ui?.setStatus?.(NATIVE_WEB_STATUS_KEY, undefined);
+	pi.on("session_shutdown", (_event, context) => {
+		(context as StatusContext).ui?.setStatus?.(NATIVE_WEB_STATUS_KEY, undefined);
 	});
+}
+
+function validateSearchRequest(params: any): void {
+	if (typeof params?.query !== "string" || !params.query.trim()) throw new Error("query must be a non-empty string");
+	if (params.limit !== undefined && (typeof params.limit !== "number" || !Number.isFinite(params.limit))) throw new Error("limit must be a finite number");
+	if (params.engine !== undefined && !["auto", "tinyfish", "exa", "duckduckgo", "tavily"].includes(params.engine)) throw new Error("unsupported search engine");
+	validateSearchAdvancedOptions(params.advancedOptions);
+}
+
+function validateSearchAdvancedOptions(advancedOptions: unknown): void {
+	if (advancedOptions === undefined) return;
+	if (!advancedOptions || typeof advancedOptions !== "object" || Array.isArray(advancedOptions)) {
+		throw new Error("advancedOptions must be an object");
+	}
+	const options = advancedOptions as Record<string, unknown>;
+	for (const key of Object.keys(options)) {
+		if (key !== "tinyfish" && key !== "exa" && key !== "tavily") throw new Error(`unknown advancedOptions provider: ${key}`);
+	}
+	const validators = {
+		tinyfish: validateTinyFishSearchOptions,
+		exa: validateExaSearchOptions,
+		tavily: validateTavilySearchOptions,
+	} as const;
+	for (const key of Object.keys(validators) as Array<keyof typeof validators>) {
+		const value = options[key];
+		if (value === undefined) continue;
+		if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`advancedOptions.${key} must be an object`);
+		const errors = validators[key](value as Record<string, unknown>);
+		if (errors.length) throw new Error(`invalid advancedOptions.${key}: ${errors.map((error) => error.message).join("; ")}`);
+	}
 }
 
 function budgetLine(used: number, max: number): string {
@@ -115,7 +90,7 @@ function budgetLine(used: number, max: number): string {
 export default function (pi: ExtensionAPI) {
 	pi.registerFlag?.("web-search-max-lookups", {
 		description:
-			"Hard cap on web_lookup calls per process. Passed by the tmux-subagent runner; 0/unset = unlimited.",
+			"Hard cap on web_search calls per process. Passed by the tmux-subagent runner; 0/unset = unlimited.",
 		type: "string",
 	});
 	pi.registerFlag?.("web-search-max-fetches", {
@@ -124,7 +99,7 @@ export default function (pi: ExtensionAPI) {
 		type: "string",
 	});
 
-	registerNativeWebHooks(pi);
+	registerNativeWebStatus(pi);
 
 	// Per-process counters: each subagent runs in its own pi process, so this
 	// closure state is naturally a per-subagent budget.
@@ -136,13 +111,13 @@ export default function (pi: ExtensionAPI) {
 		parseBudgetFlag(pi.getFlag?.("web-search-max-fetches"));
 
 	pi.registerTool({
-		name: "web_lookup",
+		name: "web_search",
 		label: "Web Search",
 		description:
-			"Search the web. Uses TinyFish by default, falling back to Exa then DuckDuckGo. " +
+			"Search the web. Automatically attempts supported provider-native search first, then falls back to TinyFish, Exa, and DuckDuckGo. " +
 			"Pass engine to force a specific engine ('tinyfish', 'exa', 'duckduckgo', or 'tavily' for heavy deep research — runs alone, needs TAVILY_API_KEY). " +
-			"Provider-specific advanced options are accepted under advancedOptions.tinyfish, advancedOptions.exa, or advancedOptions.tavily; " +
-			"unknown provider keys are rejected. " +
+			"For engine:auto without advancedOptions, verified official OpenAI Responses, Codex Responses, and Anthropic models make one isolated native search attempt before the client fallback chain. " +
+			"Explicit engines and any provider-specific advancedOptions use client-only routing so options are never ignored. Unknown provider keys are rejected. " +
 			"Returns search results with title, URL, and snippet. " +
 			"Use for finding documentation, facts, code examples, or discovering relevant pages.",
 		parameters: Type.Object({
@@ -163,7 +138,7 @@ export default function (pi: ExtensionAPI) {
 					],
 					{
 						description:
-							"Engine to use: 'auto' (default) walks the fallback chain — TinyFish first, then Exa, then DuckDuckGo. " +
+							"Engine to use: 'auto' (default) attempts supported native search first unless advancedOptions are provided, then uses TinyFish, Exa, and DuckDuckGo as client fallbacks. " +
 							"'tinyfish', 'exa', or 'duckduckgo' force a single engine; 'tavily' runs Tavily alone (advanced depth, requires TAVILY_API_KEY) for heavy research.",
 					},
 				),
@@ -179,11 +154,13 @@ export default function (pi: ExtensionAPI) {
 				),
 			),
 		}),
-		async execute(_id: string, params: any, signal?: AbortSignal) {
+		async execute(_id: string, params: any, signal?: AbortSignal, _onUpdate?: unknown, ctx?: any) {
+			validateSearchRequest(params);
+			signal?.throwIfAborted();
 			const max = maxLookups();
 			if (max > 0 && lookupCalls >= max) {
 				throw new Error(
-					`web_lookup budget exhausted: ${lookupCalls}/${max} searches used. ` +
+					`web_search budget exhausted: ${lookupCalls}/${max} searches used. ` +
 						"Stop searching and write your report from the results already collected.",
 				);
 			}
@@ -196,7 +173,19 @@ export default function (pi: ExtensionAPI) {
 				advancedOptions: params.advancedOptions,
 			};
 			if (signal) (request as any).__signal = signal;
-			const result = await webLookup(request);
+			let nativeUsage: unknown;
+			let nativeFailure: { engine: string; error: string } | undefined;
+			let result;
+			const nativeEligible = (!params.engine || params.engine === "auto") && params.advancedOptions === undefined;
+			if (nativeEligible) {
+				const native = await tryNativeSearch(params.query, limit, ctx, signal);
+				nativeUsage = native.usage;
+				nativeFailure = native.failure;
+				result = native.response;
+			}
+			signal?.throwIfAborted();
+			if (!result) result = await webLookup(request);
+			if (nativeFailure) result = { ...result, partialFailures: [nativeFailure, ...result.partialFailures] };
 
 			let text = `Query: "${result.query}"\n`;
 			text += `Engines: ${result.engines.join(", ") || "none"}\n`;
@@ -217,6 +206,7 @@ export default function (pi: ExtensionAPI) {
 			return {
 				content: [{ type: "text", text }],
 				details: result,
+				...(nativeUsage ? { usage: nativeUsage } : {}),
 			};
 		},
 	});

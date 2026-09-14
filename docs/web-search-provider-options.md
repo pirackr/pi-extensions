@@ -1,6 +1,6 @@
 # Web Search Provider Options Reference
 
-Complete reference for provider-specific advanced options accepted by `web_lookup` and `fetch_web`. All options are passed under `advancedOptions.<provider>`. Unknown provider keys or unknown fields within a provider's schema are rejected at the tool boundary.
+Complete reference for provider-specific advanced options accepted by `web_search` and `fetch_web`. All options are passed under `advancedOptions.<provider>`. Unknown provider keys or unknown fields within a provider's schema are rejected at the tool boundary.
 
 ## Canonical Mappings
 

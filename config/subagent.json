@@ -3,7 +3,7 @@
     "../extensions/web-search/index.ts"
   ],
   "toolAccess": {
-    "web_lookup": "read",
+    "web_search": "read",
     "fetch_web": "read"
   },
   "agentDirs": [],

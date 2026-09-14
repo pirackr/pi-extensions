@@ -125,7 +125,7 @@ const BASE_REQUEST: RunnerRequest = {
 	profile: {
 		model: "gpt-4o",
 		thinking: "medium",
-		tools: ["read", "web_lookup"],
+		tools: ["read", "web_search"],
 		systemPrompt: "You are a scout.",
 		timeoutSeconds: 300,
 	},
@@ -277,7 +277,7 @@ describe("2. spawn argument / env", () => {
 				"--thinking",
 				"medium",
 				"--tools",
-				"read,web_lookup",
+				"read,web_search",
 				"--web-search-max-lookups",
 				"5",
 				"--web-search-max-fetches",
@@ -690,7 +690,7 @@ describe("6. text/tool events append and coalesce", () => {
 			Buffer.from(
 				JSON.stringify({
 					type: "tool_execution_start",
-					toolName: "web_lookup",
+					toolName: "web_search",
 					args: { query: "wiring" },
 				}) + "\n",
 			),
@@ -730,7 +730,7 @@ describe("6. text/tool events append and coalesce", () => {
 			Buffer.from(
 				JSON.stringify({
 					type: "tool_execution_end",
-					toolName: "web_lookup",
+					toolName: "web_search",
 					result: { content: [{ type: "text", text: "compact result summary" }] },
 					isError: false,
 				}) + "\n",
@@ -746,12 +746,12 @@ describe("6. text/tool events append and coalesce", () => {
 			.readFileSync(path.join(dir, "events.jsonl"), "utf8")
 			.split("\n")
 			.filter(Boolean);
-		expect(events.some((e) => e.includes("web_lookup"))).toBe(true);
+		expect(events.some((e) => e.includes("web_search"))).toBe(true);
 
 		const status = readStatus(dir);
 		expect(status.state).toBe("running");
 		expect(status.toolUses).toBe(1);
-		expect(status.tools).toContain("web_lookup");
+		expect(status.tools).toContain("web_search");
 		expect(status.turns).toBe(1);
 		expect((status.usage as { totalTokens: number }).totalTokens).toBe(165);
 		expect(status.compactionCount).toBe(1);
@@ -766,9 +766,9 @@ describe("6. text/tool events append and coalesce", () => {
 		expect(transcript).toContain("done");
 		expect(transcript).toContain("compact result summary");
 		const paneOutput = stdout.mock.calls.flat().join("");
-		expect(paneOutput).toContain('[tool] web_lookup\n{\n  "query": "wiring"\n}');
+		expect(paneOutput).toContain('[tool] web_search\n{\n  "query": "wiring"\n}');
 		expect(paneOutput).toContain(
-			"[tool result] web_lookup\ncompact result summary",
+			"[tool result] web_search\ncompact result summary",
 		);
 		child.emit("close", 1);
 		await done;

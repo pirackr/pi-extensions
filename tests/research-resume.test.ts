@@ -158,7 +158,7 @@ function baseConfig(): ResolvedResearchConfig {
 				description: "Discover sources",
 				model: "strong",
 				thinking: "high",
-				tools: ["web_lookup", "fetch_web"],
+				tools: ["web_search", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 1800,
 				promptPath: SCOUT_PROMPT,
@@ -338,7 +338,7 @@ describe("resume — manifest integrity", () => {
 			{
 				id: "local",
 				adapterVersion: "1.0",
-				capabilities: ["web_lookup", "fetch_web", "read", "local"],
+				capabilities: ["web_search", "fetch_web", "read", "local"],
 			},
 		]);
 
@@ -547,7 +547,7 @@ describe("resume — state schema and run ID", () => {
 			{
 				id: "local",
 				adapterVersion: "1.0",
-				capabilities: ["web_lookup", "fetch_web", "read", "local"],
+				capabilities: ["web_search", "fetch_web", "read", "local"],
 			},
 		]);
 
@@ -617,7 +617,7 @@ describe("resume — provider/adapter compatibility", () => {
 			{
 				id: "local",
 				adapterVersion: "1.0",
-				capabilities: ["web_lookup", "fetch_web", "read", "local"],
+				capabilities: ["web_search", "fetch_web", "read", "local"],
 			},
 		]);
 
@@ -668,7 +668,7 @@ describe("resume — lease ownership", () => {
 					{
 						id: "local",
 						adapterVersion: "1.0",
-						capabilities: ["web_lookup", "fetch_web", "read", "local"],
+						capabilities: ["web_search", "fetch_web", "read", "local"],
 					},
 				]),
 		};
@@ -788,7 +788,7 @@ describe("resume — interrupted attempts handling", () => {
 					{
 						id: "local",
 						adapterVersion: "1.0",
-						capabilities: ["local", "web_lookup", "fetch_web", "read"],
+						capabilities: ["local", "web_search", "fetch_web", "read"],
 					},
 				]),
 		});
@@ -830,7 +830,7 @@ describe("resume — interrupted attempts handling", () => {
 					{
 						id: "local",
 						adapterVersion: "1.0",
-						capabilities: ["local", "web_lookup", "fetch_web", "read"],
+						capabilities: ["local", "web_search", "fetch_web", "read"],
 					},
 				]),
 		});
@@ -883,7 +883,7 @@ describe("resume — successful continuation", () => {
 					{
 						id: "local",
 						adapterVersion: "1.0",
-						capabilities: ["web_lookup", "fetch_web", "read", "local"],
+						capabilities: ["web_search", "fetch_web", "read", "local"],
 					},
 				]),
 		});
@@ -925,7 +925,7 @@ describe("resume — successful continuation", () => {
 					{
 						id: "local",
 						adapterVersion: "1.0",
-						capabilities: ["web_lookup", "fetch_web", "read", "local"],
+						capabilities: ["web_search", "fetch_web", "read", "local"],
 					},
 				]),
 		});
@@ -962,7 +962,7 @@ describe("resume — successful continuation", () => {
 					{
 						id: "local",
 						adapterVersion: "1.0",
-						capabilities: ["web_lookup", "fetch_web", "read", "local"],
+						capabilities: ["web_search", "fetch_web", "read", "local"],
 					},
 				]),
 		});
@@ -999,7 +999,7 @@ describe("resume — successful continuation", () => {
 					{
 						id: "local",
 						adapterVersion: "1.0",
-						capabilities: ["web_lookup", "fetch_web", "read", "local"],
+						capabilities: ["web_search", "fetch_web", "read", "local"],
 					},
 				]),
 		});
@@ -1077,7 +1077,7 @@ describe("validateFrozenCapabilities", () => {
 			{
 				id: "local",
 				adapterVersion: "1.0",
-				capabilities: ["local", "web_lookup", "fetch_web", "read"],
+				capabilities: ["local", "web_search", "fetch_web", "read"],
 			},
 		]);
 
@@ -1111,7 +1111,7 @@ describe("validateFrozenCapabilities", () => {
 			{
 				id: "local",
 				adapterVersion: "1.0",
-				capabilities: ["local", "web_lookup", "fetch_web", "read"],
+				capabilities: ["local", "web_search", "fetch_web", "read"],
 			},
 		]);
 

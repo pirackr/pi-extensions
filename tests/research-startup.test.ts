@@ -76,7 +76,7 @@ function baseConfig(): ResolvedResearchConfig {
 				description: "Discover sources",
 				model: "strong",
 				thinking: "high",
-				tools: ["web_lookup", "fetch_web"],
+				tools: ["web_search", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 1800,
 				promptPath: SCOUT_PROMPT,
@@ -159,7 +159,7 @@ describe("validateStartupContract — role resolution and validation", () => {
 		config.roles.scout.tools = ["read", "write"];
 		config.roles.scout.access = "read" as const;
 		const models = fakeModelRegistry({
-			strong: { id: "strong-1", name: "strong", provider: "anthropic", capabilities: ["web_lookup", "fetch_web"] },
+			strong: { id: "strong-1", name: "strong", provider: "anthropic", capabilities: ["web_search", "fetch_web"] },
 			eval: { id: "eval-1", name: "eval", provider: "anthropic", capabilities: ["read"] },
 		});
 		await expect(validateStartupContract(config, models)).rejects.toThrow(/write|access/i);
@@ -358,7 +358,7 @@ describe("prepareAndActivateResearch — transaction flow", () => {
 		tmpDir = createTempDir();
 		config = baseConfig();
 		models = fakeModelRegistry({
-			strong: { id: "strong-1", name: "strong", provider: "anthropic", capabilities: ["web_lookup", "fetch_web"] },
+			strong: { id: "strong-1", name: "strong", provider: "anthropic", capabilities: ["web_search", "fetch_web"] },
 			eval: { id: "eval-1", name: "eval", provider: "anthropic", capabilities: ["read"] },
 		});
 	});
@@ -911,7 +911,7 @@ describe("F9: Mid-flow failure cleanup", () => {
 		tmpDir = createTempDir();
 		config = baseConfig();
 		models = fakeModelRegistry({
-			strong: { id: "strong-1", name: "strong", provider: "anthropic", capabilities: ["web_lookup", "fetch_web"] },
+			strong: { id: "strong-1", name: "strong", provider: "anthropic", capabilities: ["web_search", "fetch_web"] },
 			eval: { id: "eval-1", name: "eval", provider: "anthropic", capabilities: ["read"] },
 		});
 	});
@@ -1285,7 +1285,7 @@ describe("Task 15 — provider-free startup contract and resolvedProfiles", () =
 				id: "strong-1",
 				name: "strong",
 				provider: "anthropic",
-				capabilities: ["web_lookup", "fetch_web"],
+				capabilities: ["web_search", "fetch_web"],
 			},
 			"eval-1": {
 				id: "eval-1",
@@ -1315,7 +1315,7 @@ describe("Task 15 — provider-free startup contract and resolvedProfiles", () =
 		expect(scout.name).toBe("scout");
 		expect(scout.description).toBe("Discover sources");
 		expect(scout.thinking).toBe("high");
-		expect(scout.tools).toEqual(["web_lookup", "fetch_web"]);
+		expect(scout.tools).toEqual(["web_search", "fetch_web"]);
 		expect(scout.systemPrompt).toBe("# Scout\nscout system prompt");
 		expect(scout.timeoutSeconds).toBe(1800);
 		expect(Object.isFrozen(contract.resolvedProfiles)).toBe(true);
@@ -1324,7 +1324,7 @@ describe("Task 15 — provider-free startup contract and resolvedProfiles", () =
 
 		config.roles.scout.tools.push("write");
 		config.models.strong = "changed-after-validation";
-		expect(scout.tools).toEqual(["web_lookup", "fetch_web"]);
+		expect(scout.tools).toEqual(["web_search", "fetch_web"]);
 		expect(scout.model).toBe("strong-1");
 	});
 

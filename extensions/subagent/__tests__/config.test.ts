@@ -307,7 +307,7 @@ function mockPackagedConfig(overrides: Record<string, unknown> = {}) {
 	const bundled = {
 		models: { strong: "bundled-strong", light: "bundled-light" },
 		childExtensions: ["../extensions/a/index.ts"],
-		toolAccess: { web_lookup: "read" },
+		toolAccess: { web_search: "read" },
 		agentDirs: [],
 		...overrides,
 	};
@@ -524,7 +524,7 @@ describe("loadSubagentConfiguration — layered precedence", () => {
 		mockReadFileSync.mockImplementation((filePath: fs.PathOrFileDescriptor) => {
 			const p = String(filePath);
 			if (p.endsWith("config/subagent.json"))
-				return JSON.stringify({ toolAccess: { web_lookup: "read" } });
+				return JSON.stringify({ toolAccess: { web_search: "read" } });
 			if (p.includes("/mock/agent/dir/subagent/config.json"))
 				return JSON.stringify({ toolAccess: { edit: "read" } });
 			if (p.includes("/.pi/subagent/config.json"))
@@ -540,7 +540,7 @@ describe("loadSubagentConfiguration — layered precedence", () => {
 		});
 		// built-in `edit: write` plus user read plus project write → write
 		expect(config.toolAccess.edit).toBe("write");
-		expect(config.toolAccess.web_lookup).toBe("read");
+		expect(config.toolAccess.web_search).toBe("read");
 	});
 
 	it("concatenates agentDirs across layers, each canonicalized to its own base", () => {

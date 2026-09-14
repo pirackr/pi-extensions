@@ -31,7 +31,7 @@ with `npm install`.
 | Resource | What it provides |
 | --- | --- |
 | `extensions/subagent` | Durable, tmux-backed Pi subagents with scheduling, profiles, and a TUI status widget. |
-| `extensions/web-search` | `web_lookup` and `fetch_web` tools with direct-provider routing, validation, retries, and shared rate limits. |
+| `extensions/web-search` | `web_search` with enforced native-first routing, plus `fetch_web`, validation, retries, and shared client rate limits. |
 | `extensions/loop` (with research modules) | `/loop` for general autonomous programs and `/research` for retained, evidence-driven research runs. |
 | `extensions/auto-compact` | Per-model context thresholds and a `/auto-compact` status command. |
 | `extensions/ntfy` | Opt-in session completion notifications via `/ntfy`. |
@@ -71,18 +71,23 @@ precedence; models are merged and additional `agentDirs` are combined. Run
 
 ## Web search
 
-Supported models on the official OpenAI API and ChatGPT Codex Responses
-endpoints automatically get native web search; supported models on the official
-Anthropic Messages endpoint get native web search and fetch. No configuration is required. Gateways,
-proxies, and the current built-in DeepSeek transport use the client fallbacks.
+`web_search` enforces native-first search inside its tool handler on supported
+models at official OpenAI, ChatGPT Codex, and Anthropic endpoints. It makes one
+bounded, isolated request using Pi's existing authentication, with only the
+provider-native search tool. Failed, empty, or malformed native results fall back
+to the client engines automatically. Gateways, proxies, and unsupported
+transports use the client engines directly.
 
-`web_lookup` searches the web and `fetch_web` extracts a public page. The
+Native responses must contain explicit HTTP(S) source URLs: this Pi version
+drops structured citation annotations. Those URLs remain model-returned sources,
+not independently verified citations. No native tools are injected into unrelated
+parent requests. `fetch_web` remains a client URL extractor (TinyFish/Readability). The
 default fallback chain is **TinyFish → Exa → DuckDuckGo**; the first engine that
 returns results wins. Tavily is available only when explicitly requested.
 TinyFish, Exa, and Tavily use `TINYFISH_API_KEY`, `EXA_API_KEY`, and
 `TAVILY_API_KEY`, respectively; DuckDuckGo needs no key.
 
-- `web_lookup({ query, limit, engine, advancedOptions })`
+- `web_search({ query, limit, engine, advancedOptions })`
 - `fetch_web({ url, max_chars, advancedOptions })`
 
 API keys resolve from the environment or the repository-root `.env` file and
@@ -92,7 +97,16 @@ across Pi and subagent processes in `$PI_AGENT_DIR/cache/web-search/`.
 Configuration is supplied by `config/web-search.json`; users can override it
 with `$PI_AGENT_DIR/web-search.json`. Provider-specific advanced options are
 strictly validated. See [docs/web-search-provider-options.md](docs/web-search-provider-options.md)
-for the complete option reference.
+for the complete option reference. Explicit engines and provider-specific advanced
+options use the client routing path, so native search cannot silently ignore
+provider filters. Native calls count toward the same per-process search budget;
+shared TinyFish/Exa/Tavily/DuckDuckGo rate limits apply only to client attempts.
+
+**Rename:** `web_lookup` is now `web_search`. Update tool allowlists, custom
+subagent profiles, and research configuration overrides, then run `/reload`.
+Retained research workspaces freeze their capability requirements; workspaces
+requiring the old name may need to be restarted rather than resumed. The public
+client tool and the native search definition are sent in separate requests.
 
 ## Autonomous loops and research
 

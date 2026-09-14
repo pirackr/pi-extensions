@@ -183,7 +183,7 @@ describe("native web capability detection", () => {
 					baseUrl: "https://api.anthropic.com",
 				}),
 			),
-		).toMatchObject({ provider: "anthropic", search: true, fetch: true });
+		).toMatchObject({ provider: "anthropic", search: true, fetch: false });
 		expect(
 			resolveNativeWebCapabilities(
 				model({
@@ -202,37 +202,16 @@ describe("native web capability detection", () => {
 });
 
 describe("native web extension hooks", () => {
-	it("injects native tools for official ChatGPT Codex requests and adds fallback guidance", () => {
-		const handlers = new Map<
-			string,
-			(event: unknown, context: unknown) => unknown
-		>();
+	it("keeps only accurate status hooks; routing happens inside web_search", () => {
+		const handlers = new Map<string, Function>();
 		createExtension({
 			registerFlag() {},
 			registerTool() {},
-			on(event: string, handler: (event: unknown, context: unknown) => unknown) {
-				handlers.set(event, handler);
-			},
+			on(event: string, handler: Function) { handlers.set(event, handler); },
 		} as any);
-
-		const requestResult = handlers.get("before_provider_request")?.(
-			{ payload: { model: "gpt-5.6-luna", input: [] } },
-			{
-				model: model({
-					id: "gpt-5.6-luna",
-					provider: "openai-codex",
-					api: "openai-codex-responses",
-					baseUrl: "https://chatgpt.com/backend-api",
-				}),
-			},
-		) as { tools?: Array<Record<string, unknown>> };
-		expect(requestResult.tools).toEqual([{ type: "web_search" }]);
-
-		const promptResult = handlers.get("before_agent_start")?.(
-			{ systemPrompt: "base prompt" },
-			{},
-		) as { systemPrompt?: string };
-		expect(promptResult.systemPrompt).toContain("web_lookup or fetch_web");
+		expect(handlers.has("before_provider_request")).toBe(false);
+		expect(handlers.has("before_agent_start")).toBe(false);
+		expect(handlers.has("session_start")).toBe(true);
 	});
 });
 
@@ -258,7 +237,7 @@ describe("native web payload augmentation", () => {
 		expect(payload.tools).toHaveLength(1);
 	});
 
-	it("adds Anthropic search and fetch definitions with conservative limits and citations", () => {
+	it("adds only the bounded Anthropic search definition", () => {
 		const payload = { model: "claude-sonnet-4-5", messages: [] };
 		const result = augmentNativeWebTools(
 			payload,
@@ -276,14 +255,7 @@ describe("native web payload augmentation", () => {
 			{
 				type: "web_search_20250305",
 				name: "web_search",
-				max_uses: 3,
-			},
-			{
-				type: "web_fetch_20250910",
-				name: "web_fetch",
-				max_uses: 3,
-				max_content_tokens: 10_000,
-				citations: { enabled: true },
+				max_uses: 1,
 			},
 		]);
 	});
@@ -329,9 +301,9 @@ describe("native web payload augmentation", () => {
 		expect(result).toBe(payload);
 	});
 
-	it("adds only a missing Anthropic capability", () => {
+	it("does not add native fetch when search already exists", () => {
 		const payload = {
-			tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
+			tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
 		};
 		const result = augmentNativeWebTools(
 			payload,
@@ -341,18 +313,11 @@ describe("native web payload augmentation", () => {
 				endpoint: "https://api.anthropic.com",
 				modelId: "claude-sonnet-4-5",
 				search: true,
-				fetch: true,
+				fetch: false,
 			}),
-		) as typeof payload & { tools: Array<Record<string, unknown>> };
+		);
 
-		expect(result.tools).toHaveLength(2);
-		expect(result.tools[1]).toEqual({
-			type: "web_fetch_20250910",
-			name: "web_fetch",
-			max_uses: 3,
-			max_content_tokens: 10_000,
-			citations: { enabled: true },
-		});
+		expect(result).toBe(payload);
 	});
 
 	it.each([

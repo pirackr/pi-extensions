@@ -32,7 +32,7 @@ Frontmatter drives behaviour: `name` + `description` are required, and `disable-
 
 The pattern here is that an extension and a skill of the same name are two halves of one feature:
 
-- `extensions/web-search/index.ts` registers the callable tools (`web_lookup`, `fetch_web`). The search tool is deliberately **not** named `web_search` — that name collides with Anthropic's reserved server-side `web_search_20250305` tool type and can break tool-calling through non-Anthropic compatibility shims.
+- `extensions/web-search/index.ts` registers `web_search` and `fetch_web`. Search routing is enforced inside `web_search`: an isolated provider-native request precedes the client fallback chain. Native definitions and the client tool are never sent together by this extension.
 - `skills/web-search/SKILL.md` carries the *judgment* — engine-selection heuristics, when to fetch vs. search, prompt-injection safety rules, error-recovery table. None of that belongs in a tool description.
 
 When adding a feature, decide which half it needs. Guidance-only additions (`customize-pi`, `subagent`, `handoff`, `grill-me`) are skills with no extension.
@@ -61,7 +61,7 @@ Direct API calls — no `open-websearch`, no `npx`, no daemon. Architecture:
 - `extensions/web-search/strategies/tinyfish.ts` — TinyFishFetchStrategy. Uses `@tiny-fish/sdk` (`TinyFish.fetch.getContents()`); requests Markdown by default.
 - `extensions/web-search/strategies/readability.ts` — ReadabilityStrategy. Native `fetch()` + `linkedom` parse + `@mozilla/readability` extraction; 30s abort timeout; returns `{url, title, content, error}`.
 - `extensions/web-search/options/{tinyfish,exa,tavily}.ts` — strict TypeBox schemas (`TinyFishSearchOptionsSchema`, `TinyFishFetchOptionsSchema`, `ExaSearchOptionsSchema`, `TavilySearchOptionsSchema`) with `additionalProperties: false`. Cross-field validation in `options/validate.ts`.
-- `extensions/web-search/index.ts` — registers `web_lookup` (search) and `fetch_web` (fetch + extract) tools with typebox params. Tool schemas use the strict provider-keyed schemas so unknown fields are rejected at the tool boundary.
+- `extensions/web-search/index.ts` — registers `web_search` (search) and `fetch_web` (fetch + extract) tools with typebox params. Tool schemas use the strict provider-keyed schemas so unknown fields are rejected at the tool boundary.
 
 ### SDK Ownership
 
@@ -82,17 +82,17 @@ Direct API calls — no `open-websearch`, no `npx`, no daemon. Architecture:
 
 ### Routing Boundaries
 
-- `engine: "auto"` → TinyFish → Exa → DuckDuckGo (first with results wins).
+- `web_search` with `engine: "auto"` and no provider options → eligible native search first, then TinyFish → Exa → DuckDuckGo on failure or unusable results. Provider options use the client path to preserve filters.
 - Explicit engine (`tinyfish`, `exa`, `duckduckgo`, `tavily`) runs that provider alone — no fallback.
 - Tavily is opt-in only; never enters the automatic chain.
 - `advancedOptions` is provider-keyed; unknown provider keys and unknown fields are rejected before any quota reservation.
 - Fetch: TinyFish attempted first (Markdown); Readability fallback for infrastructure failures only (not validation errors).
-- Every physical attempt reserves capacity in the shared coordinator; retries count against quota.
+- Every client-provider attempt reserves capacity in the shared coordinator; retries count against quota. Native requests use Pi authentication and a bounded one-attempt policy instead.
 - Hard per-process budgets (`--web-search-max-lookups`, `--web-search-max-fetches`) are independent of provider rate limits.
 
 Dependencies: `@mozilla/readability` + `linkedom` (DOMParser doesn't exist in Node — that's why linkedom, not the plan's original approach) + `typebox`. Tests in `tests/web-search.test.ts` (run with `npx vitest run`; note the `vi.mock('node:fs')` that neutralizes the real `.env` so tests are deterministic).
 
-**Compatibility note**: `web_search` is Anthropic's reserved name for its built-in server-side web search tool (`web_search_20250305`). Compatibility shims may mishandle a client-defined tool with that name when proxying to a non-Anthropic backend. Use `web_lookup` instead, and avoid other reserved server-tool names such as `computer`, `bash`, `text_editor`/`str_replace_editor`, and `code_execution`.
+**Naming**: the public tool is `web_search` (formerly `web_lookup`), by user request. Native provider tools run only in isolated nested requests, not alongside the public client definition. Update old user allowlists/profiles when upgrading; historical design documents retain the old name.
 
 ## opencode-zen extension
 

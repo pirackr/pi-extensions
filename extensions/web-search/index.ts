@@ -46,7 +46,10 @@ function registerNativeWebStatus(pi: ExtensionAPI): void {
 	});
 	pi.on("model_select", (event, context) => {
 		const ctx = context as StatusContext;
-		ctx.ui?.setStatus?.(NATIVE_WEB_STATUS_KEY, getNativeWebStatus(event.model ?? ctx.model));
+		ctx.ui?.setStatus?.(
+			NATIVE_WEB_STATUS_KEY,
+			getNativeWebStatus(event.model ?? ctx.model),
+		);
 	});
 	pi.on("session_shutdown", (_event, context) => {
 		(context as StatusContext).ui?.setStatus?.(NATIVE_WEB_STATUS_KEY, undefined);
@@ -54,20 +57,34 @@ function registerNativeWebStatus(pi: ExtensionAPI): void {
 }
 
 function validateSearchRequest(params: any): void {
-	if (typeof params?.query !== "string" || !params.query.trim()) throw new Error("query must be a non-empty string");
-	if (params.limit !== undefined && (typeof params.limit !== "number" || !Number.isFinite(params.limit))) throw new Error("limit must be a finite number");
-	if (params.engine !== undefined && !["auto", "tinyfish", "exa", "duckduckgo", "tavily"].includes(params.engine)) throw new Error("unsupported search engine");
+	if (typeof params?.query !== "string" || !params.query.trim())
+		throw new Error("query must be a non-empty string");
+	if (
+		params.limit !== undefined &&
+		(typeof params.limit !== "number" || !Number.isFinite(params.limit))
+	)
+		throw new Error("limit must be a finite number");
+	if (
+		params.engine !== undefined &&
+		!["auto", "tinyfish", "exa", "duckduckgo", "tavily"].includes(params.engine)
+	)
+		throw new Error("unsupported search engine");
 	validateSearchAdvancedOptions(params.advancedOptions);
 }
 
 function validateSearchAdvancedOptions(advancedOptions: unknown): void {
 	if (advancedOptions === undefined) return;
-	if (!advancedOptions || typeof advancedOptions !== "object" || Array.isArray(advancedOptions)) {
+	if (
+		!advancedOptions ||
+		typeof advancedOptions !== "object" ||
+		Array.isArray(advancedOptions)
+	) {
 		throw new Error("advancedOptions must be an object");
 	}
 	const options = advancedOptions as Record<string, unknown>;
 	for (const key of Object.keys(options)) {
-		if (key !== "tinyfish" && key !== "exa" && key !== "tavily") throw new Error(`unknown advancedOptions provider: ${key}`);
+		if (key !== "tinyfish" && key !== "exa" && key !== "tavily")
+			throw new Error(`unknown advancedOptions provider: ${key}`);
 	}
 	const validators = {
 		tinyfish: validateTinyFishSearchOptions,
@@ -77,9 +94,13 @@ function validateSearchAdvancedOptions(advancedOptions: unknown): void {
 	for (const key of Object.keys(validators) as Array<keyof typeof validators>) {
 		const value = options[key];
 		if (value === undefined) continue;
-		if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`advancedOptions.${key} must be an object`);
+		if (!value || typeof value !== "object" || Array.isArray(value))
+			throw new Error(`advancedOptions.${key} must be an object`);
 		const errors = validators[key](value as Record<string, unknown>);
-		if (errors.length) throw new Error(`invalid advancedOptions.${key}: ${errors.map((error) => error.message).join("; ")}`);
+		if (errors.length)
+			throw new Error(
+				`invalid advancedOptions.${key}: ${errors.map((error) => error.message).join("; ")}`,
+			);
 	}
 }
 
@@ -154,7 +175,13 @@ export default function (pi: ExtensionAPI) {
 				),
 			),
 		}),
-		async execute(_id: string, params: any, signal?: AbortSignal, _onUpdate?: unknown, ctx?: any) {
+		async execute(
+			_id: string,
+			params: any,
+			signal?: AbortSignal,
+			_onUpdate?: unknown,
+			ctx?: any,
+		) {
 			validateSearchRequest(params);
 			signal?.throwIfAborted();
 			const max = maxLookups();
@@ -176,7 +203,9 @@ export default function (pi: ExtensionAPI) {
 			let nativeUsage: unknown;
 			let nativeFailure: { engine: string; error: string } | undefined;
 			let result;
-			const nativeEligible = (!params.engine || params.engine === "auto") && params.advancedOptions === undefined;
+			const nativeEligible =
+				(!params.engine || params.engine === "auto") &&
+				params.advancedOptions === undefined;
 			if (nativeEligible) {
 				const native = await tryNativeSearch(params.query, limit, ctx, signal);
 				nativeUsage = native.usage;
@@ -185,7 +214,11 @@ export default function (pi: ExtensionAPI) {
 			}
 			signal?.throwIfAborted();
 			if (!result) result = await webLookup(request);
-			if (nativeFailure) result = { ...result, partialFailures: [nativeFailure, ...result.partialFailures] };
+			if (nativeFailure)
+				result = {
+					...result,
+					partialFailures: [nativeFailure, ...result.partialFailures],
+				};
 
 			let text = `Query: "${result.query}"\n`;
 			text += `Engines: ${result.engines.join(", ") || "none"}\n`;

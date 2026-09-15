@@ -60,7 +60,7 @@ export interface SubagentConfiguration {
 	loadContextFiles: boolean;
 	/** Default hard per-task timeout in seconds. */
 	defaultTimeoutSeconds: number;
-	/** Default hard cap on web_lookup calls per subagent process (0 = unlimited). */
+	/** Default hard cap on web_search calls per subagent process (0 = unlimited). */
 	webSearchMaxLookups: number;
 	/** Default hard cap on fetch_web calls per subagent process (0 = unlimited). */
 	webSearchMaxFetches: number;

@@ -158,7 +158,7 @@ function baseConfig(): ResolvedResearchConfig {
 				description: "Discover sources",
 				model: "strong",
 				thinking: "high",
-				tools: ["web_lookup", "fetch_web"],
+				tools: ["web_search", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 1800,
 				promptPath: SCOUT_PROMPT,
@@ -240,7 +240,7 @@ function standardModels() {
 			id: "strong-1",
 			name: "strong",
 			provider: "anthropic",
-			capabilities: ["web_lookup", "fetch_web"],
+			capabilities: ["web_search", "fetch_web"],
 		},
 		eval: {
 			id: "eval-1",
@@ -256,7 +256,7 @@ function standardProviders() {
 		{
 			id: "local",
 			adapterVersion: "1.0",
-			capabilities: ["web_lookup", "fetch_web", "read", "local"],
+			capabilities: ["web_search", "fetch_web", "read", "local"],
 		},
 	]);
 }
@@ -1583,7 +1583,7 @@ describe("integration — reload, resume, interruption, provider mismatch", () =
 				originalPrompt,
 			);
 			expect(result.contract.resolvedProfiles.scout.tools).toEqual([
-				"web_lookup",
+				"web_search",
 				"fetch_web",
 			]);
 			expect(Object.isFrozen(result.contract)).toBe(true);
@@ -1987,7 +1987,7 @@ describe("integration — Task 15 provider-free resolved profiles", () => {
 					id: "strong-1",
 					name: "strong",
 					provider: "anthropic",
-					capabilities: ["web_lookup", "fetch_web"],
+					capabilities: ["web_search", "fetch_web"],
 				},
 				"eval-1": {
 					id: "eval-1",

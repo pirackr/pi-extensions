@@ -1,6 +1,7 @@
 /**
- * Engine selection for web_lookup:
- * - "auto": walk the fallback chain (Exa first, DuckDuckGo backup).
+ * Engine selection for web_search:
+ * - "auto": eligible native search first, then TinyFish, Exa, DuckDuckGo.
+ *   Provider-specific options go directly to the client fallback chain.
  * - "exa" / "duckduckgo": force a single engine, bypassing the chain.
  * - "tavily": opt-in engine for heavy deep research (advanced depth, needs TAVILY_API_KEY).
  * - "tinyfish": force TinyFish search (added for provider routing).

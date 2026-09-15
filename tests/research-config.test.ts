@@ -86,7 +86,7 @@ function makeBaseConfig(overrides?: Partial<Record<string, unknown>>): Record<st
 				description: "Discover and evaluate sources",
 				model: "strong",
 				thinking: "high",
-				tools: ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
+				tools: ["read", "grep", "find", "ls", "web_search", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 1800,
 				promptPath: "../skills/research/agents/scout.md",
@@ -101,7 +101,7 @@ function makeBaseConfig(overrides?: Partial<Record<string, unknown>>): Record<st
 				description: "Deep read of URLs",
 				model: "strong",
 				thinking: "minimal",
-				tools: ["read", "web_lookup", "fetch_web"],
+				tools: ["read", "web_search", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 720,
 				promptPath: "../skills/research/agents/fetcher.md",
@@ -131,7 +131,7 @@ function makeBaseConfig(overrides?: Partial<Record<string, unknown>>): Record<st
 				description: "Evaluate draft research report against credibility rubric",
 				model: "eval",
 				thinking: "medium",
-				tools: ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
+				tools: ["read", "grep", "find", "ls", "web_search", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 1200,
 				promptPath: "../skills/research/agents/judge.md",
@@ -146,7 +146,7 @@ function makeBaseConfig(overrides?: Partial<Record<string, unknown>>): Record<st
 				description: "Map claims to exact source locations",
 				model: "strong",
 				thinking: "low",
-				tools: ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
+				tools: ["read", "grep", "find", "ls", "web_search", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 720,
 				promptPath: "../skills/research/agents/citation-agent.md",
@@ -161,7 +161,7 @@ function makeBaseConfig(overrides?: Partial<Record<string, unknown>>): Record<st
 				description: "Rate all sources used in research",
 				model: "strong",
 				thinking: "low",
-				tools: ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
+				tools: ["read", "grep", "find", "ls", "web_search", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 720,
 				promptPath: "../skills/research/agents/source-auditor.md",
@@ -176,7 +176,7 @@ function makeBaseConfig(overrides?: Partial<Record<string, unknown>>): Record<st
 				description: "Investigate and resolve contradictions between sources",
 				model: "light",
 				thinking: "medium",
-				tools: ["read", "grep", "find", "ls", "web_lookup", "fetch_web"],
+				tools: ["read", "grep", "find", "ls", "web_search", "fetch_web"],
 				access: "read",
 				timeoutSeconds: 960,
 				promptPath: "../skills/research/agents/contradiction-resolver.md",
@@ -192,7 +192,7 @@ function makeBaseConfig(overrides?: Partial<Record<string, unknown>>): Record<st
 			"web-search": {
 				name: "web-search",
 				paths: ["../extensions/web-search/index.ts"],
-				requiredTools: ["web_lookup", "fetch_web"],
+				requiredTools: ["web_search", "fetch_web"],
 			},
 			"tmux-subagent": {
 				name: "tmux-subagent",
@@ -275,7 +275,7 @@ describe("resolveResearchConfig — layer precedence", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg/path.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -295,7 +295,7 @@ describe("resolveResearchConfig — layer precedence", () => {
 						description: "User-overridden scout", // override
 						model: "strong",
 						thinking: "high",
-						tools: ["read", "web_lookup", "fetch_web"], // override
+						tools: ["read", "web_search", "fetch_web"], // override
 						access: "read",
 						timeoutSeconds: 300,
 						promptPath: "user-scout.md", // override
@@ -311,7 +311,7 @@ describe("resolveResearchConfig — layer precedence", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["user/path.ts"], // override
-						requiredTools: ["web_lookup", "fetch_web"], // override
+						requiredTools: ["web_search", "fetch_web"], // override
 					},
 				},
 				childExtensions: ["user/child.ts"], // override
@@ -330,13 +330,13 @@ describe("resolveResearchConfig — layer precedence", () => {
 		expect(result.defaults.maxFetches).toBe(30); // from layer1
 		// roles: deep merge
 		expect(result.roles.scout.description).toBe("User-overridden scout");
-		expect(result.roles.scout.tools).toEqual(["read", "web_lookup", "fetch_web"]);
+		expect(result.roles.scout.tools).toEqual(["read", "web_search", "fetch_web"]);
 		expect(result.roles.scout.totalDispatch).toBe(20);
 		// roles not overridden still come from layer1
 		expect(result.roles.judge.description).toBe("Judge");
 		// capabilities
 		expect(result.capabilities["web-search"].paths).toEqual([path.resolve("/user", "user/path.ts")]);
-		expect(result.capabilities["web-search"].requiredTools).toEqual(["web_lookup", "fetch_web"]);
+		expect(result.capabilities["web-search"].requiredTools).toEqual(["web_search", "fetch_web"]);
 		// childExtensions: array replacement
 		expect(result.childExtensions).toEqual([path.resolve("/user", "user/child.ts")]);
 	});
@@ -406,7 +406,7 @@ describe("resolveResearchConfig — layer precedence", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -602,7 +602,7 @@ describe("resolveResearchConfig — unknown-field rejection", () => {
 				"web-search": {
 					name: "web-search",
 					paths: ["pkg.ts"],
-					requiredTools: ["web_lookup"],
+					requiredTools: ["web_search"],
 					bogusField: "rejected",
 				},
 			},
@@ -732,7 +732,7 @@ describe("resolveResearchConfig — recursive object merge", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -833,7 +833,7 @@ describe("resolveResearchConfig — atomic array replacement", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child-a.ts", "pkg/child-b.ts"],
@@ -853,7 +853,7 @@ describe("resolveResearchConfig — atomic array replacement", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["user-a.ts", "user-b.ts", "user-c.ts"], // override
-						requiredTools: ["web_lookup", "fetch_web"], // override
+						requiredTools: ["web_search", "fetch_web"], // override
 					},
 				},
 				childExtensions: ["user/child.ts"], // override
@@ -865,7 +865,7 @@ describe("resolveResearchConfig — atomic array replacement", () => {
 		// Arrays are replaced, not concatenated
 		expect(result.profiles.standard.verification).toEqual(["judge", "citation_agent"]);
 		expect(result.capabilities["web-search"].paths).toEqual(["/user-a.ts", "/user-b.ts", "/user-c.ts"]);
-		expect(result.capabilities["web-search"].requiredTools).toEqual(["web_lookup", "fetch_web"]);
+		expect(result.capabilities["web-search"].requiredTools).toEqual(["web_search", "fetch_web"]);
 		expect(result.childExtensions).toEqual(["/user/child.ts"]);
 	});
 });
@@ -933,7 +933,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -994,7 +994,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -1055,7 +1055,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -1115,7 +1115,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -1176,7 +1176,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -1236,7 +1236,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -1297,7 +1297,7 @@ describe("resolveResearchConfig — nullable-field enforcement", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -1375,7 +1375,7 @@ describe("resolveResearchConfig — path provenance", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -1463,7 +1463,7 @@ describe("resolveResearchConfig — path provenance", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -1526,7 +1526,7 @@ describe("resolveResearchConfig — path provenance", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["../extensions/web-search/index.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -1629,7 +1629,7 @@ describe("resolveResearchConfig — validation errors", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -1653,7 +1653,7 @@ describe("resolveCapability — packaged capability resolution", () => {
 		expect(cap.name).toBe("web-search");
 		expect(cap.paths).toHaveLength(1);
 		expect(cap.paths[0]).toMatch(/\/extensions\/web-search\/index\.ts$/);
-		expect(cap.requiredTools).toContain("web_lookup");
+		expect(cap.requiredTools).toContain("web_search");
 		expect(cap.requiredTools).toContain("fetch_web");
 	});
 
@@ -1719,7 +1719,7 @@ describe("resolveResearchConfig — explicit child paths", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["../extensions/web-search/index.ts", "../extensions/tmux-subagent/index.ts"],
@@ -1783,7 +1783,7 @@ describe("resolveResearchConfig — explicit child paths", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["../extensions/web-search/index.ts", 123],
@@ -1843,7 +1843,7 @@ describe("resolveResearchConfig — explicit child paths", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -1937,7 +1937,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -1997,7 +1997,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 						api_key: "should-be-rejected",
 					},
 				},
@@ -2058,7 +2058,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 						advancedOptions: {
 							nestedApiKey: "should-be-rejected",
 						},
@@ -2122,7 +2122,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -2183,7 +2183,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -2243,7 +2243,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -2322,7 +2322,7 @@ describe("resolveResearchConfig — credential-field rejection", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -2390,7 +2390,7 @@ describe("resolveResearchConfig — unreadable paths", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -2526,7 +2526,7 @@ describe("validateResearchConfig — final validation", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -2637,7 +2637,7 @@ describe("resolveResearchConfig — role field validation", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -2712,7 +2712,7 @@ describe("resolveResearchConfig — role field validation", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -2787,7 +2787,7 @@ describe("resolveResearchConfig — role field validation", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -2862,7 +2862,7 @@ describe("resolveResearchConfig — role field validation", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -2937,7 +2937,7 @@ describe("resolveResearchConfig — role field validation", () => {
 					"web-search": {
 						name: "web-search",
 						paths: ["pkg.ts"],
-						requiredTools: ["web_lookup"],
+						requiredTools: ["web_search"],
 					},
 				},
 				childExtensions: ["pkg/child.ts"],
@@ -3169,7 +3169,7 @@ describe("resolveResearchConfig — resolvePaths does not mutate input (F2)", ()
 				"web-search": {
 					name: "web-search",
 					paths: ["pkg.ts"],
-					requiredTools: ["web_lookup"],
+					requiredTools: ["web_search"],
 				},
 			},
 			childExtensions: ["pkg/child.ts"],
@@ -3262,7 +3262,7 @@ describe("resolveResearchConfig — resolvePaths does not mutate input (F2)", ()
 				"web-search": {
 					name: "web-search",
 					paths: ["pkg.ts"],
-					requiredTools: ["web_lookup"],
+					requiredTools: ["web_search"],
 				},
 			},
 			childExtensions: ["pkg/child.ts"],

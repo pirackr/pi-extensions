@@ -125,8 +125,9 @@ vi.mock("@tiny-fish/sdk", () => {
 // ---------------------------------------------------------------------------
 const { __mockExaSearch: mockExaSearch } = await import("exa-js");
 const { __mockTavilySearch: mockTavilySearch } = await import("@tavily/core");
-const { __mockTinyFishSearchQuery: mockTinyFishSearchQuery } =
-	await import("@tiny-fish/sdk");
+const { __mockTinyFishSearchQuery: mockTinyFishSearchQuery } = await import(
+	"@tiny-fish/sdk"
+);
 const { __mockReserve: mockReserve } = await import(
 	"../extensions/web-search/rate-limit.ts"
 );
@@ -293,9 +294,7 @@ describe("ExaEngine", () => {
 		(err as any).statusCode = 404;
 		mockExaSearch.mockRejectedValue(err);
 
-		await expect(
-			engine.search({ query: "test", limit: 5 }),
-		).rejects.toThrow();
+		await expect(engine.search({ query: "test", limit: 5 })).rejects.toThrow();
 	});
 });
 
@@ -327,9 +326,9 @@ describe("DuckDuckGoEngine helpers", () => {
 	});
 
 	it("stripHtml handles mixed inner tags", () => {
-		expect(
-			stripHtml("<b>Rust</b> is a <i>fast</i>, <b>safe</b> language"),
-		).toBe("Rust is a fast, safe language");
+		expect(stripHtml("<b>Rust</b> is a <i>fast</i>, <b>safe</b> language")).toBe(
+			"Rust is a fast, safe language",
+		);
 	});
 
 	it("snippetRegex matches snippets with embedded <b> tags", () => {
@@ -357,7 +356,10 @@ describe("DuckDuckGoEngine", () => {
 	});
 
 	it("search returns results with titles and URLs (live)", async () => {
-		const results = await engine.search({ query: "rust programming language", limit: 3 });
+		const results = await engine.search({
+			query: "rust programming language",
+			limit: 3,
+		});
 		expect(results.length).toBeGreaterThan(0);
 		expect(results[0].title).toBeTruthy();
 		expect(results[0].url).toBeTruthy();
@@ -493,9 +495,7 @@ describe("TavilyEngine", () => {
 		(err as any).statusCode = 429;
 		mockTavilySearch.mockRejectedValue(err);
 
-		await expect(
-			engine.search({ query: "test", limit: 5 }),
-		).rejects.toThrow();
+		await expect(engine.search({ query: "test", limit: 5 })).rejects.toThrow();
 	});
 });
 
@@ -545,27 +545,27 @@ describe("search composition", () => {
 	});
 
 	describe("webLookup chain behavior", () => {
-		const makeRequest = (overrides: Partial<WebLookupRequest> = {}): WebLookupRequest => ({
+		const makeRequest = (
+			overrides: Partial<WebLookupRequest> = {},
+		): WebLookupRequest => ({
 			query: "test query",
 			limit: 5,
 			...overrides,
 		});
 
-		const makeContext = (overrides: {
-			tinyfishKey?: string | null;
-			exaKey?: string | null;
-			tavilyKey?: string | null;
-		} = {}) => ({
+		const makeContext = (
+			overrides: {
+				tinyfishKey?: string | null;
+				exaKey?: string | null;
+				tavilyKey?: string | null;
+			} = {},
+		) => ({
 			credentials: {
 				tinyfish:
-					overrides.tinyfishKey !== undefined
-						? overrides.tinyfishKey
-						: "tf-key",
+					overrides.tinyfishKey !== undefined ? overrides.tinyfishKey : "tf-key",
 				exa: overrides.exaKey !== undefined ? overrides.exaKey : "exa-key",
 				tavily:
-					overrides.tavilyKey !== undefined
-						? overrides.tavilyKey
-						: "tavily-key",
+					overrides.tavilyKey !== undefined ? overrides.tavilyKey : "tavily-key",
 			},
 			config: {
 				routing: {
@@ -624,7 +624,11 @@ describe("search composition", () => {
 			});
 			mockExaSearch.mockResolvedValue({
 				results: [
-					{ title: "Exa Title", url: "https://exa.example.com/1", text: "exa snippet" },
+					{
+						title: "Exa Title",
+						url: "https://exa.example.com/1",
+						text: "exa snippet",
+					},
 				],
 			});
 			mockReserve.mockResolvedValue("allowed");
@@ -634,9 +638,9 @@ describe("search composition", () => {
 			expect(result.engines).toEqual(["exa"]);
 			expect(result.results).toHaveLength(1);
 			expect(result.results[0].engine).toBe("exa");
-			expect(
-				result.partialFailures.some((pf) => pf.engine === "tinyfish"),
-			).toBe(true);
+			expect(result.partialFailures.some((pf) => pf.engine === "tinyfish")).toBe(
+				true,
+			);
 		});
 
 		it("honors a forced engine choice", async () => {
@@ -675,10 +679,7 @@ describe("search composition", () => {
 			const ctx = makeContext({ tavilyKey: null });
 			mockReserve.mockResolvedValue("allowed");
 
-			const result = await webLookup(
-				makeRequest({ engine: "tavily" }),
-				ctx,
-			);
+			const result = await webLookup(makeRequest({ engine: "tavily" }), ctx);
 
 			expect(result.results).toEqual([]);
 			expect(result.engines).toEqual([]);
@@ -778,13 +779,13 @@ describe("ReadabilityStrategy", () => {
 });
 
 describe("extension tools", () => {
-	it("registers web_lookup tool", () => {
+	it("registers web_search tool", () => {
 		const registered: string[] = [];
 		const mockPi = {
 			registerTool: (tool: { name: string }) => registered.push(tool.name),
 		};
 		createExtension(mockPi as any);
-		expect(registered).toContain("web_lookup");
+		expect(registered).toContain("web_search");
 	});
 
 	it("registers fetch_web tool", () => {
@@ -796,13 +797,13 @@ describe("extension tools", () => {
 		expect(registered).toContain("fetch_web");
 	});
 
-	it("web_lookup returns SearchResponse shape", async () => {
+	it("web_search returns SearchResponse shape", async () => {
 		const results: any[] = [];
 		const mockPi = {
 			registerTool: (tool: any) => results.push(tool),
 		};
 		createExtension(mockPi as any);
-		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+		const lookupTool = results.find((t: any) => t.name === "web_search");
 		expect(lookupTool).toBeDefined();
 
 		mockTinyFishSearchQuery.mockResolvedValue({
@@ -830,35 +831,37 @@ describe("extension tools", () => {
 		expect(res.details).toHaveProperty("partialFailures");
 	});
 
-	it("web_lookup schema advertises the tavily engine", async () => {
+	it("web_search schema advertises the tavily engine", async () => {
 		const results: any[] = [];
 		const mockPi = {
 			registerTool: (tool: any) => results.push(tool),
 		};
 		createExtension(mockPi as any);
-		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+		const lookupTool = results.find((t: any) => t.name === "web_search");
 		expect(JSON.stringify(lookupTool.parameters)).toContain("tavily");
 	});
 
-	it("web_lookup schema advertises the tinyfish engine", async () => {
+	it("web_search schema advertises the tinyfish engine", async () => {
 		const results: any[] = [];
 		const mockPi = {
 			registerTool: (tool: any) => results.push(tool),
 		};
 		createExtension(mockPi as any);
-		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+		const lookupTool = results.find((t: any) => t.name === "web_search");
 		expect(JSON.stringify(lookupTool.parameters)).toContain("tinyfish");
 	});
 
-	it("web_lookup advancedOptions rejects unknown provider keys", async () => {
+	it("web_search advancedOptions rejects unknown provider keys", async () => {
 		const results: any[] = [];
 		const mockPi = {
 			registerTool: (tool: any) => results.push(tool),
 		};
 		createExtension(mockPi as any);
-		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+		const lookupTool = results.find((t: any) => t.name === "web_search");
 		// The schema should reject unknown keys like 'unknown_provider'
-		expect(JSON.stringify(lookupTool.parameters)).not.toContain("unknown_provider");
+		expect(JSON.stringify(lookupTool.parameters)).not.toContain(
+			"unknown_provider",
+		);
 		// Should accept the three known provider keys
 		expect(JSON.stringify(lookupTool.parameters)).toContain("tinyfish");
 		expect(JSON.stringify(lookupTool.parameters)).toContain("exa");
@@ -937,7 +940,7 @@ describe("extension tools", () => {
 		expect(res.details).toHaveProperty("attempts");
 	});
 
-	it("web_lookup throws when budget flag is exhausted", async () => {
+	it("web_search throws when budget flag is exhausted", async () => {
 		const results: any[] = [];
 		const mockPi = {
 			registerTool: (tool: any) => results.push(tool),
@@ -945,7 +948,7 @@ describe("extension tools", () => {
 				name === "web-search-max-lookups" ? "2" : undefined,
 		};
 		createExtension(mockPi as any);
-		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+		const lookupTool = results.find((t: any) => t.name === "web_search");
 
 		// Mock a successful response for the first two calls.
 		mockTinyFishSearchQuery.mockResolvedValue({
@@ -959,11 +962,11 @@ describe("extension tools", () => {
 		await expect(lookupTool.execute("1", { query: "a" })).resolves.toBeTruthy();
 		await expect(lookupTool.execute("2", { query: "b" })).resolves.toBeTruthy();
 		await expect(lookupTool.execute("3", { query: "c" })).rejects.toThrow(
-			"web_lookup budget exhausted",
+			"web_search budget exhausted",
 		);
 	});
 
-	it("web_lookup includes remaining budget in results when capped", async () => {
+	it("web_search includes remaining budget in results when capped", async () => {
 		const results: any[] = [];
 		const mockPi = {
 			registerTool: (tool: any) => results.push(tool),
@@ -971,7 +974,7 @@ describe("extension tools", () => {
 				name === "web-search-max-lookups" ? "2" : undefined,
 		};
 		createExtension(mockPi as any);
-		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+		const lookupTool = results.find((t: any) => t.name === "web_search");
 
 		mockTinyFishSearchQuery.mockResolvedValue({
 			query: "test",
@@ -1005,13 +1008,13 @@ describe("extension tools", () => {
 		).rejects.toThrow("fetch_web budget exhausted");
 	});
 
-	it("web_lookup is unlimited when budget flag is absent", async () => {
+	it("web_search is unlimited when budget flag is absent", async () => {
 		const results: any[] = [];
 		const mockPi = {
 			registerTool: (tool: any) => results.push(tool),
 		};
 		createExtension(mockPi as any);
-		const lookupTool = results.find((t: any) => t.name === "web_lookup");
+		const lookupTool = results.find((t: any) => t.name === "web_search");
 
 		mockTinyFishSearchQuery.mockResolvedValue({
 			query: "test",

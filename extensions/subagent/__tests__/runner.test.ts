@@ -125,7 +125,7 @@ const BASE_REQUEST: RunnerRequest = {
 	profile: {
 		model: "gpt-4o",
 		thinking: "medium",
-		tools: ["read", "web_lookup"],
+		tools: ["read", "web_search"],
 		systemPrompt: "You are a scout.",
 		timeoutSeconds: 300,
 	},
@@ -277,7 +277,7 @@ describe("2. spawn argument / env", () => {
 				"--thinking",
 				"medium",
 				"--tools",
-				"read,web_lookup",
+				"read,web_search",
 				"--web-search-max-lookups",
 				"5",
 				"--web-search-max-fetches",
@@ -457,16 +457,12 @@ describe("4. starting until successful correlated get_state", () => {
 		expect(starting.state).toBe("starting");
 		expect(starting.contextWindow).toBeUndefined();
 
-		const getstateWrite = child.stdin.writes.find((w) =>
-			w.includes("get_state"),
-		);
+		const getstateWrite = child.stdin.writes.find((w) => w.includes("get_state"));
 		expect(getstateWrite).toBeDefined();
 		const getStateId = JSON.parse(getstateWrite!.slice(0, -1)).id;
 		expect(typeof getStateId).toBe("string");
 
-		expect(
-			child.stdin.writes.some((w) => w.includes('"prompt"')),
-		).toBe(false);
+		expect(child.stdin.writes.some((w) => w.includes('"prompt"'))).toBe(false);
 
 		child.stdout.emit(
 			"data",
@@ -622,7 +618,10 @@ describe("5. failed outcomes publish durable failed (result before status)", () 
 			),
 		);
 		await drain();
-		expect(depsForTest.killProcessGroup).toHaveBeenCalledWith(child.pid, "SIGTERM");
+		expect(depsForTest.killProcessGroup).toHaveBeenCalledWith(
+			child.pid,
+			"SIGTERM",
+		);
 		child.emit("close", 1);
 		await done;
 		expect(readResult(dir).state).toBe("failed");
@@ -660,7 +659,9 @@ describe("6. text/tool events append and coalesce", () => {
 		const stderr = vi.fn(() => true);
 		const clock = createClock();
 		const writes: string[] = [];
-		const deps = tempDeps(dir, clock, kill, stdout, stderr, (file) => writes.push(file));
+		const deps = tempDeps(dir, clock, kill, stdout, stderr, (file) =>
+			writes.push(file),
+		);
 		deps.spawn = fn;
 
 		const done = runTaskMode(requestPath, deps);
@@ -681,13 +682,15 @@ describe("6. text/tool events append and coalesce", () => {
 		);
 		await drain();
 
-		const statusWritesBeforeBurst = writes.filter((file) => file.endsWith("status.json")).length;
+		const statusWritesBeforeBurst = writes.filter((file) =>
+			file.endsWith("status.json"),
+		).length;
 		child.stdout.emit(
 			"data",
 			Buffer.from(
 				JSON.stringify({
 					type: "tool_execution_start",
-					toolName: "web_lookup",
+					toolName: "web_search",
 					args: { query: "wiring" },
 				}) + "\n",
 			),
@@ -727,7 +730,7 @@ describe("6. text/tool events append and coalesce", () => {
 			Buffer.from(
 				JSON.stringify({
 					type: "tool_execution_end",
-					toolName: "web_lookup",
+					toolName: "web_search",
 					result: { content: [{ type: "text", text: "compact result summary" }] },
 					isError: false,
 				}) + "\n",
@@ -743,23 +746,30 @@ describe("6. text/tool events append and coalesce", () => {
 			.readFileSync(path.join(dir, "events.jsonl"), "utf8")
 			.split("\n")
 			.filter(Boolean);
-		expect(events.some((e) => e.includes("web_lookup"))).toBe(true);
+		expect(events.some((e) => e.includes("web_search"))).toBe(true);
 
 		const status = readStatus(dir);
 		expect(status.state).toBe("running");
 		expect(status.toolUses).toBe(1);
-		expect(status.tools).toContain("web_lookup");
+		expect(status.tools).toContain("web_search");
 		expect(status.turns).toBe(1);
 		expect((status.usage as { totalTokens: number }).totalTokens).toBe(165);
 		expect(status.compactionCount).toBe(1);
 		expect(status.reservation).toEqual(reservation);
 		expect(String(status.activity)).toContain("responding");
-		const statusWritesAfterBurst = writes.filter((file) => file.endsWith("status.json")).length;
+		const statusWritesAfterBurst = writes.filter((file) =>
+			file.endsWith("status.json"),
+		).length;
 		expect(statusWritesAfterBurst - statusWritesBeforeBurst).toBe(1);
 		const transcript = fs.readFileSync(path.join(dir, "transcript.log"), "utf8");
 		expect(transcript).toContain("thinking");
 		expect(transcript).toContain("done");
 		expect(transcript).toContain("compact result summary");
+		const paneOutput = stdout.mock.calls.flat().join("");
+		expect(paneOutput).toContain('[tool] web_search\n{\n  "query": "wiring"\n}');
+		expect(paneOutput).toContain(
+			"[tool result] web_search\ncompact result summary",
+		);
 		child.emit("close", 1);
 		await done;
 	});
@@ -817,12 +827,8 @@ describe("7. agent_settled sends distinct stats + text requests", () => {
 		);
 		expect(statsWrites.length).toBe(1);
 		expect(textWrites.length).toBe(1);
-		const statsId = JSON.parse(
-			statsWrites[0].slice(0, -1),
-		).id as number;
-		const textId = JSON.parse(
-			textWrites[0].slice(0, -1),
-		).id as number;
+		const statsId = JSON.parse(statsWrites[0].slice(0, -1)).id as number;
+		const textId = JSON.parse(textWrites[0].slice(0, -1)).id as number;
 		expect(statsId).not.toBe(textId);
 
 		child.stdout.emit(
@@ -980,7 +986,7 @@ describe("8. timeout escalates process group", () => {
 
 		expect(readResult(dir).state).toBe("timed_out");
 		expect(readStatus(dir).state).toBe("timed_out");
-		expect((readStatus(dir).finishedAt as number)).toBeGreaterThan(0);
+		expect(readStatus(dir).finishedAt as number).toBeGreaterThan(0);
 	});
 });
 
@@ -1037,9 +1043,7 @@ describe("9. atomic cancellation marker", () => {
 		await done;
 
 		expect(readResult(dir).state).toBe("cancelled");
-		expect(
-			fs.existsSync(path.join(dir, "control", "cancel")),
-		).toBe(true);
+		expect(fs.existsSync(path.join(dir, "control", "cancel"))).toBe(true);
 	});
 });
 
@@ -1102,10 +1106,14 @@ describe("10. normal success publication order and cleanup", () => {
 		);
 		await drain();
 		const statsId = JSON.parse(
-			child.stdin.writes.find((w) => w.includes("get_session_stats"))!.slice(0, -1),
+			child.stdin.writes
+				.find((w) => w.includes("get_session_stats"))!
+				.slice(0, -1),
 		).id as number;
 		const textId = JSON.parse(
-			child.stdin.writes.find((w) => w.includes("get_last_assistant_text"))!.slice(0, -1),
+			child.stdin.writes
+				.find((w) => w.includes("get_last_assistant_text"))!
+				.slice(0, -1),
 		).id as number;
 		child.stdout.emit(
 			"data",

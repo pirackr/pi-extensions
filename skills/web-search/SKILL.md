@@ -12,21 +12,25 @@ Search the web and fetch page content using direct API calls. Zero setup — no 
 
 Two tools are available:
 
-- **`web_lookup`** — Searches the web using a smart fallback chain: TinyFish first, then Exa, then DuckDuckGo. Pass `engine` to force a specific engine.
+- **`web_search`** — Automatically attempts supported provider-native search first, then TinyFish, Exa, and DuckDuckGo if necessary. Pass `engine` to force a client engine.
 - **`fetch_web`** — Fetch a URL and extract readable content. Prefers TinyFish (Markdown) and falls back to Mozilla Readability (HTML).
+
+For supported models on official OpenAI, ChatGPT Codex, and Anthropic endpoints, `web_search` enforces native-first routing inside its handler using Pi's authentication. No separate native tool invocation is needed. Gateways, proxies, and unsupported transports use the client engines. `fetch_web` remains client-only.
+
+Native search runs in an isolated request containing only the query, not the parent conversation or client tools. This Pi version drops structured citation annotations, so native results must include explicit source URLs or the handler falls back. Treat those model-returned URLs as leads to verify, not independently verified citations.
 
 ## Decision Rules
 
 Follow this priority order when the user asks for web information:
 
-1. **Direct URL fetch first** — If the user gives a specific public URL, use `fetch_web` instead of searching.
-2. **Focused search second** — If the user asks for current information, broad discovery, or comparisons, run a single `web_lookup` query.
-3. **Deep read only when needed** — If a search result looks promising but the snippet is insufficient, use `fetch_web` on that result URL.
-4. **Stop early** — Do not fetch many pages for a simple factual answer. Deepen only the top 1–2 most relevant results.
+1. **Focused search** — Call `web_search` for current information, discovery, or comparisons; its default routing handles native search and fallback automatically.
+2. **Direct URL fetch** — If the user gives a specific public URL, use `fetch_web` instead of searching.
+3. **Insufficient evidence** — Refine the query or explicitly choose a client engine when returned results are not useful. Do not retry the same failed native operation indefinitely.
+4. **Deep read only when needed** — Fetch the top 1–2 promising results to verify claims or when snippets are insufficient.
 
 ## Engine Selection
 
-`web_lookup` walks a fallback chain and uses the **first engine that returns results**:
+After a native attempt fails, or when native search is unsupported, `web_search` walks the client fallback chain and uses the **first engine that returns results**:
 
 1. **TinyFish** (default first) — High-quality search with purpose, location, and domain filtering. Requires `TINYFISH_API_KEY` in `.env` or the environment. Skipped silently if no key is set.
 2. **Exa** (fallback) — AI-curated results with rich content extraction. Requires `EXA_API_KEY` in `.env`. Skipped if no key is set.
@@ -40,7 +44,7 @@ Engines listed here never run in the `"auto"` chain. They execute only when expl
 
 The `engine` parameter overrides the chain:
 
-- `engine: "auto"` (default) — TinyFish first, Exa fallback, DuckDuckGo last.
+- `engine: "auto"` (default) — Supported native search first; TinyFish, Exa, then DuckDuckGo on failure. Provider-specific advanced options go directly through the client path so filters are honored.
 - `engine: "tinyfish"` — force TinyFish only.
 - `engine: "exa"` — force Exa only.
 - `engine: "duckduckgo"` — force DuckDuckGo only.
@@ -50,7 +54,7 @@ The `engine` parameter overrides the chain:
 
 ## Advanced Options
 
-Both tools accept provider-specific options under `advancedOptions`. Unknown provider keys and unknown fields are rejected at the tool boundary.
+Both tools accept provider-specific options under `advancedOptions`. Unknown provider keys and unknown fields are rejected at the tool boundary. Search options use the client routing path rather than being silently ignored by native search.
 
 ### Search: `advancedOptions`
 
@@ -84,14 +88,14 @@ See `docs/web-search-provider-options.md` for the complete field-by-field refere
 
 - Each provider retries transient failures (network errors, timeouts, 5xx) up to its configured `maxRetries` (default: 1).
 - A 429 (rate limit) does **not** retry immediately — it publishes a shared cooldown and continues (automatic mode) or returns the failure (explicit mode).
-- Every physical attempt counts against the shared rate-limit coordinator.
+- Every client-provider attempt counts against the shared rate-limit coordinator. Native attempts use a separate bounded, no-retry request and still count toward the per-process search budget.
 - Shared state lives under `$PI_AGENT_DIR/cache/web-search/` so all Pi and subagent processes coordinate against the same provider quotas.
 - Hard per-process call budgets (`--web-search-max-lookups`, `--web-search-max-fetches`) are independent of provider rate limits.
 
 ## Config Paths
 
 | Path | Purpose |
-|---|---|
+| --- | --- |
 | `$PI_AGENT_DIR/web-search.json` | User override (deep-merged with packaged defaults) |
 | `~/.pi/agent/web-search.json` | Usual default location for the above |
 | `$PI_AGENT_DIR/cache/web-search/` | Shared rate-limit coordinator state |
@@ -105,9 +109,9 @@ API keys resolve from environment variables first (`TINYFISH_API_KEY`, `EXA_API_
 
 ```bash
 # Via tool call (not CLI)
-web_lookup({ query: "Rust async runtime comparison", limit: 10 })
-web_lookup({ query: "Rust async runtime comparison", engine: "duckduckgo" })  # force engine
-web_lookup({ query: "recent ML papers", engine: "tinyfish", advancedOptions: { tinyfish: { domain_type: "research_paper", pub_year_min: 2023 } } })
+web_search({ query: "Rust async runtime comparison", limit: 10 })
+web_search({ query: "Rust async runtime comparison", engine: "duckduckgo" })  # force engine
+web_search({ query: "recent ML papers", engine: "tinyfish", advancedOptions: { tinyfish: { domain_type: "research_paper", pub_year_min: 2023 } } })
 ```
 
 Parameters:

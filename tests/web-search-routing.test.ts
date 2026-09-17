@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const clientLookup = vi.fn();
+const clientFetch = vi.fn();
 vi.mock("../extensions/web-search/search.ts", () => ({
 	webLookup: clientLookup,
+}));
+vi.mock("../extensions/web-search/fetch.ts", () => ({
+	fetchWeb: clientFetch,
 }));
 
 const { default: createExtension } = await import(
@@ -61,6 +65,7 @@ function harness(
 	createExtension(pi as any);
 	return {
 		tool: tools.find((tool) => tool.name === "web_search"),
+		fetchTool: tools.find((tool) => tool.name === "fetch_web"),
 		handlers,
 		complete,
 		ctx: {
@@ -82,6 +87,16 @@ beforeEach(() => {
 		results: [],
 		engines: [],
 		partialFailures: [],
+	});
+	clientFetch.mockReset();
+	clientFetch.mockResolvedValue({
+		url: "https://example.com/page",
+		title: "Client page",
+		content: "Client content",
+		strategy: "readability",
+		format: "html",
+		error: null,
+		attempts: [],
 	});
 });
 
@@ -423,6 +438,92 @@ describe("registered web_search native routing", () => {
 		await h.tool.execute("id", { query: "q" }, undefined, undefined, h.ctx);
 		expect(h.complete).not.toHaveBeenCalled();
 		expect(clientLookup).toHaveBeenCalledTimes(1);
+	});
+
+	it("opens a supplied URL with OpenAI native web search before client fetch", async () => {
+		const complete = vi.fn(async (_model, context, options) => {
+			expect(context.messages[0].content).toContain("https://example.com/page");
+			const payload = await options.onPayload({
+				tools: [{ type: "function", name: "leak" }],
+			});
+			expect(payload.tools).toEqual([{ type: "web_search" }]);
+			expect(payload.tool_choice).toBe("required");
+			return response(
+				JSON.stringify({
+					title: "Native page",
+					url: "https://example.com/page",
+					content: "Full native page content",
+					format: "markdown",
+				}),
+			);
+		});
+		const h = harness({ complete });
+		const result = await h.fetchTool.execute(
+			"id",
+			{ url: "https://example.com/page" },
+			undefined,
+			undefined,
+			h.ctx,
+		);
+		expect(clientFetch).not.toHaveBeenCalled();
+		expect(result.details.strategy).toBe("native:openai");
+		expect(result.details.content).toBe("Full native page content");
+		expect(result.details.attempts).toEqual([
+			{ strategy: "native:openai", outcome: "success" },
+		]);
+		expect(result.usage.totalTokens).toBe(18);
+	});
+
+	it("uses Claude web_fetch and falls back with diagnostics for unusable native output", async () => {
+		const model = openAIModel({
+			id: "claude-sonnet-4-6",
+			provider: "anthropic",
+			api: "anthropic-messages",
+			baseUrl: "https://api.anthropic.com",
+		});
+		const complete = vi.fn(async (_model, _context, options) => {
+			const payload = await options.onPayload({ tools: [] });
+			expect(payload.tools).toEqual([
+				{
+					type: "web_fetch_20250910",
+					name: "web_fetch",
+					max_uses: 1,
+					citations: { enabled: true },
+				},
+			]);
+			return response("not json");
+		});
+		const h = harness({ model, complete });
+		const result = await h.fetchTool.execute(
+			"id",
+			{ url: "https://example.com/page" },
+			undefined,
+			undefined,
+			h.ctx,
+		);
+		expect(clientFetch).toHaveBeenCalledTimes(1);
+		expect(result.details.attempts[0]).toEqual({
+			strategy: "native:anthropic",
+			outcome: "failed",
+			reason: "native fetch returned no usable page content",
+		});
+		expect(result.details.strategy).toBe("readability");
+	});
+
+	it("keeps TinyFish-specific fetch options client-only", async () => {
+		const h = harness({ complete: vi.fn() });
+		await h.fetchTool.execute(
+			"id",
+			{
+				url: "https://example.com/page",
+				advancedOptions: { tinyfish: { format: "html" } },
+			},
+			undefined,
+			undefined,
+			h.ctx,
+		);
+		expect(h.complete).not.toHaveBeenCalled();
+		expect(clientFetch).toHaveBeenCalledTimes(1);
 	});
 
 	it("does not register parent request injection or prompt guidance hooks", () => {

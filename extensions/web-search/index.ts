@@ -9,7 +9,11 @@ import {
 } from "./options/tinyfish.ts";
 import { ExaSearchOptionsSchema } from "./options/exa.ts";
 import { TavilySearchOptionsSchema } from "./options/tavily.ts";
-import { getNativeWebStatus, tryNativeSearch } from "./native.ts";
+import {
+	getNativeWebStatus,
+	tryNativeFetch,
+	tryNativeSearch,
+} from "./native.ts";
 import {
 	validateExaSearchOptions,
 	validateTavilySearchOptions,
@@ -248,10 +252,10 @@ export default function (pi: ExtensionAPI) {
 		name: "fetch_web",
 		label: "Fetch Web Content",
 		description:
-			"Fetch and extract readable content from a public URL. Uses TinyFish by default (Markdown), " +
-			"falling back to Mozilla Readability (HTML). " +
+			"Fetch and extract readable content from a public URL. Attempts supported provider-native page opening first, " +
+			"then falls back to TinyFish (Markdown) and Mozilla Readability (HTML). " +
+			"TinyFish-specific advancedOptions bypass native routing so provider options are never ignored. " +
 			"Returns the page title and content in the strategy's native format (markdown, html, json, text, or unknown). " +
-			"Pass advancedOptions.tinyfish to control TinyFish-specific fetch behavior (format, links, ttl, etc.). " +
 			"Unknown fields in advancedOptions.tinyfish are rejected. " +
 			"Use for reading documentation, articles, or any public web page.",
 		parameters: Type.Object({
@@ -270,7 +274,14 @@ export default function (pi: ExtensionAPI) {
 				),
 			),
 		}),
-		async execute(_id: string, params: any, signal?: AbortSignal) {
+		async execute(
+			_id: string,
+			params: any,
+			signal?: AbortSignal,
+			_onUpdate?: unknown,
+			ctx?: any,
+		) {
+			signal?.throwIfAborted();
 			const max = maxFetches();
 			if (max > 0 && fetchCalls >= max) {
 				throw new Error(
@@ -285,7 +296,22 @@ export default function (pi: ExtensionAPI) {
 				advancedOptions: params.advancedOptions,
 			};
 			if (signal) (request as any).__signal = signal;
-			const result = await fetchWeb(request);
+			let nativeUsage: unknown;
+			let nativeFailure: import("./types.ts").FetchAttempt | undefined;
+			let result: import("./types.ts").FetchResponse | undefined;
+			if (params.advancedOptions?.tinyfish === undefined) {
+				const native = await tryNativeFetch(params.url, ctx, signal);
+				nativeUsage = native.usage;
+				nativeFailure = native.failure;
+				result = native.response;
+			}
+			signal?.throwIfAborted();
+			if (!result) result = await fetchWeb(request);
+			if (nativeFailure)
+				result = {
+					...result,
+					attempts: [nativeFailure, ...result.attempts],
+				};
 
 			let content = result.content;
 			if (params.max_chars && content.length > params.max_chars) {
@@ -304,6 +330,7 @@ export default function (pi: ExtensionAPI) {
 			return {
 				content: [{ type: "text", text: output }],
 				details: result,
+				...(nativeUsage ? { usage: nativeUsage } : {}),
 			};
 		},
 	});

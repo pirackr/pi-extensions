@@ -68,26 +68,25 @@ export const NATIVE_WEB_COMPATIBILITY: Readonly<
 		api: "openai-responses",
 		endpoint: "https://api.openai.com/v1",
 		search: true,
-		fetch: false,
+		fetch: true,
 		verified: true,
-		reason: "Official OpenAI Responses native web search.",
+		reason: "Official OpenAI Responses web search with open_page support.",
 	},
 	"openai-codex": {
 		api: "openai-codex-responses",
 		endpoint: "https://chatgpt.com/backend-api",
 		search: true,
-		fetch: false,
+		fetch: true,
 		verified: true,
-		reason: "Official ChatGPT Codex Responses native web search.",
+		reason: "Official ChatGPT Codex Responses web search with open_page support.",
 	},
 	anthropic: {
 		api: "anthropic-messages",
 		endpoint: "https://api.anthropic.com",
 		search: true,
-		fetch: false,
+		fetch: true,
 		verified: true,
-		reason:
-			"Official Anthropic Messages native web search. Fetch remains client-routed.",
+		reason: "Official Anthropic Messages native web search and web fetch.",
 	},
 	deepseek: {
 		api: "anthropic-messages",
@@ -116,6 +115,12 @@ export const NATIVE_WEB_TOOL_DEFINITIONS = Object.freeze({
 			type: "web_search_20250305",
 			name: "web_search",
 			max_uses: 1,
+		},
+		{
+			type: "web_fetch_20250910",
+			name: "web_fetch",
+			max_uses: 1,
+			citations: { enabled: true },
 		},
 	]),
 	// DeepSeek's documented native-search path is Anthropic-compatible, but
@@ -200,6 +205,13 @@ function supportsOpenAIModel(modelId: string | undefined): boolean {
 	// supported family; provider and endpoint checks happen before this rule is
 	// considered, so a gateway model name cannot activate it.
 	return /^gpt-5(?:\.\d+)?(?:-[a-z0-9.-]+)?$/i.test(modelId);
+}
+
+function supportsOpenAIFetchModel(modelId: string | undefined): boolean {
+	if (!modelId) return false;
+	return /^(?:gpt-5(?:\.\d+)?(?:-[a-z0-9.-]+)?|o[134](?:-[a-z0-9.-]+)?)$/i.test(
+		modelId,
+	);
 }
 
 function supportsAnthropicModel(modelId: string | undefined): boolean {
@@ -295,7 +307,10 @@ export function inspectNativeWebCapabilities(
 		supportedModel,
 		verified,
 		search: usable ? compatibility.search : false,
-		fetch: usable ? compatibility.fetch : false,
+		fetch:
+			usable && compatibility.fetch &&
+			(provider !== "openai" && provider !== "openai-codex" ||
+				supportsOpenAIFetchModel(modelId)),
 		reason,
 	};
 }
@@ -328,8 +343,8 @@ export function resolveNativeWebCapabilities(
 		api: inspection.api,
 		endpoint: inspection.endpoint,
 		modelId: inspection.modelId,
-		search: compatibility.search,
-		fetch: compatibility.fetch,
+		search: inspection.search,
+		fetch: inspection.fetch,
 	};
 }
 
@@ -461,7 +476,7 @@ export interface NativeSearchOutcome {
 }
 
 function nativeAbortError(): Error {
-	const error = new Error("web_search cancelled");
+	const error = new Error("native web request cancelled");
 	error.name = "AbortError";
 	return error;
 }
@@ -469,9 +484,20 @@ function nativeAbortError(): Error {
 function nativePayload(
 	payload: unknown,
 	capabilities: NativeWebCapabilities,
+	operation: "search" | "fetch" = "search",
 ): Record<string, unknown> {
-	if (!isRecord(payload)) throw new Error("invalid native search payload");
-	const tools = getNativeWebToolDefinitions(capabilities);
+	if (!isRecord(payload))
+		throw new Error(`invalid native ${operation} payload`);
+	const tools = getNativeWebToolDefinitions(capabilities).filter((tool) => {
+		if (
+			capabilities.provider === "openai" ||
+			capabilities.provider === "openai-codex"
+		)
+			return tool.type === "web_search";
+		return operation === "fetch"
+			? tool.type?.toString().startsWith("web_fetch")
+			: tool.type?.toString().startsWith("web_search");
+	});
 	if (capabilities.api === "anthropic-messages") {
 		// Pi may add adaptive thinking even without a reasoning option. Forced
 		// tool choice is incompatible with it; this isolated extraction call
@@ -620,4 +646,133 @@ export async function tryNativeSearch(
 		},
 		usage: answer?.usage,
 	};
+}
+
+
+export interface NativeFetchOutcome {
+	response?: import("./types.ts").FetchResponse;
+	usage?: unknown;
+	failure?: import("./types.ts").FetchAttempt;
+}
+
+function validatedNativePage(
+	text: string,
+	expectedUrl: string,
+	provider: NativeWebProvider,
+): import("./types.ts").FetchResponse | undefined {
+	if (!text || text.length > MAX_NATIVE_TEXT) return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return undefined;
+	}
+	if (!isRecord(parsed)) return undefined;
+	const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
+	const url = typeof parsed.url === "string" ? parsed.url.trim() : "";
+	const content =
+		typeof parsed.content === "string" ? parsed.content.trim() : "";
+	const format = parsed.format;
+	if (
+		!title ||
+		title.length > MAX_TITLE ||
+		url !== expectedUrl ||
+		!content ||
+		!(["markdown", "html", "text"] as unknown[]).includes(format)
+	)
+		return undefined;
+	return {
+		url,
+		title,
+		content,
+		strategy: `native:${provider}`,
+		format: format as "markdown" | "html" | "text",
+		error: null,
+		attempts: [{ strategy: `native:${provider}`, outcome: "success" }],
+	};
+}
+
+/** One isolated provider-native page-opening attempt. Invalid output is a normal miss. */
+export async function tryNativeFetch(
+	url: string,
+	ctx: NativeSearchContext | undefined,
+	callerSignal?: AbortSignal,
+): Promise<NativeFetchOutcome> {
+	const capabilities = resolveNativeWebCapabilities(ctx?.model);
+	if (!capabilities?.fetch || !ctx?.model || !ctx.modelRegistry?.complete)
+		return {};
+	if (callerSignal?.aborted) throw nativeAbortError();
+	const timeoutSignal = AbortSignal.timeout(NATIVE_TIMEOUT_MS);
+	const signal = callerSignal
+		? AbortSignal.any([callerSignal, timeoutSignal])
+		: timeoutSignal;
+	const prompt = `Open the exact URL below using the provided native web tool exactly once. Return ONLY JSON with no markdown or commentary: {"title":"...","url":"...","content":"...","format":"markdown|html|text"}. Preserve the page's readable content rather than summarizing it. The returned url must exactly match the supplied URL.\n\nURL: ${url}`;
+	let answer: any;
+	try {
+		answer = await ctx.modelRegistry.complete(
+			ctx.model,
+			{
+				systemPrompt: "You are a bounded web page content extractor.",
+				messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+				tools: [],
+			},
+			{
+				signal,
+				maxRetries: 0,
+				timeoutMs: NATIVE_TIMEOUT_MS,
+				maxTokens: 16_000,
+				onPayload: (payload: unknown) =>
+					nativePayload(payload, capabilities, "fetch"),
+			},
+		);
+	} catch {
+		if (callerSignal?.aborted) throw nativeAbortError();
+		return {
+			failure: {
+				strategy: `native:${capabilities.provider}`,
+				outcome: "failed",
+				reason: timeoutSignal.aborted
+					? "native fetch timed out"
+					: "native fetch failed",
+			},
+		};
+	}
+	if (callerSignal?.aborted) throw nativeAbortError();
+	if (
+		timeoutSignal.aborted ||
+		answer?.stopReason === "aborted" ||
+		answer?.stopReason === "error" ||
+		typeof answer?.errorMessage === "string"
+	) {
+		return {
+			usage: answer?.usage,
+			failure: {
+				strategy: `native:${capabilities.provider}`,
+				outcome: "failed",
+				reason: timeoutSignal.aborted
+					? "native fetch timed out"
+					: "native fetch failed",
+			},
+		};
+	}
+	const text = Array.isArray(answer?.content)
+		? answer.content
+				.filter(
+					(part: any) =>
+						part?.type === "text" && typeof part.text === "string",
+				)
+				.map((part: any) => part.text)
+				.join("")
+		: "";
+	const response = validatedNativePage(text, url, capabilities.provider);
+	if (!response)
+		return {
+			usage: answer?.usage,
+			failure: {
+				strategy: `native:${capabilities.provider}`,
+				outcome: "failed",
+				reason: "native fetch returned no usable page content",
+			},
+		};
+	return { response, usage: answer?.usage };
 }

@@ -78,12 +78,16 @@ provider-native search tool. Failed, empty, or malformed native results fall bac
 to the client engines automatically. Gateways, proxies, and unsupported
 transports use the client engines directly.
 
-Native responses must contain explicit HTTP(S) source URLs: this Pi version
+Native search responses must contain explicit HTTP(S) source URLs: this Pi version
 drops structured citation annotations. Those URLs remain model-returned sources,
 not independently verified citations. No native tools are injected into unrelated
-parent requests. `fetch_web` remains a client URL extractor (TinyFish/Readability). The
-default fallback chain is **TinyFish → Exa → DuckDuckGo**; the first engine that
-returns results wins. Tavily is available only when explicitly requested.
+parent requests. `fetch_web` also routes natively first: OpenAI and ChatGPT Codex
+use the hosted `web_search` tool's `open_page` action, while Anthropic uses its
+`web_fetch` server tool. Unusable native page output falls back to TinyFish and
+Readability; TinyFish-specific options bypass native routing. Native page content
+is model-mediated readable extraction, not guaranteed verbatim source. The search
+fallback chain is **TinyFish → Exa → DuckDuckGo**; the first engine that returns
+results wins. Tavily is available only when explicitly requested.
 TinyFish, Exa, and Tavily use `TINYFISH_API_KEY`, `EXA_API_KEY`, and
 `TAVILY_API_KEY`, respectively; DuckDuckGo needs no key.
 

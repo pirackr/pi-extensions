@@ -162,7 +162,7 @@ describe("native web capability detection", () => {
 		expect(resolveNativeWebCapabilities(model())).toMatchObject({
 			provider: "openai",
 			search: true,
-			fetch: false,
+			fetch: true,
 		});
 		expect(
 			resolveNativeWebCapabilities(
@@ -173,7 +173,7 @@ describe("native web capability detection", () => {
 					baseUrl: "https://chatgpt.com/backend-api",
 				}),
 			),
-		).toMatchObject({ provider: "openai-codex", search: true, fetch: false });
+		).toMatchObject({ provider: "openai-codex", search: true, fetch: true });
 		expect(
 			resolveNativeWebCapabilities(
 				model({
@@ -183,7 +183,7 @@ describe("native web capability detection", () => {
 					baseUrl: "https://api.anthropic.com",
 				}),
 			),
-		).toMatchObject({ provider: "anthropic", search: true, fetch: false });
+		).toMatchObject({ provider: "anthropic", search: true, fetch: true });
 		expect(
 			resolveNativeWebCapabilities(
 				model({
@@ -194,6 +194,13 @@ describe("native web capability detection", () => {
 				}),
 			),
 		).toBeUndefined();
+	});
+
+	it("keeps OpenAI open_page disabled on non-reasoning web-search models", () => {
+		expect(resolveNativeWebCapabilities(model({ id: "gpt-4o" }))).toMatchObject({
+			search: true,
+			fetch: false,
+		});
 	});
 
 	it("reports native-first status for enabled official models", () => {
@@ -207,7 +214,9 @@ describe("native web extension hooks", () => {
 		createExtension({
 			registerFlag() {},
 			registerTool() {},
-			on(event: string, handler: Function) { handlers.set(event, handler); },
+			on(event: string, handler: Function) {
+				handlers.set(event, handler);
+			},
 		} as any);
 		expect(handlers.has("before_provider_request")).toBe(false);
 		expect(handlers.has("before_agent_start")).toBe(false);
@@ -237,7 +246,7 @@ describe("native web payload augmentation", () => {
 		expect(payload.tools).toHaveLength(1);
 	});
 
-	it("adds only the bounded Anthropic search definition", () => {
+	it("adds bounded Anthropic search and fetch definitions", () => {
 		const payload = { model: "claude-sonnet-4-5", messages: [] };
 		const result = augmentNativeWebTools(
 			payload,
@@ -256,6 +265,12 @@ describe("native web payload augmentation", () => {
 				type: "web_search_20250305",
 				name: "web_search",
 				max_uses: 1,
+			},
+			{
+				type: "web_fetch_20250910",
+				name: "web_fetch",
+				max_uses: 1,
+				citations: { enabled: true },
 			},
 		]);
 	});

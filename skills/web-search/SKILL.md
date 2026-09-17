@@ -1,7 +1,7 @@
 ---
 name: web-search
-description: Search the web and fetch page content using direct API calls. No installation, no API keys for DuckDuckGo. Use for finding documentation, facts, code examples, or reading web pages.
-version: 3.0.0
+description: Search the web and fetch page content with provider-native capabilities and direct API fallbacks. Use for finding documentation, facts, code examples, or reading web pages.
+version: 3.1.0
 ---
 
 # Web Search
@@ -13,9 +13,9 @@ Search the web and fetch page content using direct API calls. Zero setup — no 
 Two tools are available:
 
 - **`web_search`** — Automatically attempts supported provider-native search first, then TinyFish, Exa, and DuckDuckGo if necessary. Pass `engine` to force a client engine.
-- **`fetch_web`** — Fetch a URL and extract readable content. Prefers TinyFish (Markdown) and falls back to Mozilla Readability (HTML).
+- **`fetch_web`** — Automatically attempts provider-native page opening first, then TinyFish and Mozilla Readability.
 
-For supported models on official OpenAI, ChatGPT Codex, and Anthropic endpoints, `web_search` enforces native-first routing inside its handler using Pi's authentication. No separate native tool invocation is needed. Gateways, proxies, and unsupported transports use the client engines. `fetch_web` remains client-only.
+For supported models on official OpenAI, ChatGPT Codex, and Anthropic endpoints, both tools enforce native-first routing inside their handlers using Pi's authentication. OpenAI uses `web_search` with an `open_page` action; Anthropic uses its `web_fetch` server tool. Gateways, proxies, and unsupported transports use client engines directly. TinyFish-specific fetch options bypass native routing so those options are never ignored.
 
 Native search runs in an isolated request containing only the query, not the parent conversation or client tools. This Pi version drops structured citation annotations, so native results must include explicit source URLs or the handler falls back. Treat those model-returned URLs as leads to verify, not independently verified citations.
 
@@ -78,11 +78,13 @@ See `docs/web-search-provider-options.md` for the complete field-by-field refere
 
 ## Fetch Behavior
 
-- TinyFish Fetch is attempted first with `format: "markdown"` by default.
-- Mozilla Readability (HTML) is the fallback when TinyFish is unavailable, rate-limited, or returns empty content.
-- The response includes `format` (the strategy's native format: `markdown`, `html`, `json`, `text`, or `unknown`) and `attempts` (a log of every strategy tried and its outcome).
+- Native page opening is attempted first for supported official OpenAI, ChatGPT Codex, and Anthropic models.
+- OpenAI page opening uses the hosted `web_search` tool's `open_page` action; Anthropic uses `web_fetch`.
+- TinyFish Fetch follows with `format: "markdown"` by default; Mozilla Readability is the final fallback.
+- Passing `advancedOptions.tinyfish` skips native page opening so provider-specific behavior is preserved.
+- Native output is model-mediated readable extraction, not guaranteed verbatim HTML. Unusable output falls back automatically and is recorded in `attempts`.
+- The response includes `format` and `attempts`, and output always includes `Format: <format>` and `Strategy: <strategy>`.
 - When `max_chars` is set and content exceeds it, a `[Content truncated]` notice is appended.
-- The output text always includes `Format: <format>` and `Strategy: <strategy>`.
 
 ## Retries and Rate Limits
 

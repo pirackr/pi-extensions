@@ -2,6 +2,8 @@ import { BacklogError } from './errors.ts';
 import { requireAuthorization } from './authorization.ts';
 import { assertOwnership, claimFor } from './claims.ts';
 import { advanceItem, category, checkRevision, getItem, projection, scopeComplete, workflow } from './items.ts';
+import { dependenciesComplete } from './eligibility.ts';
+import { validateCompletion } from './validation.ts';
 import { runMutation } from './mutations.ts';
 import type { Runtime } from './service.ts';
 import type { StoreConnection } from './store.ts';
@@ -20,7 +22,11 @@ export function transitionItem(rt:Runtime,db:StoreConnection,project:Project,ctx
    if(['done','canceled'].includes(to.category)&&children.some(c=>!['done','canceled'].includes(category(db,c))))throw new BacklogError('INVALID_TRANSITION','All children must be terminal');
   }
   if(['active','done'].includes(to.category))requireAuthorization(db,item);
-  if(to.category==='done')throw new BacklogError('VALIDATION_ERROR','Completion requires an acceptance record');
+  if(to.category==='done'){
+   validateCompletion(input.completion);
+   if(item.kind==='task'&&!dependenciesComplete(db,item))throw new BacklogError('INVALID_TRANSITION','Prerequisites must be done');
+   db.prepare('INSERT INTO annotations(item_id,kind,body,timestamp,actor) VALUES (?,\'result\',?,?,?)').run(item.id,JSON.stringify(input.completion),new Date(rt.now()).toISOString(),JSON.stringify(ctx.actor));
+  }
   db.prepare('UPDATE items SET stage=? WHERE id=?').run(to.id,item.id);
   if(['blocked','done','canceled'].includes(to.category))db.prepare('DELETE FROM claims WHERE item_id=?').run(item.id);
   advanceItem(db,item,ctx,rt.now());

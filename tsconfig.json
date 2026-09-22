@@ -11,6 +11,6 @@
     "noEmit": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["extensions/**/*.ts", "extensions/**/*.mjs", "types/**/*.d.ts"],
+  "include": ["extensions/**/*.ts", "extensions/**/*.mjs", "types/**/*.d.ts", "modules/backlog/**/*.ts", "tests/backlog/**/*.ts"],
   "exclude": ["node_modules"]
 }

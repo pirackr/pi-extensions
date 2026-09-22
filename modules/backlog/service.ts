@@ -7,6 +7,7 @@ import { openStore, type StoreConnection } from './store.ts';
 import { projectProjection, registerProject, selectProject, requireOperator, changeProject } from './registry.ts';
 import { changeDependency, reference } from './relationships.ts';
 import { addItem, updateItem, getItem, projection } from './items.ts';
+import { changePolicy } from './policy.ts';
 import { appendAnnotation, type AnnotationOperation } from './annotations.ts';
 import { strictObject, validate, validateProof, validateCompletion } from './validation.ts';
 import type { BacklogService, OperationContext, OperationMap, ServiceOptions } from './types.ts';
@@ -41,6 +42,14 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    validate('revision',input.expectedRegistryRevision);validate(operation==='project.rename'?'label':'reference',input[operation==='project.rename'?'name':'directory']);
    if(input.mutationId!==undefined)validate('label',input.mutationId);
    return changeProject(rt,ctx,operation,input as unknown as {name?:string;directory?:string;expectedRegistryRevision:number;mutationId?:string});
+  }
+  if(operation==='project.policy'){
+   requireOperator(ctx);const input=strictObject(raw,['policy','expectedPolicyVersion','itemId','expectedRevision','mutationId']);validate('revision',input.expectedPolicyVersion);
+   if(input.policy!==null&&!['autonomous','approval_required'].includes(String(input.policy)))throw new BacklogError('VALIDATION_ERROR','Invalid policy');
+   if(input.itemId!==undefined){validate('itemId',input.itemId);validate('revision',input.expectedRevision);}if(input.mutationId!==undefined)validate('label',input.mutationId);
+   const project=selectProject(rt.registry(),ctx,rt.dataRoot);
+   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   return changePolicy(rt,db,project,ctx,input as unknown as OperationMap['project.policy']['input']);
   }
   if(operation==='note.append'||operation==='artifact.attach'||operation==='result.append'){
    const extra=operation==='note.append'?['text']:operation==='artifact.attach'?['artifacts']:['result','proof'];

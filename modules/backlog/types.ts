@@ -24,7 +24,9 @@ export interface ItemChange extends ItemFields { itemId:string; expectedRevision
 export interface DependencyChange { itemId:string; prerequisite:ItemReference; expectedRevision:number; mutationId?:string }
 export interface OwnershipProof { leaseId:string; generation:number; token:string }
 export interface RevisionInput { itemId:string; expectedRevision:number; mutationId?:string }
+export interface EffectivePolicy { policy:Policy; source:string; version:string; governingId:string }
 export interface OperationMap {
+  'project.policy': {input:{policy:Policy|null;expectedPolicyVersion:number;itemId?:string;expectedRevision?:number;mutationId?:string};output:{policy:Policy;policyVersion:number;item?:Item}};
   'note.append': {input:RevisionInput & {text:string};output:Item};
   'artifact.attach': {input:RevisionInput & {artifacts:ArtifactReference[]};output:Item};
   'result.append': {input:RevisionInput & {result:CompletionRecord;proof?:OwnershipProof};output:Item};

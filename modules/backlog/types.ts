@@ -27,7 +27,9 @@ export interface RevisionInput { itemId:string; expectedRevision:number; mutatio
 export interface Eligibility { eligible:boolean; category:Category; policy:EffectivePolicy; authorized:boolean; parentScopeRevision?:number; reasons:string[] }
 export interface EffectivePolicy { policy:Policy; source:string; version:string; governingId:string }
 export interface AuthorizationInput extends RevisionInput { rationale:string }
+export interface ClaimReceipt extends OwnershipProof { worker:string;expiresAt:string;durationSeconds:number;revision:number;taskScopeRevision:number;parentScopeRevision?:number }
 export interface OperationMap {
+  'claim.acquire': {input:RevisionInput & {worker:string;durationSeconds?:number;expectedParentScopeRevision?:number};output:ClaimReceipt};
   'authorization.approve': {input:AuthorizationInput;output:Item};
   'authorization.authorize': {input:AuthorizationInput;output:Item};
   'authorization.revoke': {input:AuthorizationInput;output:Item};

@@ -2,7 +2,7 @@
 
 Date: 2026-09-22
 
-Status: Chat design approved; written specification awaiting user review.
+Status: Reduced v1 direction approved in chat; revised written specification awaiting user review.
 
 ## 1. Purpose and boundary
 
@@ -17,7 +17,7 @@ Success means a user can register a directory, capture and refine work, configur
 - Explicit project registration, stable project identity, and directory-based discovery.
 - One SQLite backlog per project and a central project registry.
 - Requests and tasks, acceptance criteria, priority, dependencies, and artifact references.
-- Configurable project stages and transitions, with versioned definitions.
+- Configurable project stages and transitions; new definitions apply only to new items.
 - Approval/autonomy policy, authorization records, and change history.
 - Revision-checked mutations and basic task claims, renewal, release, and explicit recovery.
 - Pi slash commands, model-callable tools, and a standalone JSON-capable CLI.
@@ -26,13 +26,17 @@ Success means a user can register a directory, capture and refine work, configur
 
 Agent launching, scheduling, automatic decomposition, model calls, test execution, Git/worktree management, deployment, a background daemon, network access, multi-machine coordination, issue-tracker synchronization, a graphical board, nested epics, arbitrary workflow scripts/plugins, and a security boundary between processes running as the same OS user.
 
+V1 also defers workflow migration, separate child scope-binding records/commands, built-in heartbeat workers, and online backup tooling. It keeps revision checks, approval freshness, transactional claims, and explicit recovery.
+
 Adding an item, authorizing it, claiming it, opening Pi, or restoring a session never starts execution. A custom stage describes backlog state; it does not run an action.
 
 ## 2. Decisions and alternatives
 
-The selected approach is **SQLite + a shared library + thin CLI and Pi adapters**. Transactions protect multiple processes on one machine without requiring a service.
+The selected approach is **SQLite + a shared library + thin CLI and Pi adapters**: one shared rule set for local clients, with no service or separate database executable.
 
-JSON/Markdown files were considered for manual readability, but reliable concurrent writes and atomic ownership would require additional locking and recovery machinery. A local HTTP service would provide a remote integration boundary but adds an unnecessary daemon for the agreed single-machine scope.
+Beads is a credible alternative with Git-free, embedded operation, dependencies, claims, and leases. It is not rejected for requiring a daemon. This design instead favors the exact shared mutation/approval contract below over adapting to Beads' native semantics. The trade-off is maintaining our own tracker and its correctness tests; this is not a runtime-performance claim.
+
+JSON/Markdown would require additional concurrent-write machinery. A local HTTP service adds an unnecessary daemon for the single-machine scope.
 
 Project registration uses a central registry, not a marker inside a repository. A project is an explicitly registered directory, including a non-Git directory or monorepo subdirectory. Neither a Git root nor a Pi session is project identity.
 
@@ -40,19 +44,14 @@ Project registration uses a central registry, not a marker inside a repository. 
 
 Keep the domain and storage code independent of Pi:
 
-| Component | Responsibility | Dependencies |
-| --- | --- | --- |
-| `modules/backlog/registry.ts` | Register, identify, rename, and relocate projects | Filesystem/path helpers and registry SQLite connection |
-| `modules/backlog/workflows.ts` | Validate lifecycle definitions and legal transitions | Domain types; no Pi imports |
-| `modules/backlog/policy.ts` | Resolve authorization policy and validate recorded authority | Domain types and project/item records |
-| `modules/backlog/store.ts` | Transactional item, relationship, authorization, history, and claim operations | SQLite, policy, workflow validation |
-| `modules/backlog/service.ts` | Validated operation boundary shared by adapters | Registry and store |
-| `modules/backlog/cli.ts` | Argument parsing, input files/stdin, output envelopes, exit codes | Shared service; no Pi imports |
-| `bin/pi-backlog.mjs` | Standalone executable bootstrap | Node and a directly declared `jiti` runtime dependency |
-| `extensions/backlog/index.ts` and adapter modules | `/backlog`, tools, and Pi lifecycle integration | Shared service and Pi extension API |
-| `skills/backlog/SKILL.md` | Guidance on project selection, records, policy, and safe updates | Public backlog interface documentation |
+| Component | Responsibility |
+| --- | --- |
+| `modules/backlog/` | Registry, records, lifecycle/policy validation, transactional storage, and one shared service boundary; no Pi imports |
+| `modules/backlog/cli.ts` + `bin/pi-backlog.mjs` | Standalone argument/input handling, JSON output, and executable bootstrap over that service |
+| `extensions/backlog/` | Thin `/backlog` and model-tool adapters |
+| `skills/backlog/SKILL.md` | Usage guidance, including ownership and recovery limitations |
 
-These are responsibility boundaries, not a requirement to put all storage operations in one large file. Split focused repositories or validators as the implementation grows; do not duplicate domain rules in adapters.
+Split the core into focused modules during planning; do not build a plugin/backend abstraction or duplicate rules in adapters.
 
 Use Node's built-in `node:sqlite` on Node **22.19 or newer**, matching the installed Pi package's minimum. Keep TypeScript source loading and the repository's no-build development model. The standalone bootstrap uses a direct `jiti` dependency rather than relying on Pi's private/transitive dependencies. No native SQLite npm addon or Pi process is required by the CLI.
 
@@ -105,7 +104,7 @@ A missing registered directory is reported as unavailable but does not delete or
 
 The hierarchy is one level deep. A task cannot contain children, and a request cannot be another request's child. Standalone tasks are first-class. Item kind is immutable.
 
-Each project allocates monotonically increasing item IDs such as `B-1`; IDs are never reused. The durable external reference is `(project UUID, item ID)`.
+Each project allocates monotonically increasing item IDs such as `B-1`; IDs are never reused within retained database history. The durable external reference is `(project UUID, item ID)`. Restoring an older backup is an explicit rollback of that history, including counters and revisions (section 9).
 
 ### Stored fields
 
@@ -128,7 +127,7 @@ Text is data, not instructions for the tracker to execute. Artifact references a
 - Parent and dependency references must resolve within the same project.
 - Dependencies are task-to-task, reject self-reference and cycles, and are satisfied only by the prerequisite's `done` category. A canceled prerequisite is not successful completion.
 - New children cannot be attached to terminal requests.
-- Parent reassignment is permitted only while the task is in a draft-category stage and unclaimed. It invalidates the task's scope binding and any standalone authorization.
+- Parent reassignment is permitted only while the task is in a draft-category stage and unclaimed. It increments the task's scope revision and invalidates any standalone authorization.
 - Completing or canceling a request requires all children to be terminal and no unresolved claims. There is no automatic cascade.
 - Completing all children does not complete the request. Request completion is a separate, explicit acceptance record.
 
@@ -187,69 +186,60 @@ Task completion requires a result summary, a verification statement, and at leas
 
 ### Workflow changes
 
-Workflow versions are immutable. Publishing a new version makes it the default for new items of that type; existing items remain pinned to their old version.
+Workflow versions are immutable. Publishing a new version makes it the default for new items of that type; existing items stay pinned to their original definition for their entire lifetime. Old definitions remain readable and usable for transitions.
 
-Migration is explicit, operates on a selected set of nonterminal items, and supplies an old-stage-to-new-stage mapping. All mapped stages must preserve semantic category. Validate the whole selected set and migrate it transactionally, or change none of it. Recorded claims, including expired unresolved claims, block migration of the task or its parent request.
-
-Migration changes the execution contract and invalidates affected scope authorizations/bindings. It does not complete work, skip a gate, or reinterpret historical events. Old definitions remain available for interpreting existing items and history.
+There is no migration operation, stage-mapping engine, or per-item version override in v1. Publishing a definition does not change existing items, claims, or approvals. Work requiring a different lifecycle is captured as a new item with a reference to the old one; cancel the old item explicitly if it is being replaced.
 
 ## 7. Authorization policy and scope
 
-The project default is `approval_required`. An operator can set it to `autonomous`. Requests and standalone tasks can explicitly override that default; child tasks inherit their parent's effective policy. Resolve the effective policy on every relevant operation, not once in a worker's memory.
+The project default is `approval_required`; an operator can select `autonomous`. Requests and standalone tasks can override the default. Children inherit their request's effective policy and authorization. Resolve policy on every relevant operation. **Ready is not authorized**: expose stage, policy, authorization, and eligibility reasons separately.
 
-**Ready is not equivalent to authorized.** The API reports the stage, effective policy, current authorization, and eligibility reasons separately.
+- Approval-based mode requires operator approval of a request or standalone task's current scope. Autonomous mode lets automation explicitly authorize that scope with a rationale; it does not silently authorize captured items.
+- Both operations require a nonterminal request or standalone task with a nonempty description and acceptance criteria. Record actor/channel, timestamp, rationale, scope revision, and effective policy/version.
+- Request approval covers children within that scope; children need no separate approval or prose binding. On every child claim, the caller supplies the expected request scope revision as well as the task's expected item revision. The transaction rejects stale references and records both scope revisions in the claim. This acknowledges current scope, not its semantic correctness. Assessing whether a task fits remains the caller's responsibility.
 
-- In `approval_required` mode, an operator records approval of the current request or standalone task scope and acceptance criteria.
-- In `autonomous` mode, an automation actor can record authorization itself, including its rationale. Autonomous policy permits this operation; it does not silently authorize every captured item.
-- Approval of a request permits decomposition and execution of child tasks within its scope without individual human approval of every task.
-- A child task must record a scope-binding statement referencing the current request scope revision and its own scope revision before it is claimable. The statement explains how the task fits the request. The tracker checks the references and their freshness, not their semantic truth.
+Title, description, acceptance criteria, parent, dependency, and item-policy changes increment scope revision and invalidate that item's authorization, if any. Request edits therefore invalidate the authority inherited by its children without rewriting child records. A child edit does not invalidate request approval; the next claim acknowledges the edited task and current request. Priority, notes, artifacts, and stage changes do not invalidate approval. Adding a child does not itself alter request scope.
 
-Approval and automated authorization require a nonempty description and acceptance criteria, and apply only to nonterminal requests or standalone tasks. Authorization records include actor, source channel, timestamp, rationale, effective policy, and the authorized scope/policy versions. Project policy changes invalidate records for nonterminal items inheriting that policy; request overrides and terminal historical records are unaffected. Reapplying the same policy is a no-op.
+Project policy changes invalidate authorizations of nonterminal items inheriting that policy; overrides and terminal history are unaffected. Reapplying an unchanged policy is a no-op. Changing an override invalidates that item's authorization even when the newly resolved policy has the same name.
 
-Scope-affecting edits include title, description, acceptance criteria, parent/dependencies, workflow migration, and policy changes. They invalidate affected authorization or child scope bindings. Priority changes, appended notes, and artifact references do not invalidate approval. Adding a child within the approved scope does not itself invalidate the request's approval; that child still needs its own current scope binding.
+While any claim is recorded, including an expired unresolved one, reject changes to that task's scope and to its governing request/project policy or request scope. An operator can still revoke authorization immediately: new claims, renewal, active transitions, and completion then fail. Revocation does not terminate workers; release and recovery remain available.
 
-A request's scope revision change invalidates its authorization and every child's binding to the old revision. A task scope change invalidates its own authorization or binding. Stage changes do not by themselves change scope. Invalidation changes eligibility, not the displayed stage automatically.
-
-Executable scope is frozen while a task has a recorded claim, including an expired unresolved claim. Request scope/policy changes are similarly rejected while any affected child has such a claim. Project policy changes are rejected while any affected task has one. An operator may revoke authorization immediately; revocation prevents further claim renewal, active/completion transitions, and new claims, but does not terminate processes. Release and explicit recovery remain available so ownership can be cleared safely.
-
-Request transitions into active/done require current authorization. A child task is eligible only while its request is ready or active and authorized. Moving a request out of ready/active is rejected while any child has a recorded claim; first revoke if necessary, then release or recover ownership. The factory, not the backlog, determines whether work is actually within scope or adequately verified.
+Request transitions into active/done require current authorization. Child claims and active/done transitions require a ready/active, authorized parent. Moving a request out of ready/active is rejected while a child has a recorded claim; release or recover first. Scope invalidation changes eligibility, not the displayed stage.
 
 ### Trusted-local boundary
 
-Actor attribution is an audit aid, not authentication. Pi tools always use automation attribution and cannot supply a human identity, record human approval, change policy, register/relocate projects, or publish/migrate workflows. Those are operator operations exposed by slash commands and the standalone CLI.
+Attribution is not authentication. Pi tools use automation attribution and cannot record human approval, change policy, register/relocate projects, or publish workflows. Operator controls are slash commands and CLI operations. Automated authorization is allowed only under autonomous policy; claiming a child under an approved request is allowed in either mode.
 
-The CLI's operator interface assumes a trusted caller. A process with the same filesystem permissions can invoke it, import the library, or edit a database directly. The API checks protect cooperating clients; this design does not claim tamper-proof human approval or sandbox enforcement.
+The CLI trusts its caller. A same-user process can invoke operator commands or edit the database. These checks protect cooperating clients, not a tamper-proof human-approval boundary.
 
 ## 8. Claims and concurrent workers
 
-Claims protect a **task**, independently of its current stage. Requests are edited through revision checks, not worker leases. There is no worker registry, dispatcher, background expiry timer, or automatic next-task selection.
+Only tasks have claims; requests use revision-checked edits. There is no worker registry, dispatcher, or automatic task selection.
 
-A task is claimable when:
+A task is claimable when its category is ready/active, its description and acceptance criteria are present, its own or inherited authorization is current, its parent (if any) is ready/active, all prerequisites are done, and no claim is recorded—even an expired one.
 
-1. Its current category is ready or active.
-2. Required scope fields and any parent scope binding are current.
-3. Its effective authorization is current; its parent, if present, is ready or active.
-4. All prerequisites are done.
-5. No claim is recorded, including an expired unresolved claim.
+`item list --eligible` is a candidate snapshot, not permission to execute. `claim acquire` rechecks eligibility and the expected item revision transactionally; child claims also require the expected parent scope revision. Only one competing owner can succeed. No separate binding command or binding store is needed.
 
-`item list --eligible` reports candidates using these rules, but is only a snapshot. `claim acquire <id>` rechecks them transactionally and checks the supplied expected item revision. Concurrent attempts can yield only one successful owner.
+A claim records task/parent scope revisions and returns worker label, lease ID, monotonically increasing generation, private token, and expiry. Default duration is 300 seconds; explicit durations are 30–3600 seconds. Renewal uses the original duration measured from renewal time.
 
-A claim returns a worker label, lease ID, monotonically increasing claim generation, opaque ownership token, and expiry. The default lease duration is 300 seconds; callers may request 30–3600 seconds. The same duration is used for renewal, measured from the renewal time. A worker should renew before one third of its lease duration has elapsed.
+- Tokens are cryptographically random (at least 256 bits), stored only in private claim/acquisition receipts, and returned only on acquisition or that caller's receipt replay. General reads, history, and diagnostics omit them.
+- Renewal, claimed progress, release, and completion check lease ID, generation, token, and unexpired ownership transactionally. Renewal and active/done transitions recheck authorization. A revoked but unexpired owner can release.
+- Heartbeats change lease data, not item revision. Progress and transitions still require expected item revisions. Scope stays frozen while a claim exists; other clients may append notes or change priority with revision checks.
+- Release preserves stage. A new acquisition gets a new generation/token and rechecks eligibility. Done, blocked, and canceled transitions release valid ownership atomically.
 
-- Generate a cryptographically random token of at least 256 bits. Keep it only in private claim/acquisition-receipt records. Return it only on acquisition or replay of that caller's acquisition receipt; omit it from general reads, history, and diagnostics.
-- Renewal, claimed progress, release, and completion validate lease ID, generation, token, and unexpired ownership inside the transaction. Renewal additionally rechecks authorization. A revoked owner may still release an otherwise valid claim.
-- Renewal changes lease data, not item content revision. Progress edits and transitions use expected item revisions normally.
-- Content defining scope, dependencies, and workflow version cannot be changed while a claim is recorded. The owner can append progress/results and make legal transitions. Other clients can append notes and change priority with revision checks.
-- A voluntary release preserves the current stage, allowing a handoff from one worker to another. The next claim gets a new token/generation and rechecks all eligibility conditions.
-- Done, blocked, or canceled transitions close a valid claim atomically with the transition.
+### Heartbeat responsibility
+
+The owner—not the model's next turn—must maintain the lease. Automated callers need renewal independent of model turns, normally before one third of the duration elapses. This feature supplies the renewal API, not a timer, heartbeat process, or runner integration.
+
+Humans and Pi sessions without such a caller use the same lease protocol for bounded claimed work: choose an adequate duration, renew explicitly, and release before an extended wait once work has stopped. Ordinary capture/refinement needs no claim. Do not leave work running after release, or start an unattended operation likely to outlast the lease without a renewal mechanism. There is no nonexpiring manual-claim bypass.
+
+On loss of ownership or inability to confirm renewal before expiry, the caller must stop further work and reconcile ownership before proceeding. Backlog checks fence database mutations, not filesystem effects or running commands; stopping those is the caller's responsibility. Pi startup, reload, and session restoration never renew claims automatically.
 
 ### Expiry and recovery
 
-Expiry does not requeue a task or change its stage. Reads report the expired claim and `recovery_required`; a new worker cannot claim it. Expired tokens cannot renew, release, transition, or complete work.
+Expiry changes neither stage nor ownership record. Reads report `recovery_required`; expired tokens cannot renew, release, transition, or complete work, and another worker cannot claim it.
 
-An explicit recovery operation supplies the observed lease ID/generation and a reason. It rejects an unexpired lease, closes an expired claim transactionally, and preserves the stage. A subsequent claim is a separate operation with normal policy checks. No background process performs recovery. Historical ownership and recovery decisions remain visible.
-
-A token fences backlog mutations, not filesystem or external side effects. Recovery cannot prove that an old process stopped. Worker termination, workspace isolation, and deciding whether retry is safe remain outside this tool.
+Explicit recovery supplies the observed lease ID/generation and a reason. It rejects live leases, closes an expired claim transactionally, preserves stage, and records history. Reclaiming is a separate normal acquisition. Recovery cannot prove an old worker stopped: confirm that and reconcile its effects before retrying. No automatic recovery or requeue runs in v1.
 
 ## 9. Transactions, history, and failure behavior
 
@@ -259,7 +249,7 @@ Each successful logical mutation and its audit event commit in one transaction. 
 
 Item revisions are monotonically increasing. Mutations to an item or its relationships require the expected revision; stale writes return a conflict with the actual revision and leave state unchanged. Ownership/authorization operations recheck the referenced item/scope/policy versions and their own records. Lease heartbeats do not invalidate an item editor's revision.
 
-Events contain a project-local sequence, timestamp, operation, affected IDs, actor/channel, relevant revisions, reason, and changed fields. Authorization, policy, lifecycle publication/migration, claims, renewal, release, and recovery are auditable. Registry metadata changes have corresponding events in the registry database. Ownership tokens are not included in events.
+Events contain a project-local sequence, timestamp, operation, affected IDs, actor/channel, relevant revisions, reason, and changed fields. Authorization, policy, lifecycle publication, claims, renewal, release, and recovery are auditable. Registry metadata changes have corresponding events in the registry database. Ownership tokens are not included in events.
 
 Mutating operations accept an optional caller-supplied mutation ID. Within the relevant database, persist a canonical payload digest and receipt in the same transaction as the operation. A matching retry returns the original receipt without repeating the change; reusing an ID with a different payload returns an error. Scope receipt keys by project (or registry) and caller identity/channel. Replayed lease receipts do not extend ownership: later token-bearing operations still enforce current expiry and generation. Persist receipts containing acquisition tokens privately with the same protections as the database; do not expose them through general history/list operations.
 
@@ -267,13 +257,25 @@ Errors have stable codes, a human-readable message, and structured details, incl
 
 - `PROJECT_NOT_FOUND`, `PROJECT_UNREGISTERED`, `DIRECTORY_UNAVAILABLE`.
 - `VALIDATION_ERROR`, `INVALID_TRANSITION`, `DEPENDENCY_CYCLE`.
-- `REVISION_CONFLICT`, `AUTHORIZATION_REQUIRED`, `SCOPE_BINDING_STALE`.
+- `REVISION_CONFLICT` (including a stale parent scope revision), `AUTHORIZATION_REQUIRED`.
 - `CLAIM_CONFLICT`, `LEASE_EXPIRED`, `RECOVERY_REQUIRED`.
 - `MUTATION_ID_CONFLICT`, `STORE_BUSY`, `STORE_CORRUPT`, `SCHEMA_UNSUPPORTED`.
 
 A busy timeout produces a retryable error; there is no unbounded retry loop. Failed operations do not leave partial items, relationships, events, or receipts. Unknown/newer schema versions and corruption fail closed: never silently replace, reset, downgrade, or recreate a registered backlog. Registry and backlog schema versions start at 1; automatic schema upgrades are not part of v1.
 
 The library creates private data directories/files (0700/0600 where supported), checks data-path containment, and does not derive filesystem names from item titles or project names. Existing data paths must not silently follow symlinks outside the configured store. SQLite sidecars and mutation receipts receive the same private storage protections. No project-local configuration is loaded or executed.
+
+### Offline backup and restore
+
+V1 documents an operator procedure, not a new backup service or command:
+
+1. Stop every client/worker using the data root, close database connections, and prevent restarts for the entire copy. No worker may continue external side effects during restoration.
+2. Copy the **entire data root** into a fresh private backup directory outside it: registry, every project database, and any remaining WAL/SHM sidecars. Never copy just a live `.sqlite` file or delete its WAL to make a backup. Only a completed copy is usable.
+3. Validate the copy with SQLite integrity/foreign-key checks on each database and verify that every registry project has its database. Include these checks in the user guide; do not run normal backlog mutations against a backup.
+4. To restore, keep clients stopped, preserve the current root separately, and restore into an empty root with private permissions. Never merge database files and sidecars from different snapshots. Validate before reopening.
+5. Invalidate client caches and pending retry queues; do not replay pre-restore operations under old or fresh mutation IDs without reconciling retained state and external effects. Keep workers stopped until restored leases have expired, explicitly recover recorded claims, and acquire fresh claims only after reconciliation.
+
+Restore rolls back the registry, items, ID counters, revisions, and mutation receipts together. Post-backup changes are lost; external references to post-backup work must be reconciled before reuse. It does not roll back project files or external actions, and does not preserve monotonic IDs or exactly-once behavior across that rollback. This procedure requires cooperative downtime, not a new global locking subsystem.
 
 ## 10. Public interfaces
 
@@ -293,9 +295,9 @@ The command families are shared between `/backlog ...` and `pi-backlog ...`:
 | item | add, list, show, update, transition |
 | dependency | add, remove |
 | note / artifact / result | append or attach, list |
-| authorization | approve (operator), authorize (automation), revoke, bind-scope |
+| authorization | approve (operator), authorize (automation), revoke (operator) |
 | claim | acquire, renew, release, recover |
-| workflow | show, publish, migrate |
+| workflow | show, publish |
 | history | list for project or item |
 
 `/backlog` alone shows the selected project and a compact backlog summary. No custom board or full-screen UI is required. Lists filter by kind, category/stage, parent, priority, eligibility, and simple text search. Default ordering is priority, creation time, then item ID; default page size is 50, maximum 200, with an explicit continuation cursor. Empty results do not imply successful completion of anything.
@@ -310,7 +312,9 @@ pi-backlog item show B-12 --json
 pi-backlog claim acquire B-12 --worker verifier-1 --expected-revision 7 --json
 ```
 
-Long descriptions, workflow definitions, transition/results payloads, and scope bindings can be supplied as JSON using `--input <file>` or `--input -` for stdin. Input is validated as data before beginning a transaction. Mutation IDs and expected revisions are explicit inputs. No input payload is evaluated as shell or JavaScript.
+A child claim additionally supplies `--expected-parent-scope-revision <revision>` after inspecting its request. A stale value fails rather than silently accepting newer scope.
+
+Long descriptions, workflow definitions, and transition/results payloads can be supplied as JSON using `--input <file>` or `--input -` for stdin. Validate input before beginning a transaction. Mutation IDs and expected revisions are explicit inputs. No input payload is evaluated as shell or JavaScript.
 
 `--json` emits exactly one versioned envelope on stdout: `{apiVersion: 1, ok: true, data: ...}` or `{apiVersion: 1, ok: false, error: {code, message, details}}`. Diagnostics and Node warnings go to stderr. Exit codes are 0 for success, 2 for usage/validation, 3 for domain conflicts or unmet preconditions, and 1 for storage/runtime failures. JSON mode never prompts. Human-only operations are explicit commands, not ordinary item field updates.
 
@@ -318,7 +322,7 @@ For record text, cap title at 240 characters, each description/note/result text 
 
 ### Pi tools and lifecycle
 
-Expose focused tools for reading, editing, authorization/binding under automation policy, and claim operations. Their action schemas are strict and reuse the service validation rules. Do not expose operator-only project/policy/workflow controls or human approval as model-callable actions. Tool descriptions and skill guidance explicitly distinguish backlog maintenance from permission to execute work.
+Expose focused tools for reading, editing, autonomous authorization, and claims. Strict action schemas reuse service validation. No operator-only project/policy/workflow controls or human approval are model-callable. Tool guidance distinguishes backlog maintenance from execution permission and makes caller-owned renewal explicit.
 
 Resolve project context from the operation's current `ctx.cwd`, unless an explicit project ID is provided. Never retain another session's project selection or replay session tool results into the database. Tool results may contain IDs, revisions, and display snapshots, but are not durable backlog state.
 
@@ -333,13 +337,13 @@ Required coverage:
 1. **Registration:** existing/nonexistent directories; symlink canonicalization; duplicate and simultaneous registration; nested directory precedence; component-boundary matching; explicit project selection; rename/relocation preserves identity and data; missing project directories do not erase backlogs.
 2. **Isolation:** identical item IDs in different projects remain distinct; cross-project parent/dependency references fail; registry and project database selection never fall back silently.
 3. **Records:** draft capture, readiness validation, immutable kinds, parent rules, dependency cycle rejection, canceled prerequisites, evidence requirements, terminal requests, and no implicit parent completion.
-4. **Workflow:** default graphs, valid custom review stages, invalid categories/edges, rework cycles, no bypass to done, pinned historical versions, explicit category-preserving migrations, all-or-nothing migration failures, and rejection while claims exist.
-5. **Policy:** project defaults, request/standalone overrides, child inheritance, human approval versus automated authorization, policy/scope invalidation, scope bindings, revocation during a claim, and the absence of operator actions from model tools.
+4. **Workflow:** default/custom graphs, category/edge validation, rework cycles, no bypass to done, and pinned definitions. Publishing affects only new items; old transitions and approvals remain valid. Generic updates cannot change an item's workflow version; migration is not exposed.
+5. **Policy:** defaults/overrides, inheritance, operator approval versus autonomous authorization, scope/policy invalidation, and revocation during a claim. Child acquisition rejects missing/stale parent scope revisions and records current scope without a binding record or prose. Operator controls are absent from model tools.
 6. **Concurrency:** genuinely separate OS processes competing to claim one task, edit the same revision, register the same directory, and replay the same mutation ID. In-memory queues alone are not sufficient evidence.
-7. **Claims:** acquisition, renewal, active-stage handoff, expiry, explicit recovery, generations, rejected stale tokens, authorization rechecks, and atomic completion/release. Use an injected clock rather than sleeps for deterministic lease logic.
-8. **Durability:** kill a process before a write transaction commits and verify rollback; retry after a committed mutation loses its response; reopen from a fresh process; reject corruption and unsupported schemas without resetting data.
+7. **Claims:** acquisition, caller-driven renewal, handoff, expiry after an extended wait, explicit recovery, generations, rejected stale tokens, authorization rechecks, and atomic completion/release. Test default/explicit durations with an injected clock, not sleeps; no adapter heartbeat is assumed.
+8. **Durability:** rollback on process death before commit; receipt replay after a lost response; fresh-process reopen; corruption/schema rejection without reset. Exercise the offline backup/restore procedure, including committed WAL left by a crashed client, registry/project consistency, and restored-claim recovery.
 9. **Interfaces:** equivalent CLI/Pi operations, stable JSON envelopes and exit codes, stdin/file inputs, bounded output, no interactive prompts in JSON mode, and clean error propagation.
-10. **Pi lifecycle:** switching projects/sessions, reload cleanup, and session branching neither duplicates nor restores old mutations. Startup never claims or executes work.
+10. **Pi lifecycle:** switching projects/sessions, reload cleanup, and session branching neither duplicate nor restore mutations. Startup/reload never claim, renew, recover, or execute work.
 
 A manual Pi smoke test registers a temporary directory, adds a request and child task, reads/updates them with the standalone CLI, and confirms the same state in a fresh Pi session. A custom testing/review stage must work without changing the core implementation or launching a worker.
 
@@ -355,5 +359,6 @@ References consulted:
 - Installed Pi documentation: `README.md`, `docs/extensions.md`, `docs/packages.md`, and `docs/skills.md`.
 - Installed Pi example `examples/extensions/todo.ts`: useful for command/tool shape, but its session-reconstructed persistence is deliberately not used here.
 - Installed Pi 0.86.0 package metadata: Node minimum `>=22.19.0`.
+- Beads comparison: [embedded/server architecture](https://github.com/gastownhall/beads/blob/main/docs/architecture/dolt.md) and [v1.3.0 claim leasing](https://github.com/gastownhall/beads/blob/v1.3.0/internal/storage/issueops/lease.go). Read-only evaluation, not a deployment benchmark.
 
 The next gate is **user review of this written specification**. Only after that approval should the writing-plans skill produce an implementation plan. No implementation is part of this design task.

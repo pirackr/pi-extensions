@@ -22,7 +22,12 @@ export interface Page<T> { items: T[]; nextCursor?: string }
 export interface ItemFields { title?:string; description?:string; criteria?:string[]; priority?:Priority }
 export interface ItemChange extends ItemFields { itemId:string; expectedRevision:number; mutationId?:string; parent?:ItemReference|null }
 export interface DependencyChange { itemId:string; prerequisite:ItemReference; expectedRevision:number; mutationId?:string }
+export interface OwnershipProof { leaseId:string; generation:number; token:string }
+export interface RevisionInput { itemId:string; expectedRevision:number; mutationId?:string }
 export interface OperationMap {
+  'note.append': {input:RevisionInput & {text:string};output:Item};
+  'artifact.attach': {input:RevisionInput & {artifacts:ArtifactReference[]};output:Item};
+  'result.append': {input:RevisionInput & {result:CompletionRecord;proof?:OwnershipProof};output:Item};
   'dependency.add': {input:DependencyChange;output:Item};
   'dependency.remove': {input:DependencyChange;output:Item};
   'item.add': {input:ItemFields & {kind:Kind;title:string;mutationId?:string};output:Item};

@@ -5,6 +5,14 @@ export function strictObject(value: unknown, fields: readonly string[]): Record<
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !fields.includes(key))) fail('object fields');
   return value as Record<string, unknown>;
 }
+export function validateProof(value:unknown):void {
+ const p=strictObject(value,['leaseId','generation','token']);validate('label',p.leaseId);validate('revision',p.generation);validate('reference',p.token);
+}
+export function validateCompletion(value:unknown):void {
+ const r=strictObject(value,['summary','verification','evidence']);
+ for(const key of ['summary','verification']){validate('result',r[key]);if(!(r[key] as string).trim())fail(key);}
+ validate('artifacts',r.evidence);if(!(r.evidence as unknown[]).length)fail('evidence');
+}
 export function validate(field: Field, value: unknown): unknown {
   if (field === 'kind' || field === 'priority') {
     const allowed = field === 'kind' ? ['request', 'task'] : ['urgent', 'high', 'normal', 'low'];

@@ -7,7 +7,8 @@ import { openStore, type StoreConnection } from './store.ts';
 import { projectProjection, registerProject, selectProject, requireOperator, changeProject } from './registry.ts';
 import { changeDependency, reference } from './relationships.ts';
 import { addItem, updateItem, getItem, projection } from './items.ts';
-import { strictObject, validate } from './validation.ts';
+import { appendAnnotation, type AnnotationOperation } from './annotations.ts';
+import { strictObject, validate, validateProof, validateCompletion } from './validation.ts';
 import type { BacklogService, OperationContext, OperationMap, ServiceOptions } from './types.ts';
 export interface Runtime {
  dataRoot:string;now:()=>number;uuid:()=>string;randomToken:()=>string;
@@ -40,6 +41,15 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    validate('revision',input.expectedRegistryRevision);validate(operation==='project.rename'?'label':'reference',input[operation==='project.rename'?'name':'directory']);
    if(input.mutationId!==undefined)validate('label',input.mutationId);
    return changeProject(rt,ctx,operation,input as unknown as {name?:string;directory?:string;expectedRegistryRevision:number;mutationId?:string});
+  }
+  if(operation==='note.append'||operation==='artifact.attach'||operation==='result.append'){
+   const extra=operation==='note.append'?['text']:operation==='artifact.attach'?['artifacts']:['result','proof'];
+   const input=strictObject(raw,['itemId','expectedRevision','mutationId',...extra]);validate('itemId',input.itemId);validate('revision',input.expectedRevision);if(input.mutationId!==undefined)validate('label',input.mutationId);
+   if(operation==='note.append')validate('note',input.text);else if(operation==='artifact.attach')validate('artifacts',input.artifacts);else validateCompletion(input.result);
+   if(input.proof!==undefined)validateProof(input.proof);
+   const project=selectProject(rt.registry(),ctx,rt.dataRoot);
+   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   return appendAnnotation(rt,db,project,ctx,operation,input as unknown as OperationMap[AnnotationOperation]['input']);
   }
   if(operation==='dependency.add'||operation==='dependency.remove'){
    const input=strictObject(raw,['itemId','prerequisite','expectedRevision','mutationId']);validate('itemId',input.itemId);validate('revision',input.expectedRevision);if(input.mutationId!==undefined)validate('label',input.mutationId);

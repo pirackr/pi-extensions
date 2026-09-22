@@ -7,6 +7,7 @@ import { openStore, type StoreConnection } from './store.ts';
 import { projectProjection, registerProject, selectProject, requireOperator, changeProject } from './registry.ts';
 import { changeDependency, reference } from './relationships.ts';
 import { addItem, updateItem, getItem, projection } from './items.ts';
+import { publishWorkflow, showWorkflow, validateWorkflow } from './workflows.ts';
 import { transitionItem } from './transitions.ts';
 import { acquireClaim, renewClaim, releaseClaim, recoverClaim } from './claims.ts';
 import { changeAuthorization } from './authorization.ts';
@@ -45,6 +46,13 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    validate('revision',input.expectedRegistryRevision);validate(operation==='project.rename'?'label':'reference',input[operation==='project.rename'?'name':'directory']);
    if(input.mutationId!==undefined)validate('label',input.mutationId);
    return changeProject(rt,ctx,operation,input as unknown as {name?:string;directory?:string;expectedRegistryRevision:number;mutationId?:string});
+  }
+  if(operation==='workflow.show'||operation==='workflow.publish'){
+   if(operation==='workflow.publish')requireOperator(ctx);
+   const input=strictObject(raw,operation==='workflow.show'?['kind','version']:['kind','expectedWorkflowVersion','definition','mutationId']);validate('kind',input.kind);if(input.version!==undefined)validate('revision',input.version);if(operation==='workflow.publish'){validate('revision',input.expectedWorkflowVersion);validateWorkflow(input.definition);}if(input.mutationId!==undefined)validate('label',input.mutationId);
+   const project=selectProject(rt.registry(),ctx,rt.dataRoot);
+   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   return operation==='workflow.show'?showWorkflow(db,project,input as unknown as OperationMap['workflow.show']['input']):publishWorkflow(rt,db,project,ctx,input as unknown as OperationMap['workflow.publish']['input']);
   }
   if(operation==='item.transition'){
    const input=strictObject(raw,['itemId','expectedRevision','mutationId','stage','reason','proof','completion']);validate('itemId',input.itemId);validate('revision',input.expectedRevision);validate('label',input.stage);if(input.mutationId!==undefined)validate('label',input.mutationId);if(input.reason!==undefined)validate('note',input.reason);if(input.proof!==undefined)validateProof(input.proof);if(input.completion!==undefined)validateCompletion(input.completion);

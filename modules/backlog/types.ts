@@ -1,3 +1,5 @@
+import type { WorkflowDefinition } from './workflows.ts';
+export interface WorkflowRecord { projectId:string;dataRoot:string;kind:Kind;version:number;definition:WorkflowDefinition }
 export type Kind = 'request' | 'task';
 export type Priority = 'urgent' | 'high' | 'normal' | 'low';
 export type Category = 'draft' | 'ready' | 'active' | 'blocked' | 'done' | 'canceled';
@@ -29,6 +31,8 @@ export interface EffectivePolicy { policy:Policy; source:string; version:string;
 export interface AuthorizationInput extends RevisionInput { rationale:string }
 export interface ClaimReceipt extends OwnershipProof { worker:string;expiresAt:string;durationSeconds:number;revision:number;taskScopeRevision:number;parentScopeRevision?:number }
 export interface OperationMap {
+  'workflow.show': {input:{kind:Kind;version?:number};output:WorkflowRecord};
+  'workflow.publish': {input:{kind:Kind;expectedWorkflowVersion:number;definition:WorkflowDefinition;mutationId?:string};output:WorkflowRecord};
   'claim.recover': {input:RevisionInput & {leaseId:string;generation:number;reason:string};output:Item};
   'claim.renew': {input:{itemId:string;proof:OwnershipProof;mutationId?:string};output:{leaseId:string;generation:number;expiresAt:string;durationSeconds:number}};
   'claim.release': {input:RevisionInput & {proof:OwnershipProof};output:Item};

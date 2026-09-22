@@ -1,6 +1,25 @@
 import { BacklogError } from './errors.ts';
 import { strictObject, validate } from './validation.ts';
-import type { Category, Kind } from './types.ts';
+import type { Category, Kind, OperationContext, OperationMap, Project, WorkflowRecord } from './types.ts';
+import type { StoreConnection } from './store.ts';
+import type { Runtime } from './service.ts';
+import { runMutation } from './mutations.ts';
+import { metadata } from './policy.ts';
+import { requireOperator } from './registry.ts';
+export function showWorkflow(db:StoreConnection,project:Project,input:OperationMap['workflow.show']['input']):WorkflowRecord {
+ const version=input.version??Number(metadata(db,input.kind+'Workflow'));
+ const row=db.prepare('SELECT definition FROM workflows WHERE kind=? AND version=?').get(input.kind,version);
+ if(!row)throw new BacklogError('VALIDATION_ERROR','Unknown workflow version');
+ return {projectId:project.id,dataRoot:project.dataRoot,kind:input.kind,version,definition:JSON.parse(String(row.definition))};
+}
+export function publishWorkflow(rt:Runtime,db:StoreConnection,project:Project,ctx:OperationContext,input:OperationMap['workflow.publish']['input']):WorkflowRecord {
+ requireOperator(ctx);const definition=validateWorkflow(input.definition);
+ return runMutation(db,ctx,'workflow.publish',{...input,definition},()=>{
+  const current=Number(metadata(db,input.kind+'Workflow'));if(current!==input.expectedWorkflowVersion)throw new BacklogError('REVISION_CONFLICT','Stale workflow version',{actualVersion:current});
+  db.prepare('INSERT INTO workflows VALUES (?,?,?)').run(input.kind,current+1,JSON.stringify(definition));db.prepare('UPDATE metadata SET value=? WHERE key=?').run(String(current+1),input.kind+'Workflow');
+  return {receipt:showWorkflow(db,project,{kind:input.kind}),event:{ids:[],kind:input.kind,workflowVersion:current+1,changedFields:['workflow']}};
+ },rt.now);
+}
 export interface Stage { id: string; name: string; category: Category; next: string[] }
 export interface WorkflowDefinition { initial: string; stages: Stage[] }
 export function defaultWorkflow(kind: Kind): WorkflowDefinition {

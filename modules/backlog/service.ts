@@ -14,7 +14,7 @@ import { acquireClaim, renewClaim, releaseClaim, recoverClaim } from './claims.t
 import { changeAuthorization } from './authorization.ts';
 import { changePolicy } from './policy.ts';
 import { appendAnnotation, type AnnotationOperation } from './annotations.ts';
-import { strictObject, validate, validateProof, validateCompletion } from './validation.ts';
+import { strictObject, validate, validateProof, validateCompletion, validateOperationInput } from './validation.ts';
 import type { BacklogService, OperationContext, OperationMap, ServiceOptions } from './types.ts';
 export interface Runtime {
  dataRoot:string;now:()=>number;uuid:()=>string;randomToken:()=>string;
@@ -36,6 +36,7 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
  };
  function dispatch(ctx:OperationContext,operation:keyof OperationMap,raw:unknown):unknown {
   if(closed)throw new BacklogError('STORE_ERROR','Service is closed');
+  validateOperationInput(operation,raw);
   if(ctx.projectId!==undefined)validate('projectId',ctx.projectId);
   if(operation==='item.read-text'){
    const input=strictObject(raw,['itemId','field','recordId','revision','cursor']);validate('itemId',input.itemId);validate('label',input.field);if(input.recordId!==undefined)validate('label',input.recordId);if(input.revision!==undefined)validate('revision',input.revision);

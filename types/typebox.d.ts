@@ -7,6 +7,8 @@ declare module "typebox" {
 		Boolean(options?: { description?: string }): TSchema;
 		/** Creates a number schema. */
 		Number(options?: { description?: string }): TSchema;
+		Integer(options?: { minimum?: number; maximum?: number; description?: string }): TSchema;
+		Null(): TSchema;
 		/** Creates a string schema. */
 		String(options?: { description?: string; minLength?: number; maxLength?: number }): TSchema;
 		/** Creates an object schema. */
@@ -19,7 +21,7 @@ declare module "typebox" {
 				additionalProperties?: boolean;
 				enum?: unknown[];
 			},
-		): TSchema;
+		): TSchema & { properties: T; required?: string[] };
 		/** Creates an array schema. */
 		Array<T>(
 			item: T,
@@ -46,6 +48,7 @@ declare module "typebox" {
 
 declare module "typebox/value" {
 	import type { TSchema } from "typebox";
+	export function Check(schema: TSchema, value: unknown): boolean;
 	/** Validates a value against a TypeBox schema, returning validation errors. */
 	export function Errors(schema: TSchema, value: unknown): Array<{
 		keyword: string;

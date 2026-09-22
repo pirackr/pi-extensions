@@ -8,7 +8,7 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 export interface MutationResult<T> { receipt: T; event: Json }
-export function runMutation<T>(db: StoreConnection, context: OperationContext, operation: string, input: {mutationId?:string}, apply: ()=>MutationResult<T>, now: ()=>number = Date.now): T {
+export function runMutation<T, I extends {mutationId?:string}>(db: StoreConnection, context: OperationContext, operation: string, input: I, apply: ()=>MutationResult<T>, now: ()=>number = Date.now): T {
   const digest=createHash('sha256').update(canonical({operation,input,role:context.actor.role})).digest('hex');
   return withWriteTransaction(db,()=>{
     if(input.mutationId!==undefined) {

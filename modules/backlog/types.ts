@@ -19,7 +19,11 @@ export interface ArtifactReference { label: string; reference: string }
 export interface CompletionRecord { summary: string; verification: string; evidence: ArtifactReference[] }
 export interface Page<T> { items: T[]; nextCursor?: string }
 // Implemented operations extend this map as their handlers are introduced.
-export interface OperationMap {}
+export interface OperationMap {
+  'project.register': {input:{directory:string;name:string;mutationId?:string};output:Project};
+  'project.list': {input:Record<string,never>;output:Page<Project>};
+  'project.show': {input:Record<string,never>;output:Project};
+}
 export interface BacklogService {
   execute<K extends keyof OperationMap>(context: OperationContext, operation: K, input: OperationMap[K] extends {input: infer I} ? I : never): OperationMap[K] extends {output: infer O} ? O : never;
   close(): void;

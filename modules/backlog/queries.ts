@@ -5,7 +5,7 @@ import { evaluateEligibility } from './eligibility.ts';
 import { category, getItem, projection, type StoredItem } from './items.ts';
 import { projectProjection } from './registry.ts';
 import type { StoreConnection } from './store.ts';
-import type { ItemListInput, ItemShow, ItemShowInput, Page, PageInput, Project, RecordListInput } from './types.ts';
+import type { ItemListInput, ItemShow, ItemShowInput, Page, PageInput, Project, RecordListInput, TextReadInput, TextChunk } from './types.ts';
 export function pageLimit(input:PageInput):number {
  const limit=input.limit??50;if(!Number.isInteger(limit)||limit<1||limit>200)throw new BacklogError('VALIDATION_ERROR','Page size must be 1–200');return limit;
 }
@@ -71,6 +71,26 @@ export function listRecords(db:StoreConnection,project:Project,operation:string,
   else result.preview=[...(typeof body==='string'?body:body.summary)].slice(0,1024).join('');return result;
  });
  return {...page(scope,input,mapped,r=>[Number(r.id)]),projectId:project.id,dataRoot:project.dataRoot};
+}
+export function readText(db:StoreConnection,project:Project,input:TextReadInput):TextChunk {
+ const item=getItem(db,input.itemId),scope=project.id+':text',key=cursorKey(scope,input);
+ if(key&&(key.length!==2||typeof key[0]!=='number'||typeof key[1]!=='number'))throw new BacklogError('VALIDATION_ERROR','Invalid text cursor');
+ const revision=key?.[1]??input.revision??item.revision;
+ if(revision!==item.revision)throw new BacklogError('REVISION_CONFLICT','Text revision changed',{actualRevision:item.revision});
+ let text:string;
+ if(input.field==='description'||input.field==='title')text=item[input.field];
+ else if(input.field==='criterion'){
+  if(!input.recordId||!/^(0|[1-9][0-9]*)$/.test(input.recordId))throw new BacklogError('VALIDATION_ERROR','Criterion index required');
+  text=JSON.parse(item.criteria)[Number(input.recordId)];
+ }else if(['note','artifact','result'].includes(input.field)){
+  if(!input.recordId||!/^[1-9][0-9]*$/.test(input.recordId))throw new BacklogError('VALIDATION_ERROR','Annotation record ID required');
+  const row=db.prepare('SELECT body FROM annotations WHERE item_id=? AND id=? AND kind=?').get(item.id,input.recordId,input.field);
+  if(!row)throw new BacklogError('VALIDATION_ERROR','Unknown annotation');text=input.field==='note'?JSON.parse(String(row.body)):String(row.body);
+ }else throw new BacklogError('VALIDATION_ERROR','Unknown text field');
+ if(typeof text!=='string')throw new BacklogError('VALIDATION_ERROR','Unknown text record');
+ const start=Number(key?.[0]??0);if(start<0||start>text.length||(start>0&&/[\uDC00-\uDFFF]/.test(text[start]??'')&&/[\uD800-\uDBFF]/.test(text[start-1])))throw new BacklogError('VALIDATION_ERROR','Invalid text offset');
+ let end=start,bytes=0;for(const char of text.slice(start)){const size=Buffer.byteLength(char);if(bytes+size>8192)break;bytes+=size;end+=char.length;}
+ return {projectId:project.id,dataRoot:project.dataRoot,itemId:item.id,field:input.field,...(input.recordId?{recordId:input.recordId}:{}),revision:item.revision,text:text.slice(start,end),...(end<text.length?{nextCursor:cursorFor(scope,input,[end,item.revision])}:{})};
 }
 export function summary(db:StoreConnection,project:Project) {
  const counts:Record<string,number>={};for(const row of db.prepare('SELECT id FROM items').iterate()){const c=category(db,getItem(db,String(row.id)));counts[c]=(counts[c]??0)+1;}

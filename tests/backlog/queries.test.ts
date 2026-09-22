@@ -19,6 +19,18 @@ it('filters eligibility before limiting and returns separate history/annotation 
  const history=f.service.execute(f.context,'history.list',{itemId:'B-3'});expect(JSON.stringify(history)).not.toContain(receipt.token);expect(history.items.length).toBe(4);
  expect(f.service.execute(f.context,'backlog.summary',{}).project.id).toBe(f.projectRecord.id);
 });
+it('reconstructs multibyte text with bounded revision-bound chunks and refuses spliced revisions',()=>{
+ const f=setup();const description='😀'.repeat(16384);f.service.execute(f.context,'item.add',{kind:'task',title:'Large',description});
+ let cursor:string|undefined;let text='';do{const chunk=f.service.execute(f.context,'item.read-text',{itemId:'B-1',field:'description',cursor});expect(Buffer.byteLength(chunk.text)).toBeLessThanOrEqual(8192);text+=chunk.text;cursor=chunk.nextCursor;}while(cursor);expect(text).toBe(description);
+ const first=f.service.execute(f.context,'item.read-text',{itemId:'B-1',field:'description'});f.service.execute(f.context,'item.update',{itemId:'B-1',expectedRevision:1,description:'Changed'});
+ expect(()=>f.service.execute(f.context,'item.read-text',{itemId:'B-1',field:'description',cursor:first.nextCursor})).toThrowError(expect.objectContaining({code:'REVISION_CONFLICT'}));
+ expect(()=>f.service.execute(f.context,'item.read-text',{itemId:'B-1',field:'title',cursor:first.nextCursor})).toThrow();
+});
+it('keeps annotation previews bounded and supports their complete text',()=>{
+ const f=setup();f.service.execute(f.context,'item.add',{kind:'task',title:'Task'});const text='漢'.repeat(21000);f.service.execute(f.context,'note.append',{itemId:'B-1',expectedRevision:1,text});
+ const notes=f.service.execute(f.context,'note.list',{itemId:'B-1'});expect(Buffer.byteLength(JSON.stringify(notes))).toBeLessThan(8192);
+ const locator=notes.items[0].locator as {recordId:string};let cursor:string|undefined;let recovered='';do{const chunk=f.service.execute(f.context,'item.read-text',{itemId:'B-1',field:'note',recordId:locator.recordId,cursor});recovered+=chunk.text;cursor=chunk.nextCursor;}while(cursor);expect(recovered).toBe(text);
+});
 it('pages criteria and dependency sections separately',()=>{
  const f=setup();f.service.execute(f.context,'item.add',{kind:'task',title:'Task',criteria:['First','Second','Third']});
  const first=f.service.execute(f.context,'item.show',{itemId:'B-1',section:'criteria',limit:2});expect(first.section!.items).toHaveLength(2);

@@ -7,7 +7,7 @@ import { openStore, type StoreConnection } from './store.ts';
 import { projectProjection, registerProject, selectProject, requireOperator, changeProject } from './registry.ts';
 import { changeDependency, reference } from './relationships.ts';
 import { addItem, updateItem, getItem, projection } from './items.ts';
-import { listProjects, listItems, showItem, listRecords, summary, pageLimit } from './queries.ts';
+import { listProjects, listItems, showItem, listRecords, summary, pageLimit, readText } from './queries.ts';
 import { publishWorkflow, showWorkflow, validateWorkflow } from './workflows.ts';
 import { transitionItem } from './transitions.ts';
 import { acquireClaim, renewClaim, releaseClaim, recoverClaim } from './claims.ts';
@@ -37,6 +37,12 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
  function dispatch(ctx:OperationContext,operation:keyof OperationMap,raw:unknown):unknown {
   if(closed)throw new BacklogError('STORE_ERROR','Service is closed');
   if(ctx.projectId!==undefined)validate('projectId',ctx.projectId);
+  if(operation==='item.read-text'){
+   const input=strictObject(raw,['itemId','field','recordId','revision','cursor']);validate('itemId',input.itemId);validate('label',input.field);if(input.recordId!==undefined)validate('label',input.recordId);if(input.revision!==undefined)validate('revision',input.revision);
+   const project=selectProject(rt.registry(),ctx,rt.dataRoot);
+   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   return readText(db,project,input as unknown as OperationMap['item.read-text']['input']);
+  }
   if(operation==='project.list'){
    const input=strictObject(raw,['limit','cursor']) as OperationMap['project.list']['input'];pageLimit(input);
    if(!existsSync(join(rt.dataRoot,'registry.sqlite')))return {items:[],dataRoot:rt.dataRoot};return listProjects(rt.registry(),rt.dataRoot,input);

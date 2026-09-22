@@ -35,7 +35,10 @@ export interface Eligibility { eligible:boolean; category:Category; policy:Effec
 export interface EffectivePolicy { policy:Policy; source:string; version:string; governingId:string }
 export interface AuthorizationInput extends RevisionInput { rationale:string }
 export interface ClaimReceipt extends OwnershipProof { worker:string;expiresAt:string;durationSeconds:number;revision:number;taskScopeRevision:number;parentScopeRevision?:number }
+export interface TextReadInput {itemId:string;field:string;recordId?:string;revision?:number;cursor?:string}
+export interface TextChunk {projectId:string;dataRoot:string;itemId:string;field:string;recordId?:string;revision:number;text:string;nextCursor?:string}
 export interface OperationMap {
+  'item.read-text': {input:TextReadInput;output:TextChunk};
   'workflow.show': {input:PageInput & {kind:Kind;version?:number};output:WorkflowRecord};
   'workflow.publish': {input:{kind:Kind;expectedWorkflowVersion:number;definition:WorkflowDefinition;mutationId?:string};output:WorkflowRecord};
   'claim.recover': {input:RevisionInput & {leaseId:string;generation:number;reason:string};output:Item};

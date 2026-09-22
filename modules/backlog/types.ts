@@ -24,6 +24,7 @@ export interface ItemChange extends ItemFields { itemId:string; expectedRevision
 export interface DependencyChange { itemId:string; prerequisite:ItemReference; expectedRevision:number; mutationId?:string }
 export interface OwnershipProof { leaseId:string; generation:number; token:string }
 export interface RevisionInput { itemId:string; expectedRevision:number; mutationId?:string }
+export interface Eligibility { eligible:boolean; category:Category; policy:EffectivePolicy; authorized:boolean; parentScopeRevision?:number; reasons:string[] }
 export interface EffectivePolicy { policy:Policy; source:string; version:string; governingId:string }
 export interface AuthorizationInput extends RevisionInput { rationale:string }
 export interface OperationMap {

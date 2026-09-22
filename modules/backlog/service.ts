@@ -5,6 +5,7 @@ import { BacklogError } from './errors.ts';
 import { prepareStorePaths, type StorePaths } from './paths.ts';
 import { openStore, type StoreConnection } from './store.ts';
 import { projectProjection, registerProject, selectProject, requireOperator, changeProject } from './registry.ts';
+import { changeDependency, reference } from './relationships.ts';
 import { addItem, updateItem, getItem, projection } from './items.ts';
 import { strictObject, validate } from './validation.ts';
 import type { BacklogService, OperationContext, OperationMap, ServiceOptions } from './types.ts';
@@ -40,8 +41,14 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    if(input.mutationId!==undefined)validate('label',input.mutationId);
    return changeProject(rt,ctx,operation,input as unknown as {name?:string;directory?:string;expectedRegistryRevision:number;mutationId?:string});
   }
+  if(operation==='dependency.add'||operation==='dependency.remove'){
+   const input=strictObject(raw,['itemId','prerequisite','expectedRevision','mutationId']);validate('itemId',input.itemId);validate('revision',input.expectedRevision);if(input.mutationId!==undefined)validate('label',input.mutationId);
+   const project=selectProject(rt.registry(),ctx,rt.dataRoot);reference(input.prerequisite,project.id);
+   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   return changeDependency(rt,db,project,ctx,operation,input as unknown as OperationMap['dependency.add']['input']);
+  }
   if(operation==='item.add'||operation==='item.show'||operation==='item.update') {
-   const fields=operation==='item.add'?['kind','title','description','criteria','priority','mutationId']:operation==='item.show'?['itemId']:['itemId','expectedRevision','title','description','criteria','priority','mutationId'];
+   const fields=operation==='item.add'?['kind','title','description','criteria','priority','mutationId']:operation==='item.show'?['itemId']:['itemId','expectedRevision','title','description','criteria','priority','parent','mutationId'];
    const input=strictObject(raw,fields);
    if(operation==='item.add'){validate('kind',input.kind);validate('title',input.title);}else validate('itemId',input.itemId);
    if(operation==='item.update')validate('revision',input.expectedRevision);

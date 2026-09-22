@@ -20,8 +20,11 @@ export interface CompletionRecord { summary: string; verification: string; evide
 export interface Page<T> { items: T[]; nextCursor?: string }
 // Implemented operations extend this map as their handlers are introduced.
 export interface ItemFields { title?:string; description?:string; criteria?:string[]; priority?:Priority }
-export interface ItemChange extends ItemFields { itemId:string; expectedRevision:number; mutationId?:string }
+export interface ItemChange extends ItemFields { itemId:string; expectedRevision:number; mutationId?:string; parent?:ItemReference|null }
+export interface DependencyChange { itemId:string; prerequisite:ItemReference; expectedRevision:number; mutationId?:string }
 export interface OperationMap {
+  'dependency.add': {input:DependencyChange;output:Item};
+  'dependency.remove': {input:DependencyChange;output:Item};
   'item.add': {input:ItemFields & {kind:Kind;title:string;mutationId?:string};output:Item};
   'item.show': {input:{itemId:string};output:Item};
   'item.update': {input:ItemChange;output:Item};

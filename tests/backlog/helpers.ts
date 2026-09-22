@@ -1,7 +1,15 @@
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createBacklogService } from '../../modules/backlog/service.ts';
+import { openStore } from '../../modules/backlog/store.ts';
 import type { OperationContext } from '../../modules/backlog/types.ts';
+export function serviceFixture() {
+  const f=fixture();const service=createBacklogService(f);
+  const project=service.execute(f.context,'project.register',{directory:f.project,name:'Test'});
+  const db=openStore(join(f.dataRoot,'projects',project.id,'backlog.sqlite'),'project','open-existing');
+  return {...f,service,projectRecord:project,db,close:()=>{db.close();service.close();f.close();}};
+}
 export function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'pi-backlog-test-'));
   const project = join(directory, 'project'); mkdirSync(project, {mode:0o700});

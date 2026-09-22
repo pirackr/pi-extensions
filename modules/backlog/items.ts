@@ -1,4 +1,5 @@
 import { BacklogError } from './errors.ts';
+import { assignParent } from './relationships.ts';
 import { runMutation } from './mutations.ts';
 import type { StoreConnection } from './store.ts';
 import type { Runtime } from './service.ts';
@@ -38,7 +39,8 @@ export function addItem(rt:Runtime,db:StoreConnection,project:Project,ctx:Operat
 export function updateItem(rt:Runtime,db:StoreConnection,project:Project,ctx:OperationContext,input:ItemChange):Item {
  return runMutation(db,ctx,'item.update',input,()=>{
   const item=getItem(db,input.itemId);checkRevision(item,input.expectedRevision);
-  const scope=['title','description','criteria'].some(k=>Object.hasOwn(input,k));if(scope)scopeMutable(db,item);
+  const scope=['title','description','criteria','parent'].some(k=>Object.hasOwn(input,k));if(scope)scopeMutable(db,item);
+  if(Object.hasOwn(input,'parent'))assignParent(db,item,input.parent!,project);
   const next={...item,title:input.title??item.title,description:input.description??item.description,criteria:input.criteria?JSON.stringify(input.criteria):item.criteria,priority:input.priority??item.priority};
   if(scope&&['ready','active'].includes(category(db,item))&&!scopeComplete(next))throw new BacklogError('VALIDATION_ERROR','Ready/active scope must remain complete');
   db.prepare('UPDATE items SET title=?,description=?,criteria=?,priority=? WHERE id=?').run(next.title,next.description,next.criteria,next.priority,item.id);

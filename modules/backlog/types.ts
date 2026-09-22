@@ -1,5 +1,5 @@
 import type { WorkflowDefinition } from './workflows.ts';
-export interface WorkflowRecord { projectId:string;dataRoot:string;kind:Kind;version:number;definition:WorkflowDefinition }
+export interface WorkflowRecord { projectId:string;dataRoot:string;kind:Kind;version:number;definition:WorkflowDefinition;nextCursor?:string }
 export type Kind = 'request' | 'task';
 export type Priority = 'urgent' | 'high' | 'normal' | 'low';
 export type Category = 'draft' | 'ready' | 'active' | 'blocked' | 'done' | 'canceled';
@@ -19,7 +19,12 @@ export interface Item {
 }
 export interface ArtifactReference { label: string; reference: string }
 export interface CompletionRecord { summary: string; verification: string; evidence: ArtifactReference[] }
-export interface Page<T> { items: T[]; nextCursor?: string }
+export interface Page<T> { items: T[]; nextCursor?: string; projectId?:string; dataRoot?:string }
+export interface PageInput { limit?:number; cursor?:string }
+export interface ItemListInput extends PageInput { kind?:Kind;priority?:Priority;category?:Category;stage?:string;parent?:string;eligible?:boolean;text?:string }
+export interface RecordListInput extends PageInput { itemId?:string }
+export interface ItemShowInput extends PageInput {itemId:string;section?:'criteria'|'dependencies'}
+export interface ItemShow extends Item {section?:Page<Record<string,unknown>>}
 // Implemented operations extend this map as their handlers are introduced.
 export interface ItemFields { title?:string; description?:string; criteria?:string[]; priority?:Priority }
 export interface ItemChange extends ItemFields { itemId:string; expectedRevision:number; mutationId?:string; parent?:ItemReference|null }
@@ -31,7 +36,7 @@ export interface EffectivePolicy { policy:Policy; source:string; version:string;
 export interface AuthorizationInput extends RevisionInput { rationale:string }
 export interface ClaimReceipt extends OwnershipProof { worker:string;expiresAt:string;durationSeconds:number;revision:number;taskScopeRevision:number;parentScopeRevision?:number }
 export interface OperationMap {
-  'workflow.show': {input:{kind:Kind;version?:number};output:WorkflowRecord};
+  'workflow.show': {input:PageInput & {kind:Kind;version?:number};output:WorkflowRecord};
   'workflow.publish': {input:{kind:Kind;expectedWorkflowVersion:number;definition:WorkflowDefinition;mutationId?:string};output:WorkflowRecord};
   'claim.recover': {input:RevisionInput & {leaseId:string;generation:number;reason:string};output:Item};
   'claim.renew': {input:{itemId:string;proof:OwnershipProof;mutationId?:string};output:{leaseId:string;generation:number;expiresAt:string;durationSeconds:number}};
@@ -48,12 +53,18 @@ export interface OperationMap {
   'dependency.remove': {input:DependencyChange;output:Item};
   'item.transition': {input:RevisionInput & {stage:string;reason?:string;proof?:OwnershipProof;completion?:CompletionRecord};output:Item};
   'item.add': {input:ItemFields & {kind:Kind;title:string;mutationId?:string};output:Item};
-  'item.show': {input:{itemId:string};output:Item};
+  'item.show': {input:ItemShowInput;output:ItemShow};
+  'item.list': {input:ItemListInput;output:Page<Item>};
+  'history.list': {input:RecordListInput;output:Page<Record<string,unknown>>};
+  'note.list': {input:RecordListInput;output:Page<Record<string,unknown>>};
+  'artifact.list': {input:RecordListInput;output:Page<Record<string,unknown>>};
+  'result.list': {input:RecordListInput;output:Page<Record<string,unknown>>};
+  'backlog.summary': {input:Record<string,never>;output:{project:Project;counts:Record<string,number>}};
   'item.update': {input:ItemChange;output:Item};
   'project.rename': {input:{name:string;expectedRegistryRevision:number;mutationId?:string};output:Project};
   'project.relocate': {input:{directory:string;expectedRegistryRevision:number;mutationId?:string};output:Project};
   'project.register': {input:{directory:string;name:string;mutationId?:string};output:Project};
-  'project.list': {input:Record<string,never>;output:Page<Project>};
+  'project.list': {input:PageInput;output:Page<Project>};
   'project.show': {input:Record<string,never>;output:Project};
 }
 export interface BacklogService {

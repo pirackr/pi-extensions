@@ -1,6 +1,6 @@
 import { BacklogError } from './errors.ts';
 import { advanceItem, category, checkRevision, getItem, projection, scopeMutable, type StoredItem } from './items.ts';
-import { runMutation } from './mutations.ts';
+import { runMutation, type MutationResult } from './mutations.ts';
 import { requireOperator } from './registry.ts';
 import type { Runtime } from './service.ts';
 import type { StoreConnection } from './store.ts';
@@ -13,7 +13,7 @@ export function resolvePolicy(db:StoreConnection,item:StoredItem):EffectivePolic
 }
 export function changePolicy(rt:Runtime,db:StoreConnection,project:Project,ctx:OperationContext,input:OperationMap['project.policy']['input']):OperationMap['project.policy']['output'] {
  requireOperator(ctx);
- return runMutation(db,ctx,'project.policy',input,()=>{
+ return runMutation(db,ctx,'project.policy',input,():MutationResult<OperationMap['project.policy']['output']>=>{
   let version=Number(metadata(db,'policyVersion'));
   if(version!==input.expectedPolicyVersion)throw new BacklogError('REVISION_CONFLICT','Stale policy version',{actualVersion:version});
   if(input.itemId){

@@ -7,6 +7,7 @@ import { openStore, type StoreConnection } from './store.ts';
 import { projectProjection, registerProject, selectProject, requireOperator, changeProject } from './registry.ts';
 import { changeDependency, reference } from './relationships.ts';
 import { addItem, updateItem, getItem, projection } from './items.ts';
+import { listProjects, listItems, showItem, listRecords, summary, pageLimit } from './queries.ts';
 import { publishWorkflow, showWorkflow, validateWorkflow } from './workflows.ts';
 import { transitionItem } from './transitions.ts';
 import { acquireClaim, renewClaim, releaseClaim, recoverClaim } from './claims.ts';
@@ -36,6 +37,24 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
  function dispatch(ctx:OperationContext,operation:keyof OperationMap,raw:unknown):unknown {
   if(closed)throw new BacklogError('STORE_ERROR','Service is closed');
   if(ctx.projectId!==undefined)validate('projectId',ctx.projectId);
+  if(operation==='project.list'){
+   const input=strictObject(raw,['limit','cursor']) as OperationMap['project.list']['input'];pageLimit(input);
+   if(!existsSync(join(rt.dataRoot,'registry.sqlite')))return {items:[],dataRoot:rt.dataRoot};return listProjects(rt.registry(),rt.dataRoot,input);
+  }
+  if(operation==='item.list'||operation==='item.show'||operation==='history.list'||operation==='note.list'||operation==='artifact.list'||operation==='result.list'||operation==='backlog.summary'){
+   const fields=operation==='item.list'?['kind','priority','category','stage','parent','eligible','text']:operation==='item.show'?['itemId','section']:['itemId'];
+   const input=strictObject(raw,operation==='backlog.summary'?[]:[...fields,'limit','cursor']);pageLimit(input);
+   if(operation==='item.show'||input.itemId!==undefined)validate('itemId',input.itemId);
+   if(input.kind!==undefined)validate('kind',input.kind);if(input.priority!==undefined)validate('priority',input.priority);if(input.stage!==undefined)validate('label',input.stage);if(input.parent!==undefined)validate('itemId',input.parent);if(input.text!==undefined)validate('description',input.text);
+   if(input.eligible!==undefined&&typeof input.eligible!=='boolean')throw new BacklogError('VALIDATION_ERROR','Eligible must be boolean');
+   if(input.category!==undefined&&!['draft','ready','active','blocked','done','canceled'].includes(String(input.category)))throw new BacklogError('VALIDATION_ERROR','Invalid category');
+   if(input.section!==undefined&&!['criteria','dependencies'].includes(String(input.section)))throw new BacklogError('VALIDATION_ERROR','Invalid section');
+   const project=selectProject(rt.registry(),ctx,rt.dataRoot);
+   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   if(operation==='item.list')return listItems(db,project,input,rt.now());
+   if(operation==='item.show')return showItem(db,project,input as unknown as OperationMap['item.show']['input']);
+   if(operation==='backlog.summary')return summary(db,project);return listRecords(db,project,operation,input);
+  }
   if(operation==='project.register'){
    requireOperator(ctx);const input=strictObject(raw,['directory','name','mutationId']);validate('reference',input.directory);validate('label',input.name);
    if(input.mutationId!==undefined)validate('label',input.mutationId);
@@ -49,7 +68,7 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
   }
   if(operation==='workflow.show'||operation==='workflow.publish'){
    if(operation==='workflow.publish')requireOperator(ctx);
-   const input=strictObject(raw,operation==='workflow.show'?['kind','version']:['kind','expectedWorkflowVersion','definition','mutationId']);validate('kind',input.kind);if(input.version!==undefined)validate('revision',input.version);if(operation==='workflow.publish'){validate('revision',input.expectedWorkflowVersion);validateWorkflow(input.definition);}if(input.mutationId!==undefined)validate('label',input.mutationId);
+   const input=strictObject(raw,operation==='workflow.show'?['kind','version','limit','cursor']:['kind','expectedWorkflowVersion','definition','mutationId']);validate('kind',input.kind);if(input.version!==undefined)validate('revision',input.version);if(operation==='workflow.publish'){validate('revision',input.expectedWorkflowVersion);validateWorkflow(input.definition);}if(input.mutationId!==undefined)validate('label',input.mutationId);
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);
    let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
    return operation==='workflow.show'?showWorkflow(db,project,input as unknown as OperationMap['workflow.show']['input']):publishWorkflow(rt,db,project,ctx,input as unknown as OperationMap['workflow.publish']['input']);
@@ -110,8 +129,8 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
    return changeDependency(rt,db,project,ctx,operation,input as unknown as OperationMap['dependency.add']['input']);
   }
-  if(operation==='item.add'||operation==='item.show'||operation==='item.update') {
-   const fields=operation==='item.add'?['kind','title','description','criteria','priority','mutationId']:operation==='item.show'?['itemId']:['itemId','expectedRevision','title','description','criteria','priority','parent','mutationId'];
+  if(operation==='item.add'||operation==='item.update') {
+   const fields=operation==='item.add'?['kind','title','description','criteria','priority','mutationId']:['itemId','expectedRevision','title','description','criteria','priority','parent','mutationId'];
    const input=strictObject(raw,fields);
    if(operation==='item.add'){validate('kind',input.kind);validate('title',input.title);}else validate('itemId',input.itemId);
    if(operation==='item.update')validate('revision',input.expectedRevision);
@@ -119,15 +138,10 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    if(input.mutationId!==undefined)validate('label',input.mutationId);
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);
    let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
-   if(operation==='item.show')return projection(getItem(db,String(input.itemId)),project);
    if(operation==='item.add')return addItem(rt,db,project,ctx,input as unknown as OperationMap['item.add']['input']);
    return updateItem(rt,db,project,ctx,input as unknown as OperationMap['item.update']['input']);
   }
   strictObject(raw,[]);
-  if(operation==='project.list'){
-   if(!existsSync(join(rt.dataRoot,'registry.sqlite')))return {items:[]};
-   return {items:rt.registry().prepare('SELECT * FROM projects ORDER BY created_at,id LIMIT 50').all().map(row=>projectProjection(row,rt.dataRoot))};
-  }
   if(operation==='project.show')return selectProject(rt.registry(),ctx,rt.dataRoot);
   throw new BacklogError('VALIDATION_ERROR','Unknown operation');
  }

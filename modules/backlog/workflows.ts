@@ -6,11 +6,15 @@ import type { Runtime } from './service.ts';
 import { runMutation } from './mutations.ts';
 import { metadata } from './policy.ts';
 import { requireOperator } from './registry.ts';
+import { cursorFor, cursorKey, pageLimit } from './queries.ts';
 export function showWorkflow(db:StoreConnection,project:Project,input:OperationMap['workflow.show']['input']):WorkflowRecord {
  const version=input.version??Number(metadata(db,input.kind+'Workflow'));
  const row=db.prepare('SELECT definition FROM workflows WHERE kind=? AND version=?').get(input.kind,version);
  if(!row)throw new BacklogError('VALIDATION_ERROR','Unknown workflow version');
- return {projectId:project.id,dataRoot:project.dataRoot,kind:input.kind,version,definition:JSON.parse(String(row.definition))};
+ const definition=JSON.parse(String(row.definition)) as WorkflowDefinition,scope=project.id+':workflow:'+input.kind+':'+version,key=cursorKey(scope,input);
+ if(key&&(key.length!==1||typeof key[0]!=='number'))throw new BacklogError('VALIDATION_ERROR','Invalid workflow cursor');
+ const offset=key?Number(key[0])+1:0,limit=pageLimit(input),stages=definition.stages.slice(offset,offset+limit);
+ return {projectId:project.id,dataRoot:project.dataRoot,kind:input.kind,version,definition:{initial:definition.initial,stages},...(offset+limit<definition.stages.length?{nextCursor:cursorFor(scope,input,[offset+limit-1])}:{})};
 }
 export function publishWorkflow(rt:Runtime,db:StoreConnection,project:Project,ctx:OperationContext,input:OperationMap['workflow.publish']['input']):WorkflowRecord {
  requireOperator(ctx);const definition=validateWorkflow(input.definition);

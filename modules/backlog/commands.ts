@@ -1,7 +1,7 @@
 import { BacklogError } from './errors.ts';
 import { operationSchemas, strictObject, validate, validateOperationInput } from './validation.ts';
 import type { OperationMap } from './types.ts';
-export interface ParsedCommand {operation:keyof OperationMap;input:OperationMap[keyof OperationMap]['input'];projectId?:string;dataDir?:string;inputFile?:string;json:boolean}
+export interface ParsedCommand {operation:keyof OperationMap;input:OperationMap[keyof OperationMap]['input'];projectId?:string;dataDir?:string;inputFile?:string;actor?:string;json:boolean}
 function invalid():never {throw new BacklogError('VALIDATION_ERROR','Invalid command, flag, or payload conflict');}
 /** Quoting only: never shell expansion, execution, or environment substitution. */
 export function tokenize(source:string):string[] {
@@ -32,7 +32,8 @@ export function parseCommand(argv:string[],payload?:unknown):ParsedCommand {
  function set(key:string,value:unknown){if(Object.hasOwn(input,key))invalid();input[key]=value;}
  if(positionals.length){if(positionals.length!==1)invalid();set(operation==='project.register'?'directory':'itemId',positionals[0]);}
  const result:ParsedCommand={operation,input,json:flags.json===true};delete flags.json;
- for(const [flag,property] of [['project','projectId'],['dataDir','dataDir'],['input','inputFile']] as const){if(flags[flag]!==undefined){result[property]=String(flags[flag]);delete flags[flag];}}
+ for(const [flag,property] of [['project','projectId'],['dataDir','dataDir'],['input','inputFile'],['actor','actor']] as const){if(flags[flag]!==undefined){result[property]=String(flags[flag]);delete flags[flag];}}
+ if(result.actor!==undefined)validate('label',result.actor);
  if(result.projectId!==undefined)validate('projectId',result.projectId);
  const credentials:Record<string,unknown>={};
  for(const [raw,value] of Object.entries(flags)){

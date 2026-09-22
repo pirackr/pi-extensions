@@ -29,6 +29,7 @@ export interface EffectivePolicy { policy:Policy; source:string; version:string;
 export interface AuthorizationInput extends RevisionInput { rationale:string }
 export interface ClaimReceipt extends OwnershipProof { worker:string;expiresAt:string;durationSeconds:number;revision:number;taskScopeRevision:number;parentScopeRevision?:number }
 export interface OperationMap {
+  'claim.recover': {input:RevisionInput & {leaseId:string;generation:number;reason:string};output:Item};
   'claim.renew': {input:{itemId:string;proof:OwnershipProof;mutationId?:string};output:{leaseId:string;generation:number;expiresAt:string;durationSeconds:number}};
   'claim.release': {input:RevisionInput & {proof:OwnershipProof};output:Item};
   'claim.acquire': {input:RevisionInput & {worker:string;durationSeconds?:number;expectedParentScopeRevision?:number};output:ClaimReceipt};

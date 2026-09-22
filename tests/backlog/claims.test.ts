@@ -32,6 +32,16 @@ it('renews from now without item revision changes, rejects revoked renewal but a
  f.advance(300000);const nextProof={leaseId:next.leaseId,generation:next.generation,token:next.token};
  expect(()=>f.service.execute(f.context,'claim.renew',{itemId:'B-1',proof:nextProof})).toThrow();expect(()=>f.service.execute(f.context,'claim.release',{itemId:'B-1',expectedRevision:7,proof:nextProof})).toThrow();
 });
+it('requires explicit observed expired-claim recovery and fences old credentials after reclaim',()=>{
+ const f=eligible();const input={itemId:'B-1',expectedRevision:2,worker:'w',mutationId:'original'};const old=f.service.execute(f.context,'claim.acquire',input);
+ const recover={itemId:'B-1',expectedRevision:3,leaseId:old.leaseId,generation:old.generation,reason:'Worker stopped'};
+ expect(()=>f.service.execute(f.context,'claim.recover',recover)).toThrow();f.advance(3600000);
+ expect(f.service.execute(f.context,'claim.acquire',input)).toEqual(old);expect(f.db.prepare('SELECT * FROM claims').all()).toHaveLength(1);
+ expect(()=>f.service.execute(f.context,'claim.recover',{...recover,generation:2})).toThrow();expect(()=>f.service.execute(f.context,'claim.recover',{...recover,reason:''})).toThrow();
+ expect(f.service.execute(f.context,'claim.recover',recover)).toMatchObject({revision:4,scopeRevision:1,stage:'ready'});
+ const fresh=f.service.execute(f.context,'claim.acquire',{itemId:'B-1',expectedRevision:4,worker:'new'});expect(fresh.generation).toBe(2);
+ expect(()=>f.service.execute(f.context,'claim.renew',{itemId:'B-1',proof:{leaseId:old.leaseId,generation:old.generation,token:old.token}})).toThrow();
+});
 it('checks every proof component and rejects expiry equality',()=>{
  const f=serviceFixture();fixtures.push(f);f.service.execute(f.context,'item.add',{kind:'task',title:'Test'});
  f.db.prepare('INSERT INTO claims VALUES (?,?,?,?,?,?,?,?,?)').run('B-1','lease',1,'secret','worker',f.now()+300000,300,1,null);

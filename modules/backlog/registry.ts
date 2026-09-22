@@ -25,6 +25,17 @@ export function selectProject(db:StoreConnection,ctx:OperationContext,dataRoot:s
  }
  return projectProjection(row,dataRoot);
 }
+export function changeProject(rt:Runtime,ctx:OperationContext,operation:'project.rename'|'project.relocate',input:{name?:string;directory?:string;expectedRegistryRevision:number;mutationId?:string}):Project {
+ requireOperator(ctx);const db=rt.registry();const selected=selectProject(db,ctx,rt.dataRoot);
+ const directory=operation==='project.relocate'?canonicalDirectory(ctx.cwd,input.directory!):undefined;
+ return runMutation(db,ctx,operation,{...input,projectId:selected.id,directory},()=>{
+  const row=db.prepare('SELECT * FROM projects WHERE id=?').get(selected.id)!;
+  if(row.revision!==input.expectedRegistryRevision)throw new BacklogError('REVISION_CONFLICT','Stale registry revision',{actualRevision:Number(row.revision)});
+  if(directory&&db.prepare('SELECT id FROM projects WHERE directory=? AND id<>?').get(directory,selected.id))throw new BacklogError('VALIDATION_ERROR','Directory is already registered');
+  db.prepare('UPDATE projects SET name=?,directory=?,revision=revision+1,updated_at=? WHERE id=?').run(input.name??String(row.name),directory??String(row.directory),new Date(rt.now()).toISOString(),selected.id);
+  return {receipt:projectProjection(db.prepare('SELECT * FROM projects WHERE id=?').get(selected.id)!,rt.dataRoot),event:{ids:[selected.id],revision:input.expectedRegistryRevision+1,changedFields:[operation==='project.rename'?'name':'directory']}};
+ },rt.now);
+}
 export function registerProject(rt:Runtime,ctx:OperationContext,input:OperationMap['project.register']['input']):Project {
  requireOperator(ctx);const directory=canonicalDirectory(ctx.cwd,input.directory);const registry=rt.registry(true);
  const existing=registry.prepare('SELECT * FROM projects WHERE directory=?').get(directory);

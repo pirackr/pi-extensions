@@ -26,6 +26,20 @@ it('retains identity after a directory disappears and across reopen',()=>{
  const next=createBacklogService(f);cleanup.push(()=>next.close());
  expect(next.execute({...f.context,projectId:p.id},'project.show',{})).toMatchObject({id:p.id,available:false});
 });
+it('revision-checks operator metadata changes and preserves project identity',()=>{
+ const f=setup();const p=f.service.execute(f.context,'project.register',{directory:'.',name:'Before'});const ctx={...f.context,projectId:p.id};
+ const renamed=f.service.execute(ctx,'project.rename',{name:'After',expectedRegistryRevision:1});
+ expect(renamed).toMatchObject({id:p.id,name:'After',directory:f.project,registryRevision:2});
+ expect(()=>f.service.execute(ctx,'project.rename',{name:'Stale',expectedRegistryRevision:1})).toThrow();
+ const target=f.directory+'/relocated';mkdirSync(target);
+ const moved=f.service.execute(ctx,'project.relocate',{directory:target,expectedRegistryRevision:2});
+ expect(moved).toMatchObject({id:p.id,directory:target,registryRevision:3});expect(existsSync(f.project)).toBe(true);
+ expect(()=>f.service.execute({...ctx,actor:{...ctx.actor,role:'automation'}},'project.rename',{name:'No',expectedRegistryRevision:3})).toThrow();
+ expect(()=>f.service.execute(ctx,'project.relocate',{directory:f.directory+'/missing',expectedRegistryRevision:3})).toThrow();
+ const other=f.service.execute(f.context,'project.register',{directory:f.project,name:'Other'});
+ expect(()=>f.service.execute(ctx,'project.relocate',{directory:other.directory,expectedRegistryRevision:3})).toThrow();
+ expect(f.service.execute(ctx,'project.show',{}).registryRevision).toBe(3);
+});
 it('rejects automation registration and unknown inputs',()=>{
  const f=setup();expect(()=>f.service.execute({...f.context,actor:{...f.context.actor,role:'automation'}},'project.register',{directory:'.',name:'No'})).toThrow();
  expect(()=>f.service.execute(f.context,'project.register',{directory:'.',name:'No',hook:'run'} as never)).toThrow();

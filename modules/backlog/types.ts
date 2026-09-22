@@ -20,6 +20,8 @@ export interface CompletionRecord { summary: string; verification: string; evide
 export interface Page<T> { items: T[]; nextCursor?: string }
 // Implemented operations extend this map as their handlers are introduced.
 export interface OperationMap {
+  'project.rename': {input:{name:string;expectedRegistryRevision:number;mutationId?:string};output:Project};
+  'project.relocate': {input:{directory:string;expectedRegistryRevision:number;mutationId?:string};output:Project};
   'project.register': {input:{directory:string;name:string;mutationId?:string};output:Project};
   'project.list': {input:Record<string,never>;output:Page<Project>};
   'project.show': {input:Record<string,never>;output:Project};

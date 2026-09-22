@@ -4,7 +4,7 @@ import { isAbsolute, join } from 'node:path';
 import { BacklogError } from './errors.ts';
 import { prepareStorePaths, type StorePaths } from './paths.ts';
 import { openStore, type StoreConnection } from './store.ts';
-import { projectProjection, registerProject, selectProject, requireOperator } from './registry.ts';
+import { projectProjection, registerProject, selectProject, requireOperator, changeProject } from './registry.ts';
 import { strictObject, validate } from './validation.ts';
 import type { BacklogService, OperationContext, OperationMap, ServiceOptions } from './types.ts';
 export interface Runtime {
@@ -31,6 +31,12 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    requireOperator(ctx);const input=strictObject(raw,['directory','name','mutationId']);validate('reference',input.directory);validate('label',input.name);
    if(input.mutationId!==undefined)validate('label',input.mutationId);
    return registerProject(rt,ctx,input as unknown as OperationMap['project.register']['input']);
+  }
+  if(operation==='project.rename'||operation==='project.relocate'){
+   requireOperator(ctx);const input=strictObject(raw,[operation==='project.rename'?'name':'directory','expectedRegistryRevision','mutationId']);
+   validate('revision',input.expectedRegistryRevision);validate(operation==='project.rename'?'label':'reference',input[operation==='project.rename'?'name':'directory']);
+   if(input.mutationId!==undefined)validate('label',input.mutationId);
+   return changeProject(rt,ctx,operation,input as unknown as {name?:string;directory?:string;expectedRegistryRevision:number;mutationId?:string});
   }
   strictObject(raw,[]);
   if(operation==='project.list'){

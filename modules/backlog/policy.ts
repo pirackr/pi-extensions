@@ -27,7 +27,7 @@ export function changePolicy(rt:Runtime,db:StoreConnection,project:Project,ctx:O
    for(const row of db.prepare('SELECT item_id FROM claims').all())if(resolvePolicy(db,getItem(db,String(row.item_id))).source==='project')throw new BacklogError('CLAIM_CONFLICT','Project policy is frozen by recorded ownership');
    version++;
    for(const row of db.prepare('SELECT id FROM items WHERE parent_id IS NULL AND policy_override IS NULL').all()){
-    const item=getItem(db,String(row.id));if(!['done','canceled'].includes(category(db,item)))db.prepare('UPDATE authorizations SET revoked=1 WHERE item_id=?').run(item.id);
+    const item=getItem(db,String(row.id));if(!['done','canceled'].includes(category(db,item)))db.prepare('DELETE FROM current_authorizations WHERE item_id=?').run(item.id);
    }
    db.prepare("UPDATE metadata SET value=? WHERE key='policy'").run(input.policy);db.prepare("UPDATE metadata SET value=? WHERE key='policyVersion'").run(String(version));
   }

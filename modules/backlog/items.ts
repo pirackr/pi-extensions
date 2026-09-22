@@ -24,7 +24,7 @@ export function projection(item:StoredItem,project:Project):Item {
 }
 export function advanceItem(db:StoreConnection,item:StoredItem,ctx:OperationContext,now:number,scope=false):void {
  db.prepare('UPDATE items SET revision=revision+1,scope_revision=scope_revision+?,updated_at=?,updated_by=? WHERE id=?').run(scope?1:0,new Date(now).toISOString(),JSON.stringify(ctx.actor),item.id);
- if(scope)db.prepare('UPDATE authorizations SET revoked=1 WHERE item_id=?').run(item.id);
+ if(scope)db.prepare('DELETE FROM current_authorizations WHERE item_id=?').run(item.id);
 }
 export function addItem(rt:Runtime,db:StoreConnection,project:Project,ctx:OperationContext,input:OperationMap['item.add']['input']):Item {
  return runMutation(db,ctx,'item.add',input,()=>{

@@ -25,7 +25,11 @@ export interface DependencyChange { itemId:string; prerequisite:ItemReference; e
 export interface OwnershipProof { leaseId:string; generation:number; token:string }
 export interface RevisionInput { itemId:string; expectedRevision:number; mutationId?:string }
 export interface EffectivePolicy { policy:Policy; source:string; version:string; governingId:string }
+export interface AuthorizationInput extends RevisionInput { rationale:string }
 export interface OperationMap {
+  'authorization.approve': {input:AuthorizationInput;output:Item};
+  'authorization.authorize': {input:AuthorizationInput;output:Item};
+  'authorization.revoke': {input:AuthorizationInput;output:Item};
   'project.policy': {input:{policy:Policy|null;expectedPolicyVersion:number;itemId?:string;expectedRevision?:number;mutationId?:string};output:{policy:Policy;policyVersion:number;item?:Item}};
   'note.append': {input:RevisionInput & {text:string};output:Item};
   'artifact.attach': {input:RevisionInput & {artifacts:ArtifactReference[]};output:Item};

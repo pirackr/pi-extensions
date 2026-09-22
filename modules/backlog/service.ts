@@ -7,6 +7,7 @@ import { openStore, type StoreConnection } from './store.ts';
 import { projectProjection, registerProject, selectProject, requireOperator, changeProject } from './registry.ts';
 import { changeDependency, reference } from './relationships.ts';
 import { addItem, updateItem, getItem, projection } from './items.ts';
+import { changeAuthorization } from './authorization.ts';
 import { changePolicy } from './policy.ts';
 import { appendAnnotation, type AnnotationOperation } from './annotations.ts';
 import { strictObject, validate, validateProof, validateCompletion } from './validation.ts';
@@ -42,6 +43,13 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    validate('revision',input.expectedRegistryRevision);validate(operation==='project.rename'?'label':'reference',input[operation==='project.rename'?'name':'directory']);
    if(input.mutationId!==undefined)validate('label',input.mutationId);
    return changeProject(rt,ctx,operation,input as unknown as {name?:string;directory?:string;expectedRegistryRevision:number;mutationId?:string});
+  }
+  if(operation==='authorization.approve'||operation==='authorization.authorize'||operation==='authorization.revoke'){
+   if(operation!=='authorization.authorize')requireOperator(ctx);
+   const input=strictObject(raw,['itemId','expectedRevision','mutationId','rationale']);validate('itemId',input.itemId);validate('revision',input.expectedRevision);validate('note',input.rationale);if(!(input.rationale as string).trim())throw new BacklogError('VALIDATION_ERROR','Rationale required');if(input.mutationId!==undefined)validate('label',input.mutationId);
+   const project=selectProject(rt.registry(),ctx,rt.dataRoot);
+   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   return changeAuthorization(rt,db,project,ctx,operation,input as unknown as OperationMap['authorization.approve']['input']);
   }
   if(operation==='project.policy'){
    requireOperator(ctx);const input=strictObject(raw,['policy','expectedPolicyVersion','itemId','expectedRevision','mutationId']);validate('revision',input.expectedPolicyVersion);

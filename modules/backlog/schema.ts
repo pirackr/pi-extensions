@@ -27,6 +27,7 @@ CREATE TABLE annotations(id INTEGER PRIMARY KEY AUTOINCREMENT, item_id TEXT NOT 
 CREATE INDEX annotations_item ON annotations(item_id,id);
 CREATE TABLE authorizations(id INTEGER PRIMARY KEY AUTOINCREMENT, item_id TEXT NOT NULL REFERENCES items(id), scope_revision INTEGER NOT NULL, policy TEXT NOT NULL, policy_version TEXT NOT NULL, rationale TEXT NOT NULL, actor TEXT NOT NULL, timestamp TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1))) STRICT;
 CREATE INDEX authorization_item ON authorizations(item_id,id);
+CREATE TABLE current_authorizations(item_id TEXT PRIMARY KEY REFERENCES items(id), authorization_id INTEGER NOT NULL REFERENCES authorizations(id)) STRICT;
 CREATE TABLE generations(item_id TEXT PRIMARY KEY REFERENCES items(id), value INTEGER NOT NULL CHECK(value>0)) STRICT;
 CREATE TABLE claims(item_id TEXT PRIMARY KEY REFERENCES items(id), lease_id TEXT NOT NULL UNIQUE, generation INTEGER NOT NULL CHECK(generation>0), token TEXT NOT NULL, worker TEXT NOT NULL, expires_at INTEGER NOT NULL, duration_seconds INTEGER NOT NULL CHECK(duration_seconds BETWEEN 30 AND 3600), task_scope_revision INTEGER NOT NULL, parent_scope_revision INTEGER) STRICT;
 `;

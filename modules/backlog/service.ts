@@ -7,6 +7,7 @@ import { openStore, type StoreConnection } from './store.ts';
 import { projectProjection, registerProject, selectProject, requireOperator, changeProject } from './registry.ts';
 import { changeDependency, reference } from './relationships.ts';
 import { addItem, updateItem, getItem, projection } from './items.ts';
+import { transitionItem } from './transitions.ts';
 import { acquireClaim, renewClaim, releaseClaim, recoverClaim } from './claims.ts';
 import { changeAuthorization } from './authorization.ts';
 import { changePolicy } from './policy.ts';
@@ -44,6 +45,12 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    validate('revision',input.expectedRegistryRevision);validate(operation==='project.rename'?'label':'reference',input[operation==='project.rename'?'name':'directory']);
    if(input.mutationId!==undefined)validate('label',input.mutationId);
    return changeProject(rt,ctx,operation,input as unknown as {name?:string;directory?:string;expectedRegistryRevision:number;mutationId?:string});
+  }
+  if(operation==='item.transition'){
+   const input=strictObject(raw,['itemId','expectedRevision','mutationId','stage','reason','proof','completion']);validate('itemId',input.itemId);validate('revision',input.expectedRevision);validate('label',input.stage);if(input.mutationId!==undefined)validate('label',input.mutationId);if(input.reason!==undefined)validate('note',input.reason);if(input.proof!==undefined)validateProof(input.proof);if(input.completion!==undefined)validateCompletion(input.completion);
+   const project=selectProject(rt.registry(),ctx,rt.dataRoot);
+   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   return transitionItem(rt,db,project,ctx,input as unknown as OperationMap['item.transition']['input']);
   }
   if(operation==='claim.recover'){
    const input=strictObject(raw,['itemId','expectedRevision','mutationId','leaseId','generation','reason']);validate('itemId',input.itemId);validate('revision',input.expectedRevision);validate('label',input.leaseId);validate('revision',input.generation);validate('note',input.reason);if(!(input.reason as string).trim())throw new BacklogError('VALIDATION_ERROR','Reason required');if(input.mutationId!==undefined)validate('label',input.mutationId);

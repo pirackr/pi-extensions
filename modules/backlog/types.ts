@@ -42,6 +42,7 @@ export interface OperationMap {
   'result.append': {input:RevisionInput & {result:CompletionRecord;proof?:OwnershipProof};output:Item};
   'dependency.add': {input:DependencyChange;output:Item};
   'dependency.remove': {input:DependencyChange;output:Item};
+  'item.transition': {input:RevisionInput & {stage:string;reason?:string;proof?:OwnershipProof;completion?:CompletionRecord};output:Item};
   'item.add': {input:ItemFields & {kind:Kind;title:string;mutationId?:string};output:Item};
   'item.show': {input:{itemId:string};output:Item};
   'item.update': {input:ItemChange;output:Item};

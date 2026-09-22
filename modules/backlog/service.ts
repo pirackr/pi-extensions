@@ -7,7 +7,7 @@ import { openStore, type StoreConnection } from './store.ts';
 import { projectProjection, registerProject, selectProject, requireOperator, changeProject } from './registry.ts';
 import { changeDependency, reference } from './relationships.ts';
 import { addItem, updateItem, getItem, projection } from './items.ts';
-import { acquireClaim } from './claims.ts';
+import { acquireClaim, renewClaim, releaseClaim } from './claims.ts';
 import { changeAuthorization } from './authorization.ts';
 import { changePolicy } from './policy.ts';
 import { appendAnnotation, type AnnotationOperation } from './annotations.ts';
@@ -44,6 +44,12 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    validate('revision',input.expectedRegistryRevision);validate(operation==='project.rename'?'label':'reference',input[operation==='project.rename'?'name':'directory']);
    if(input.mutationId!==undefined)validate('label',input.mutationId);
    return changeProject(rt,ctx,operation,input as unknown as {name?:string;directory?:string;expectedRegistryRevision:number;mutationId?:string});
+  }
+  if(operation==='claim.renew'||operation==='claim.release'){
+   const input=strictObject(raw,['itemId','proof','mutationId',...(operation==='claim.release'?['expectedRevision']:[])]);validate('itemId',input.itemId);validateProof(input.proof);if(operation==='claim.release')validate('revision',input.expectedRevision);if(input.mutationId!==undefined)validate('label',input.mutationId);
+   const project=selectProject(rt.registry(),ctx,rt.dataRoot);
+   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   return operation==='claim.renew'?renewClaim(rt,db,ctx,input as unknown as OperationMap['claim.renew']['input']):releaseClaim(rt,db,project,ctx,input as unknown as OperationMap['claim.release']['input']);
   }
   if(operation==='claim.acquire'){
    const input=strictObject(raw,['itemId','expectedRevision','mutationId','worker','durationSeconds','expectedParentScopeRevision']);validate('itemId',input.itemId);validate('revision',input.expectedRevision);validate('label',input.worker);if(input.mutationId!==undefined)validate('label',input.mutationId);

@@ -20,6 +20,18 @@ it('requires the exact parent scope for automation child claims',()=>{
  expect(()=>f.service.execute(ctx,'claim.acquire',input)).toThrow();expect(()=>f.service.execute(ctx,'claim.acquire',{...input,expectedParentScopeRevision:2})).toThrow();
  expect(f.service.execute(ctx,'claim.acquire',{...input,expectedParentScopeRevision:1})).toMatchObject({parentScopeRevision:1,taskScopeRevision:2});
 });
+it('renews from now without item revision changes, rejects revoked renewal but allows owner release',()=>{
+ const f=eligible();const proof=f.service.execute(f.context,'claim.acquire',{itemId:'B-1',expectedRevision:2,worker:'w'});const credentials={leaseId:proof.leaseId,generation:proof.generation,token:proof.token};
+ f.advance(100000);const renewed=f.service.execute(f.context,'claim.renew',{itemId:'B-1',proof:credentials});
+ expect(renewed.expiresAt).toBe(new Date(f.now()+300000).toISOString());expect(renewed).not.toHaveProperty('token');expect(f.service.execute(f.context,'item.show',{itemId:'B-1'}).revision).toBe(3);
+ f.service.execute(f.context,'authorization.revoke',{itemId:'B-1',expectedRevision:3,rationale:'Stop'});
+ expect(()=>f.service.execute(f.context,'claim.renew',{itemId:'B-1',proof:credentials})).toThrow();
+ expect(f.service.execute(f.context,'claim.release',{itemId:'B-1',expectedRevision:4,proof:credentials})).toMatchObject({stage:'ready',revision:5,scopeRevision:1});
+ f.service.execute(f.context,'authorization.approve',{itemId:'B-1',expectedRevision:5,rationale:'Again'});
+ const next=f.service.execute(f.context,'claim.acquire',{itemId:'B-1',expectedRevision:6,worker:'other'});expect(next.generation).toBe(2);expect(next.token).not.toBe(proof.token);
+ f.advance(300000);const nextProof={leaseId:next.leaseId,generation:next.generation,token:next.token};
+ expect(()=>f.service.execute(f.context,'claim.renew',{itemId:'B-1',proof:nextProof})).toThrow();expect(()=>f.service.execute(f.context,'claim.release',{itemId:'B-1',expectedRevision:7,proof:nextProof})).toThrow();
+});
 it('checks every proof component and rejects expiry equality',()=>{
  const f=serviceFixture();fixtures.push(f);f.service.execute(f.context,'item.add',{kind:'task',title:'Test'});
  f.db.prepare('INSERT INTO claims VALUES (?,?,?,?,?,?,?,?,?)').run('B-1','lease',1,'secret','worker',f.now()+300000,300,1,null);

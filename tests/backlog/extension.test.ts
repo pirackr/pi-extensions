@@ -3,8 +3,21 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { registerBacklogTools } from '../../extensions/backlog/tools.ts';
 import { formatToolResult } from '../../extensions/backlog/output.ts';
 import { serviceFixture } from './helpers.ts';
+import { createBacklogExtension } from '../../extensions/backlog/index.ts';
+vi.mock('@earendil-works/pi-coding-agent',()=>({getAgentDir:()=>'/unused-agent'}));
 const fixtures:ReturnType<typeof serviceFixture>[]=[];afterEach(()=>fixtures.splice(0).forEach(f=>f.close()));
 export function harness(){const f=serviceFixture();fixtures.push(f);const tools=new Map<string,Parameters<ExtensionAPI['registerTool']>[0]>();const pi={registerTool:(t:Parameters<ExtensionAPI['registerTool']>[0])=>{tools.set(t.name,t);}} as ExtensionAPI;registerBacklogTools(pi,()=>f.service);const ctx={cwd:f.context.cwd,sessionManager:{getSessionId:()=> 'session'}} as ExtensionContext;return {...f,tools,ctx,call:(name:string,args:unknown)=>tools.get(name)!.execute('id',args,undefined,undefined,ctx)};}
+it('keeps lifecycle inert, uses current cwd, supports no UI and closes lazily on reload/shutdown',async()=>{
+ const f=serviceFixture();fixtures.push(f);const events=new Map<string,Function>();let command:Parameters<ExtensionAPI['registerCommand']>[1];const messages:unknown[]=[];const close=vi.spyOn(f.service,'close');const execute=vi.spyOn(f.service,'execute');const createService=vi.fn(()=>f.service);
+ const pi={registerTool:vi.fn(),registerFlag:vi.fn(),getFlag:()=>undefined,registerCommand:(_name:string,c:typeof command)=>{command=c;},sendMessage:(message:unknown)=>messages.push(message),on:(name:string,handler:Function)=>events.set(name,handler)} as unknown as ExtensionAPI;
+ createBacklogExtension(pi,{agentDir:()=>'/agent',env:{PI_BACKLOG_DIR:f.projectRecord.dataRoot},createService});
+ const context={cwd:f.context.cwd,hasUI:false,sessionManager:{getSessionId:()=> 'session',getBranch:()=>[{type:'message',message:{role:'toolResult',details:{action:'claim.acquire'}}}]}} as unknown as ExtensionContext;
+ expect(createService).not.toHaveBeenCalled();for(const reason of ['startup','reload','new','resume','fork','tree'])await events.get('session_start')?.({reason},context);expect(execute).not.toHaveBeenCalled();expect(messages).toEqual([]);
+ await command!.handler('item add --kind task --title Example',context);expect(execute).toHaveBeenCalledWith(expect.objectContaining({cwd:context.cwd,actor:expect.objectContaining({role:'operator',channel:'pi-command'})}),'item.add',expect.anything());
+ await command!.handler('',context);expect(messages).toHaveLength(2);expect(f.service.execute(f.context,'item.show',{itemId:'B-1'}).title).toBe('Example');
+ await command!.handler('item add --input -',context);expect(messages).toHaveLength(3);
+ await events.get('session_start')?.({reason:'reload'},context);await events.get('session_shutdown')?.({},context);expect(close).toHaveBeenCalledTimes(1);
+});
 it('exposes no operator controls and rejects actor/unknown-field injection before service use',async()=>{
  const h=harness();expect([...h.tools.keys()]).toEqual(['backlog_read','backlog_item','backlog_authorize','backlog_claim']);
  for(const action of ['project.register','project.policy','authorization.approve','authorization.revoke','workflow.publish'])await expect(h.call('backlog_item',{action,input:{}})).rejects.toThrow();

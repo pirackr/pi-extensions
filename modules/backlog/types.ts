@@ -19,7 +19,12 @@ export interface ArtifactReference { label: string; reference: string }
 export interface CompletionRecord { summary: string; verification: string; evidence: ArtifactReference[] }
 export interface Page<T> { items: T[]; nextCursor?: string }
 // Implemented operations extend this map as their handlers are introduced.
+export interface ItemFields { title?:string; description?:string; criteria?:string[]; priority?:Priority }
+export interface ItemChange extends ItemFields { itemId:string; expectedRevision:number; mutationId?:string }
 export interface OperationMap {
+  'item.add': {input:ItemFields & {kind:Kind;title:string;mutationId?:string};output:Item};
+  'item.show': {input:{itemId:string};output:Item};
+  'item.update': {input:ItemChange;output:Item};
   'project.rename': {input:{name:string;expectedRegistryRevision:number;mutationId?:string};output:Project};
   'project.relocate': {input:{directory:string;expectedRegistryRevision:number;mutationId?:string};output:Project};
   'project.register': {input:{directory:string;name:string;mutationId?:string};output:Project};

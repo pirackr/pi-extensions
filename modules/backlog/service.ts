@@ -5,6 +5,7 @@ import { BacklogError } from './errors.ts';
 import { prepareStorePaths, type StorePaths } from './paths.ts';
 import { openStore, type StoreConnection } from './store.ts';
 import { projectProjection, registerProject, selectProject, requireOperator, changeProject } from './registry.ts';
+import { addItem, updateItem, getItem, projection } from './items.ts';
 import { strictObject, validate } from './validation.ts';
 import type { BacklogService, OperationContext, OperationMap, ServiceOptions } from './types.ts';
 export interface Runtime {
@@ -14,6 +15,7 @@ export interface Runtime {
 export function createBacklogService(options:ServiceOptions):BacklogService {
  if(!isAbsolute(options.dataRoot))throw new BacklogError('VALIDATION_ERROR','dataRoot must be absolute');
  let connection:StoreConnection|undefined;let closed=false;
+ const projects=new Map<string,StoreConnection>();
  const rt:Runtime={dataRoot:options.dataRoot,now:options.now??Date.now,uuid:options.uuid??randomUUID,randomToken:options.randomToken??(()=>randomBytes(32).toString('hex')),
   paths:()=>prepareStorePaths(options.dataRoot),
   registry(create=false){
@@ -38,6 +40,19 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    if(input.mutationId!==undefined)validate('label',input.mutationId);
    return changeProject(rt,ctx,operation,input as unknown as {name?:string;directory?:string;expectedRegistryRevision:number;mutationId?:string});
   }
+  if(operation==='item.add'||operation==='item.show'||operation==='item.update') {
+   const fields=operation==='item.add'?['kind','title','description','criteria','priority','mutationId']:operation==='item.show'?['itemId']:['itemId','expectedRevision','title','description','criteria','priority','mutationId'];
+   const input=strictObject(raw,fields);
+   if(operation==='item.add'){validate('kind',input.kind);validate('title',input.title);}else validate('itemId',input.itemId);
+   if(operation==='item.update')validate('revision',input.expectedRevision);
+   for(const key of ['title','description','criteria','priority'] as const)if(Object.hasOwn(input,key))validate(key,input[key]);
+   if(input.mutationId!==undefined)validate('label',input.mutationId);
+   const project=selectProject(rt.registry(),ctx,rt.dataRoot);
+   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   if(operation==='item.show')return projection(getItem(db,String(input.itemId)),project);
+   if(operation==='item.add')return addItem(rt,db,project,ctx,input as unknown as OperationMap['item.add']['input']);
+   return updateItem(rt,db,project,ctx,input as unknown as OperationMap['item.update']['input']);
+  }
   strictObject(raw,[]);
   if(operation==='project.list'){
    if(!existsSync(join(rt.dataRoot,'registry.sqlite')))return {items:[]};
@@ -46,5 +61,5 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
   if(operation==='project.show')return selectProject(rt.registry(),ctx,rt.dataRoot);
   throw new BacklogError('VALIDATION_ERROR','Unknown operation');
  }
- return {execute:dispatch as BacklogService['execute'],close(){if(!closed){connection?.close();connection=undefined;closed=true;}}};
+ return {execute:dispatch as BacklogService['execute'],close(){if(!closed){for(const db of projects.values())db.close();projects.clear();connection?.close();connection=undefined;closed=true;}}};
 }

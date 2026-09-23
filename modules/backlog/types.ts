@@ -24,7 +24,9 @@ export interface PageInput { limit?:number; cursor?:string }
 export interface ItemListInput extends PageInput { kind?:Kind;priority?:Priority;category?:Category;stage?:string;parent?:string;eligible?:boolean;text?:string }
 export interface RecordListInput extends PageInput { itemId?:string }
 export interface ItemShowInput extends PageInput {itemId:string;section?:'criteria'|'dependencies'}
-export interface ItemShow extends Item {section?:Page<Record<string,unknown>>}
+export interface ClaimStatus {leaseId:string;generation:number;worker:string;expiresAt:string;expired:boolean;durationSeconds:number;taskScopeRevision:number;parentScopeRevision?:number}
+export interface ItemSummary extends Item {status:Eligibility;claim?:ClaimStatus}
+export interface ItemShow extends ItemSummary {section?:Page<Record<string,unknown>>}
 // Implemented operations extend this map as their handlers are introduced.
 export interface ItemFields { title?:string; description?:string; criteria?:string[]; priority?:Priority }
 export interface ItemChange extends ItemFields { itemId:string; expectedRevision:number; mutationId?:string; parent?:ItemReference|null }
@@ -57,7 +59,7 @@ export interface OperationMap {
   'item.transition': {input:RevisionInput & {stage:string;reason?:string;proof?:OwnershipProof;completion?:CompletionRecord};output:Item};
   'item.add': {input:ItemFields & {kind:Kind;title:string;mutationId?:string};output:Item};
   'item.show': {input:ItemShowInput;output:ItemShow};
-  'item.list': {input:ItemListInput;output:Page<Item>};
+  'item.list': {input:ItemListInput;output:Page<ItemSummary>};
   'history.list': {input:RecordListInput;output:Page<Record<string,unknown>>};
   'note.list': {input:RecordListInput;output:Page<Record<string,unknown>>};
   'artifact.list': {input:RecordListInput;output:Page<Record<string,unknown>>};
@@ -68,7 +70,7 @@ export interface OperationMap {
   'project.relocate': {input:{directory:string;expectedRegistryRevision:number;mutationId?:string};output:Project};
   'project.register': {input:{directory:string;name:string;mutationId?:string};output:Project};
   'project.list': {input:PageInput;output:Page<Project>};
-  'project.show': {input:Record<string,never>;output:Project};
+  'project.show': {input:Record<string,never>;output:Project & {policy:Policy;policyVersion:number}};
 }
 export interface BacklogService {
   execute<K extends keyof OperationMap>(context: OperationContext, operation: K, input: OperationMap[K] extends {input: infer I} ? I : never): OperationMap[K] extends {output: infer O} ? O : never;

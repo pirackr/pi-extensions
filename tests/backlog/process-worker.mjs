@@ -14,7 +14,7 @@ process.once('message',async spec=>{
   }
   service=createBacklogService({dataRoot:spec.dataRoot,now:spec.now===undefined?undefined:()=>spec.now,uuid:()=>{if(spec.publicationBarrier){process.send({ready:true});readSync(0,Buffer.alloc(1));}return randomUUID();}});
   if(!spec.publicationBarrier){process.send({ready:true});await new Promise(resolve=>process.once('message',resolve));}
-  if(spec.pauseCommit){const exec=DatabaseSync.prototype.exec;DatabaseSync.prototype.exec=function(sql){if(sql==='COMMIT'&&spec.pauseCommit==='before'){process.send({paused:true});readSync(0,Buffer.alloc(1));}const value=exec.call(this,sql);if(sql==='COMMIT'&&spec.pauseCommit==='after'){process.send({paused:true});readSync(0,Buffer.alloc(1));}return value;};}
+  if(spec.pauseCommit){let intercepted=false;const exec=DatabaseSync.prototype.exec;DatabaseSync.prototype.exec=function(sql){const pause=sql==='COMMIT'&&!intercepted;if(pause)intercepted=true;if(pause&&spec.pauseCommit==='before'){process.send({paused:true});readSync(0,Buffer.alloc(1));}const value=exec.call(this,sql);if(pause&&spec.pauseCommit==='after'){process.send({paused:true});readSync(0,Buffer.alloc(1));}return value;};}
   const data=service.execute(spec.context,spec.operation,spec.input);process.send({ok:true,data});
  }catch(error){process.send({ok:false,code:error.code??'RUNTIME',message:error.message});}
  finally{db?.close();service?.close();process.disconnect();}

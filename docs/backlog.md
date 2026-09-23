@@ -112,7 +112,7 @@ implicit parent acceptance, cascade cancellation or background execution exists.
 Lease duration defaults to **300 seconds**, with integer bounds **30–3600**.
 Acquire with item revision, worker label, and (for children)
 `--expected-parent-scope-revision`, corresponding to `expectedParentScopeRevision`.
-Acquire returns private lease ID, fencing generation and token. Supply all three
+Acquire returns lease ID, fencing generation and a private token. Supply all three
 as `proof` or `--lease-id`, `--generation`, `--token` on renew/release/claimed
 transitions and result writes. Prefer a private input file over command-line
 tokens visible to local process inspection.
@@ -123,6 +123,13 @@ of ownership or authorization. Renewal rechecks authorization; release remains
 possible after revocation while ownership is live. Expired claims remain recorded
 until explicit `claim recover` with revision, observed lease/generation and reason.
 Recovery is not worker termination and never automatically reacquires.
+
+`project show` includes the default policy and its current `policyVersion`.
+`item show` and `item list` include `status`: effective policy, authorization,
+eligibility and blocking reasons. Recorded ownership appears as token-free
+`claim` metadata with current expiry, `expired`, lease ID and generation. Use
+these observations plus the item's revision for recovery; never infer ownership
+from an old acquisition receipt. Each read uses one database snapshot.
 
 Lists default to 50 records, max 200, with opaque query-bound `nextCursor`.
 Use `--cursor` with the same selection/filters. Item lists sort priority, creation

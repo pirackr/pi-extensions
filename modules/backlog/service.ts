@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { isAbsolute, join } from 'node:path';
 import { BacklogError } from './errors.ts';
 import { prepareStorePaths, type StorePaths } from './paths.ts';
-import { openStore, type StoreConnection } from './store.ts';
+import { initializeRegistry, openStore, withReadTransaction, type StoreConnection } from './store.ts';
 import { projectProjection, registerProject, selectProject, requireOperator, changeProject } from './registry.ts';
 import { changeDependency, reference } from './relationships.ts';
 import { addItem, updateItem, getItem, projection } from './items.ts';
@@ -12,10 +12,10 @@ import { publishWorkflow, showWorkflow, validateWorkflow } from './workflows.ts'
 import { transitionItem } from './transitions.ts';
 import { acquireClaim, renewClaim, releaseClaim, recoverClaim } from './claims.ts';
 import { changeAuthorization } from './authorization.ts';
-import { changePolicy } from './policy.ts';
+import { changePolicy, metadata } from './policy.ts';
 import { appendAnnotation, type AnnotationOperation } from './annotations.ts';
 import { strictObject, validate, validateProof, validateCompletion, validateOperationInput } from './validation.ts';
-import type { BacklogService, OperationContext, OperationMap, ServiceOptions } from './types.ts';
+import type { BacklogService, OperationContext, OperationMap, Project, ServiceOptions } from './types.ts';
 export interface Runtime {
  dataRoot:string;now:()=>number;uuid:()=>string;randomToken:()=>string;
  registry(create?:boolean):StoreConnection;paths():StorePaths;
@@ -30,10 +30,15 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    if(connection)return connection;
    const path=join(options.dataRoot,'registry.sqlite');
    if(!existsSync(path)&&!create)throw new BacklogError('PROJECT_UNREGISTERED','No backlog registry');
-   if(create)rt.paths();
-   connection=openStore(path,'registry',existsSync(path)?'open-existing':'create-new');return connection;
+   if(create){rt.paths();initializeRegistry(path);}
+   connection=openStore(path,'registry','open-existing');return connection;
   }
  };
+ function projectStore(project:Project):StoreConnection {
+  let db=projects.get(project.id);
+  if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing',project.id);projects.set(project.id,db);}
+  return db;
+ }
  function dispatch(ctx:OperationContext,operation:keyof OperationMap,raw:unknown):unknown {
   if(closed)throw new BacklogError('STORE_ERROR','Service is closed');
   validateOperationInput(operation,raw);
@@ -41,8 +46,8 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
   if(operation==='item.read-text'){
    const input=strictObject(raw,['itemId','field','recordId','revision','cursor']);validate('itemId',input.itemId);validate('label',input.field);if(input.recordId!==undefined)validate('label',input.recordId);if(input.revision!==undefined)validate('revision',input.revision);
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);
-   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
-   return readText(db,project,input as unknown as OperationMap['item.read-text']['input']);
+   const db=projectStore(project);
+   return withReadTransaction(db,()=>readText(db,project,input as unknown as OperationMap['item.read-text']['input']));
   }
   if(operation==='project.list'){
    const input=strictObject(raw,['limit','cursor']) as OperationMap['project.list']['input'];pageLimit(input);
@@ -57,10 +62,12 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    if(input.category!==undefined&&!['draft','ready','active','blocked','done','canceled'].includes(String(input.category)))throw new BacklogError('VALIDATION_ERROR','Invalid category');
    if(input.section!==undefined&&!['criteria','dependencies'].includes(String(input.section)))throw new BacklogError('VALIDATION_ERROR','Invalid section');
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);
-   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
-   if(operation==='item.list')return listItems(db,project,input,rt.now());
-   if(operation==='item.show')return showItem(db,project,input as unknown as OperationMap['item.show']['input']);
-   if(operation==='backlog.summary')return summary(db,project);return listRecords(db,project,operation,input);
+   const db=projectStore(project);
+   return withReadTransaction(db,()=>{
+    if(operation==='item.list')return listItems(db,project,input,rt.now());
+    if(operation==='item.show')return showItem(db,project,input as unknown as OperationMap['item.show']['input'],rt.now());
+    if(operation==='backlog.summary')return summary(db,project);return listRecords(db,project,operation,input);
+   });
   }
   if(operation==='project.register'){
    requireOperator(ctx);const input=strictObject(raw,['directory','name','mutationId']);validate('reference',input.directory);validate('label',input.name);
@@ -77,25 +84,25 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    if(operation==='workflow.publish')requireOperator(ctx);
    const input=strictObject(raw,operation==='workflow.show'?['kind','version','limit','cursor']:['kind','expectedWorkflowVersion','definition','mutationId']);validate('kind',input.kind);if(input.version!==undefined)validate('revision',input.version);if(operation==='workflow.publish'){validate('revision',input.expectedWorkflowVersion);validateWorkflow(input.definition);}if(input.mutationId!==undefined)validate('label',input.mutationId);
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);
-   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
-   return operation==='workflow.show'?showWorkflow(db,project,input as unknown as OperationMap['workflow.show']['input']):publishWorkflow(rt,db,project,ctx,input as unknown as OperationMap['workflow.publish']['input']);
+   const db=projectStore(project);
+   return operation==='workflow.show'?withReadTransaction(db,()=>showWorkflow(db,project,input as unknown as OperationMap['workflow.show']['input'])):publishWorkflow(rt,db,project,ctx,input as unknown as OperationMap['workflow.publish']['input']);
   }
   if(operation==='item.transition'){
    const input=strictObject(raw,['itemId','expectedRevision','mutationId','stage','reason','proof','completion']);validate('itemId',input.itemId);validate('revision',input.expectedRevision);validate('label',input.stage);if(input.mutationId!==undefined)validate('label',input.mutationId);if(input.reason!==undefined)validate('note',input.reason);if(input.proof!==undefined)validateProof(input.proof);if(input.completion!==undefined)validateCompletion(input.completion);
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);
-   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   const db=projectStore(project);
    return transitionItem(rt,db,project,ctx,input as unknown as OperationMap['item.transition']['input']);
   }
   if(operation==='claim.recover'){
    const input=strictObject(raw,['itemId','expectedRevision','mutationId','leaseId','generation','reason']);validate('itemId',input.itemId);validate('revision',input.expectedRevision);validate('label',input.leaseId);validate('revision',input.generation);validate('note',input.reason);if(!(input.reason as string).trim())throw new BacklogError('VALIDATION_ERROR','Reason required');if(input.mutationId!==undefined)validate('label',input.mutationId);
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);
-   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   const db=projectStore(project);
    return recoverClaim(rt,db,project,ctx,input as unknown as OperationMap['claim.recover']['input']);
   }
   if(operation==='claim.renew'||operation==='claim.release'){
    const input=strictObject(raw,['itemId','proof','mutationId',...(operation==='claim.release'?['expectedRevision']:[])]);validate('itemId',input.itemId);validateProof(input.proof);if(operation==='claim.release')validate('revision',input.expectedRevision);if(input.mutationId!==undefined)validate('label',input.mutationId);
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);
-   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   const db=projectStore(project);
    return operation==='claim.renew'?renewClaim(rt,db,ctx,input as unknown as OperationMap['claim.renew']['input']):releaseClaim(rt,db,project,ctx,input as unknown as OperationMap['claim.release']['input']);
   }
   if(operation==='claim.acquire'){
@@ -103,14 +110,14 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    if(input.expectedParentScopeRevision!==undefined)validate('revision',input.expectedParentScopeRevision);
    if(input.durationSeconds!==undefined&&(typeof input.durationSeconds!=='number'||!Number.isInteger(input.durationSeconds)||input.durationSeconds<30||input.durationSeconds>3600))throw new BacklogError('VALIDATION_ERROR','Duration must be 30–3600 integer seconds');
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);
-   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   const db=projectStore(project);
    return acquireClaim(rt,db,ctx,input as unknown as OperationMap['claim.acquire']['input']);
   }
   if(operation==='authorization.approve'||operation==='authorization.authorize'||operation==='authorization.revoke'){
    if(operation!=='authorization.authorize')requireOperator(ctx);
    const input=strictObject(raw,['itemId','expectedRevision','mutationId','rationale']);validate('itemId',input.itemId);validate('revision',input.expectedRevision);validate('note',input.rationale);if(!(input.rationale as string).trim())throw new BacklogError('VALIDATION_ERROR','Rationale required');if(input.mutationId!==undefined)validate('label',input.mutationId);
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);
-   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   const db=projectStore(project);
    return changeAuthorization(rt,db,project,ctx,operation,input as unknown as OperationMap['authorization.approve']['input']);
   }
   if(operation==='project.policy'){
@@ -118,7 +125,7 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    if(input.policy!==null&&!['autonomous','approval_required'].includes(String(input.policy)))throw new BacklogError('VALIDATION_ERROR','Invalid policy');
    if(input.itemId!==undefined){validate('itemId',input.itemId);validate('revision',input.expectedRevision);}if(input.mutationId!==undefined)validate('label',input.mutationId);
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);
-   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   const db=projectStore(project);
    return changePolicy(rt,db,project,ctx,input as unknown as OperationMap['project.policy']['input']);
   }
   if(operation==='note.append'||operation==='artifact.attach'||operation==='result.append'){
@@ -127,13 +134,13 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    if(operation==='note.append')validate('note',input.text);else if(operation==='artifact.attach')validate('artifacts',input.artifacts);else validateCompletion(input.result);
    if(input.proof!==undefined)validateProof(input.proof);
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);
-   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   const db=projectStore(project);
    return appendAnnotation(rt,db,project,ctx,operation,input as unknown as OperationMap[AnnotationOperation]['input']);
   }
   if(operation==='dependency.add'||operation==='dependency.remove'){
    const input=strictObject(raw,['itemId','prerequisite','expectedRevision','mutationId']);validate('itemId',input.itemId);validate('revision',input.expectedRevision);if(input.mutationId!==undefined)validate('label',input.mutationId);
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);reference(input.prerequisite,project.id);
-   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   const db=projectStore(project);
    return changeDependency(rt,db,project,ctx,operation,input as unknown as OperationMap['dependency.add']['input']);
   }
   if(operation==='item.add'||operation==='item.update') {
@@ -144,12 +151,15 @@ export function createBacklogService(options:ServiceOptions):BacklogService {
    for(const key of ['title','description','criteria','priority'] as const)if(Object.hasOwn(input,key))validate(key,input[key]);
    if(input.mutationId!==undefined)validate('label',input.mutationId);
    const project=selectProject(rt.registry(),ctx,rt.dataRoot);
-   let db=projects.get(project.id);if(!db){db=openStore(rt.paths().project(project.id),'project','open-existing');projects.set(project.id,db);}
+   const db=projectStore(project);
    if(operation==='item.add')return addItem(rt,db,project,ctx,input as unknown as OperationMap['item.add']['input']);
    return updateItem(rt,db,project,ctx,input as unknown as OperationMap['item.update']['input']);
   }
   strictObject(raw,[]);
-  if(operation==='project.show')return selectProject(rt.registry(),ctx,rt.dataRoot);
+  if(operation==='project.show'){
+   const project=selectProject(rt.registry(),ctx,rt.dataRoot),db=projectStore(project);
+   return withReadTransaction(db,()=>({...project,policy:metadata(db,'policy'),policyVersion:Number(metadata(db,'policyVersion'))}));
+  }
   throw new BacklogError('VALIDATION_ERROR','Unknown operation');
  }
  return {execute:dispatch as BacklogService['execute'],close(){if(!closed){for(const db of projects.values())db.close();projects.clear();connection?.close();connection=undefined;closed=true;}}};

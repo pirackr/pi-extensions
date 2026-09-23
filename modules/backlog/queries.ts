@@ -2,10 +2,11 @@ import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { BacklogError } from './errors.ts';
 import { evaluateEligibility } from './eligibility.ts';
+import { claimFor } from './claims.ts';
 import { category, getItem, projection, type StoredItem } from './items.ts';
 import { projectProjection } from './registry.ts';
 import type { StoreConnection } from './store.ts';
-import type { ItemListInput, ItemShow, ItemShowInput, Page, PageInput, Project, RecordListInput, TextReadInput, TextChunk } from './types.ts';
+import type { ItemListInput, ItemShow, ItemSummary, ItemShowInput, Page, PageInput, Project, RecordListInput, TextReadInput, TextChunk } from './types.ts';
 export function pageLimit(input:PageInput):number {
  const limit=input.limit??50;if(!Number.isInteger(limit)||limit<1||limit>200)throw new BacklogError('VALIDATION_ERROR','Page size must be 1–200');return limit;
 }
@@ -31,6 +32,10 @@ export function listProjects(db:StoreConnection,root:string,input:PageInput):Pag
  const rows=db.prepare('SELECT * FROM projects WHERE id>? ORDER BY id LIMIT ?').all(key?.[0]??'',pageLimit(input)+1).map(r=>projectProjection(r,root));
  return {...page(scope,input,rows,p=>[p.id]),dataRoot:root};
 }
+function statusProjection(db:StoreConnection,project:Project,item:StoredItem,now:number):ItemSummary {
+ const claim=claimFor(db,item.id);
+ return {...projection(item,project),status:evaluateEligibility(db,item,now),...(claim?{claim:{leaseId:claim.lease_id,generation:claim.generation,worker:claim.worker,expiresAt:new Date(claim.expires_at).toISOString(),expired:claim.expires_at<=now,durationSeconds:claim.duration_seconds,taskScopeRevision:claim.task_scope_revision,...(claim.parent_scope_revision!==null?{parentScopeRevision:claim.parent_scope_revision}:{})}}:{})};
+}
 export function listItems(db:StoreConnection,project:Project,input:ItemListInput,now:number) {
  const scope=project.id+':items',key=cursorKey(scope,input),where:string[]=[],params:(string|number)[]=[];
  const rank="CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END";
@@ -45,10 +50,10 @@ export function listItems(db:StoreConnection,project:Project,input:ItemListInput
   rows.push(row);if(rows.length>limit)break;
  }
  const result=page(scope,input,rows,r=>[['urgent','high','normal','low'].indexOf(r.priority),r.created_at,r.number]);
- return {...result,items:result.items.map(r=>projection(r,project)),projectId:project.id,dataRoot:project.dataRoot};
+ return {...result,items:result.items.map(r=>statusProjection(db,project,r,now)),projectId:project.id,dataRoot:project.dataRoot};
 }
-export function showItem(db:StoreConnection,project:Project,input:ItemShowInput):ItemShow {
- const item=getItem(db,input.itemId),result:ItemShow=projection(item,project);pageLimit(input);
+export function showItem(db:StoreConnection,project:Project,input:ItemShowInput,now=Date.now()):ItemShow {
+ const item=getItem(db,input.itemId),result:ItemShow=statusProjection(db,project,item,now);pageLimit(input);
  if(!input.section){if(input.cursor)throw new BacklogError('VALIDATION_ERROR','Section required with cursor');return result;}
  const scope=project.id+':'+item.id+':'+item.revision+':'+input.section,key=cursorKey(scope,input);if(key&&(key.length!==1||typeof key[0]!=='number'))throw new BacklogError('VALIDATION_ERROR','Invalid section cursor');
  const offset=key?Number(key[0])+1:0;

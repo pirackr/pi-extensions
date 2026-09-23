@@ -30,6 +30,7 @@ with `npm install`.
 
 | Resource | What it provides |
 | --- | --- |
+| `extensions/backlog` | Shared project requests/tasks, guarded authorization and leased ownership; `/backlog`, four focused tools, and standalone `pi-backlog`. See [the user and backup guide](docs/backlog.md). |
 | `extensions/subagent` | Durable, tmux-backed Pi subagents with scheduling, profiles, and a TUI status widget. |
 | `extensions/web-search` | `web_search` with enforced native-first routing, plus `fetch_web`, validation, retries, and shared client rate limits. |
 | `extensions/loop` (with research modules) | `/loop` for general autonomous programs and `/research` for retained, evidence-driven research runs. |

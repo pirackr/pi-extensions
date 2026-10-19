@@ -30,13 +30,11 @@ with `npm install`.
 
 | Resource | What it provides |
 | --- | --- |
-| `extensions/backlog` | Shared project requests/tasks, guarded authorization and leased ownership; `/backlog`, four focused tools, and standalone `pi-backlog`. See [the user and backup guide](docs/backlog.md). |
 | `extensions/subagent` | Durable, tmux-backed Pi subagents with scheduling, profiles, and a TUI status widget. |
 | `extensions/web-search` | `web_search` with enforced native-first routing, plus `fetch_web`, validation, retries, and shared client rate limits. |
 | `extensions/loop` (with research modules) | `/loop` for general autonomous programs and `/research` for retained, evidence-driven research runs. |
 | `extensions/auto-compact` | Per-model context thresholds and a `/auto-compact` status command. |
 | `extensions/ntfy` | Opt-in session completion notifications via `/ntfy`. |
-| `extensions/opencode-zen` | OpenCode Zen model providers, including anonymous free-tier discovery. |
 | `skills/` | `customize-pi`, `grill-me`, `handoff`, `org2pdf`, `research`, `subagent`, and `web-search`. |
 | `prompts/plan.md` | The `/plan` implementation-planning prompt. |
 
@@ -184,18 +182,6 @@ Configure a topic in `$PI_AGENT_DIR/ntfy/config.json` (normally
 
 `NTFY_SERVER`, `NTFY_TOPIC`, and `NTFY_TOKEN` override that file. No
 project-local ntfy configuration is read.
-
-## OpenCode Zen provider
-
-The OpenCode Zen extension registers `opencode-zen` for chat-completions
-models and `opencode-zen-responses` for models requiring the OpenAI Responses
-API. It refreshes the visible model list from the Zen gateway and models.dev;
-deprecated models are excluded.
-
-Credentials resolve in this order: `OPENCODE_API_KEY`, the `opencode-zen`
-entry in Pi's `auth.json`, then the anonymous `public` credential. Anonymous
-mode exposes only currently free models and is rate-limited. The Zen catalog
-can change without notice.
 
 ## Develop and verify
 

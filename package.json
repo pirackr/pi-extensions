@@ -4,7 +4,6 @@
   "description": "Pi extensions and skills workspace",
   "type": "module",
   "private": true,
-  "bin": { "pi-backlog": "bin/pi-backlog.mjs" },
   "engines": {
     "node": ">=22.19.0"
   },

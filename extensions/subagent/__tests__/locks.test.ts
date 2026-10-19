@@ -3,6 +3,8 @@ import { mkdtemp, writeFile, readFile, stat, readdir, unlink } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getEventListeners } from "node:events";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 import {
 	acquireManagerLease,
@@ -116,6 +118,52 @@ describe("acquireManagerLease — exclusive creation", () => {
 		await first.release();
 	});
 
+	it("refuses a different live PID with a different process-start identity", async () => {
+		const first = await acquireManagerLease(path, "ownerA", signal(), baseDeps());
+		try {
+			await expect(
+				acquireManagerLease(path, "ownerB", signal(), baseDeps({
+					currentPid: () => ALIVE_PID + 1,
+					processStart: () => FOREIGN_START,
+				})),
+			).rejects.toThrow(/held by ownerA/);
+			await first.assertCurrent();
+			expect((await readSeed(path)).generation).toBe(first.generation);
+			expect(await readdir(root)).toEqual(["manager.lock"]);
+		} finally {
+			await first.release();
+		}
+	});
+
+	it("keeps the original lease after a real competing process exits", async () => {
+		const first = await acquireManagerLease(path, "ownerA", signal());
+		const moduleUrl = new URL("../locks.ts", import.meta.url).href;
+		try {
+			const { stdout } = await promisify(execFile)(process.execPath, [
+				"--experimental-strip-types", "--input-type=module", "--eval",
+				`import { acquireManagerLease } from ${JSON.stringify(moduleUrl)};
+				try {
+					const lease = await acquireManagerLease(
+						process.argv[1], "ownerB", new AbortController().signal,
+					);
+					await lease.release();
+					console.log("acquired");
+				} catch (error) {
+					if (!/lock held by ownerA/.test(error.message)) throw error;
+					console.log("observer");
+				}`,
+				path,
+			], { timeout: 5_000 });
+
+			// This is the same ownership assertion used by notifications.turnEnd.
+			await expect(first.assertCurrent()).resolves.toBeUndefined();
+			expect(stdout.trim()).toBe("observer");
+			expect(await readdir(root)).toEqual(["manager.lock"]);
+		} finally {
+			await first.release();
+		}
+	});
+
 	it("converges to a single winner under concurrent acquisition", async () => {
 		const results = await Promise.allSettled([
 			acquireManagerLease(path, "ownerA", signal(), baseDeps()),
@@ -163,7 +211,7 @@ describe("acquireManagerLease — incomplete payload", () => {
 });
 
 // ---------------------------------------------------------------------------
-// stale detection — PID dead, and foreign process-start identity
+// stale detection — PID dead, or our PID reused with a different start identity
 // ---------------------------------------------------------------------------
 
 describe("acquireManagerLease — stale reclamation", () => {
@@ -217,9 +265,9 @@ describe("acquireManagerLease — stale reclamation", () => {
 		expect(onDisk.owner).toBe("ownerA");
 	});
 
-	it("reclaims a lock whose process-start identity is foreign", async () => {
-		// pid alive but the start identity does not match the current process:
-		// not our manager, so it is stale and reclaimable.
+	it("reclaims a reused current PID with an older process-start identity", async () => {
+		// The recorded PID is our own, so a different start identity proves
+		// that this lock predates the current incarnation of that PID.
 		await writeSeed(path, {
 			owner: "foreign",
 			pid: ALIVE_PID,
@@ -382,6 +430,29 @@ describe("withRegistryLock", () => {
 
 		// the short-lived lock is released once fn returns
 		await expect(stat(path)).rejects.toThrow();
+	});
+
+	it("waits for a different live process to release the registry lease", async () => {
+		const first = await acquireManagerLease(path, "ownerA", signal(), baseDeps());
+		let checks = 0;
+		try {
+			await withRegistryLock(path, "ownerB", async (lease) => {
+				expect(checks).toBeGreaterThanOrEqual(2);
+				await lease.assertCurrent();
+			}, signal(), baseDeps({
+				currentPid: () => ALIVE_PID + 1,
+				processStart: () => FOREIGN_START,
+				isProcessAlive: async () => {
+					await first.assertCurrent();
+					// Release only after the contender has actually waited once.
+					if (++checks === 2) await first.release();
+					return true;
+				},
+			}));
+			expect(await readdir(root)).toEqual([]);
+		} finally {
+			await first.release();
+		}
 	});
 
 	it("does not accumulate abort listeners while polling a live holder", async () => {

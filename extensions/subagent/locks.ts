@@ -27,8 +27,9 @@
 //   a just-created-but-not-yet-flushed lock retries with bounded backoff; it
 //   does not reclaim a live owner's in-progress file.
 // - **Stale reclamation is provable and atomic.** A lock is reclaimed only when
-//   its owner is provably gone: the PID is not alive, or its process-start
-//   identity is foreign to the current manager. Reclamation first renames the
+//   its owner is provably gone: the PID is not alive, or the PID is our own
+//   but the recorded process-start identity predates it. A different live PID
+//   is never stale just because its start identity differs. Reclamation renames the
 //   stale lock to a *unique* quarantine name, then retries exclusive creation,
 //   so competing reclaimers converge on one winner.
 // - **Generation checks guard every protected mutation.** {@link ManagerLease.assertCurrent}
@@ -166,6 +167,8 @@ let cachedProcessStart: string | undefined;
 
 export function processStartIdentity(): string {
 	if (cachedProcessStart === undefined) {
+		// SAFETY: _startInfo is optional and undocumented; we check its object
+		// shape below and coerce its fields rather than trusting their types.
 		const info = (process as unknown as { _startInfo?: Record<string, unknown> })
 			._startInfo;
 		if (info && typeof info === "object") {
@@ -373,12 +376,13 @@ async function quarantineStale(path: string): Promise<void> {
 async function isStale(
 	identity: LeaseIdentity,
 	isAlive: (pid: number) => Promise<boolean>,
+	currentPid: number,
 	currentProcessStart: string,
 ): Promise<boolean> {
-	// Provable staleness: the owning PID is not alive, or the recorded
-	// process-start identity is foreign to the current manager. A lock owned by
-	// the current manager (matching PID alive + matching start) is never stale.
-	return !(await isAlive(identity.pid)) || identity.processStart !== currentProcessStart;
+	if (!(await isAlive(identity.pid))) return true;
+	// Only our own PID's start identity is known here. Another live process
+	// naturally has a different start identity; that is not evidence of reuse.
+	return identity.pid === currentPid && identity.processStart !== currentProcessStart;
 }
 
 /**
@@ -390,8 +394,8 @@ async function isStale(
  *
  * - retries with bounded exponential backoff when the existing file is an
  *   incomplete just-created payload, or
- * - reclaims it when the existing identity is stale (dead PID or foreign
- *   process-start), renaming the stale lock to a unique quarantine name before
+ * - reclaims it when the existing identity is stale (dead PID or our own PID
+ *   with an older process-start), renaming it to a unique quarantine name before
  *   retrying exclusive creation — so competing reclaimers converge on one
  *   winner.
  *
@@ -520,7 +524,7 @@ export async function acquireManagerLease(
 			continue;
 		}
 
-		if (await isStale(state.identity, isAlive, currentProcessStart)) {
+		if (await isStale(state.identity, isAlive, identity.pid, currentProcessStart)) {
 			// Reclaim: quarantine the stale lock to a unique name, then retry
 			// exclusive creation. Competing reclaimers converge on one winner.
 			if (attempt >= maxRetries) {

@@ -152,6 +152,11 @@ describe("registered web_search native routing", () => {
 
 	it.each([
 		[
+			openAIModel({ id: "gpt-6-sol" }),
+			[{ type: "web_search" }],
+			"required",
+		],
+		[
 			openAIModel({
 				id: "gpt-5.6-luna",
 				provider: "openai-codex",

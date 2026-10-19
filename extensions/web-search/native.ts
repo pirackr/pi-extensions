@@ -145,6 +145,7 @@ const OPENAI_WEB_SEARCH_MODEL_IDS = new Set([
 	"gpt-5.3",
 	"gpt-5.4",
 	"gpt-5.5",
+	"gpt-6-sol",
 	"o1",
 	"o3",
 	"o3-mini",
